@@ -1,21 +1,24 @@
-import type { CSSProperties, DragEvent as ReactDragEvent } from "react";
+import type { CSSProperties } from "react";
 import { Layers, Settings } from "lucide-react";
 import { listPlugins } from "@/nodes/pluginRegistry";
 import { dispatchCommand } from "@/command/dispatch";
-import { makeNode, NODE_MIME } from "./nodeFactory";
+import { makeNode, NODE_W, NODE_H } from "./nodeFactory";
 import type { NodeType } from "@/types";
 import { useUiStore } from "@/store/uiStore";
-
-function onDragStart(e: ReactDragEvent, type: NodeType) {
-	e.dataTransfer.setData(NODE_MIME, type);
-	e.dataTransfer.effectAllowed = "move";
-}
+import { useDragToCanvas } from "./useDragToCanvas";
+import { useReactFlow } from "@xyflow/react";
 
 /** 左侧浮动工具 dock：五类节点。拖入画布或点击在视口中心新建。 */
 export function FloatingToolbar() {
+	const startDragToCanvas = useDragToCanvas();
+	const { screenToFlowPosition } = useReactFlow();
+
 	const addAtCenter = (type: NodeType) => {
-		const x = 120 + Math.round(Math.random() * 80);
-		const y = 120 + Math.round(Math.random() * 80);
+		const screenCenterX = window.innerWidth / 2;
+		const screenCenterY = window.innerHeight / 2;
+		const flowPos = screenToFlowPosition({ x: screenCenterX, y: screenCenterY });
+		const x = flowPos.x - NODE_W / 2;
+		const y = flowPos.y - NODE_H / 2;
 		dispatchCommand({ type: "addNode", node: makeNode(type, x, y) });
 	};
 
@@ -32,12 +35,16 @@ export function FloatingToolbar() {
 				return (
 					<button
 						key={plugin.type}
-						draggable
-						onDragStart={(e) => onDragStart(e, plugin.type)}
-						onClick={() => addAtCenter(plugin.type)}
+						onMouseDown={(e) =>
+							startDragToCanvas(
+								e,
+								{ type: "sidebar", nodeType: plugin.type },
+								() => addAtCenter(plugin.type)
+							)
+						}
 						style={accentStyle}
 						title={`新建${plugin.label}节点`}
-						className="group flex h-11 w-11 cursor-grab flex-col items-center justify-center gap-0.5 rounded-xl text-muted-foreground transition-colors hover:bg-secondary hover:text-[color:var(--node-accent)]"
+						className="group flex h-11 w-11 cursor-grab flex-col items-center justify-center gap-0.5 rounded-xl text-muted-foreground transition-colors hover:bg-secondary hover:text-[color:var(--node-accent)] select-none"
 					>
 						<Icon className="h-4 w-4" />
 						<span className="text-[9px]">{plugin.label}</span>

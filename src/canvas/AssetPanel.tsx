@@ -2,9 +2,11 @@ import { Images, ChevronUp, ChevronDown, Wand2, Map, Grid, Music, FileText } fro
 import { useLibraryStore } from "@/store/libraryStore";
 import { useUiStore } from "@/store/uiStore";
 import { autoLayoutCanvas } from "@/lib/layout";
+import { useDragToCanvas } from "./useDragToCanvas";
 
 /** 顶部居中素材面板：展示本项目已生成资产（当前为空态占位）。 */
 export function AssetPanel() {
+	const startDragToCanvas = useDragToCanvas();
 	const open = useUiStore((s) => s.assetPanelOpen);
 	const toggle = useUiStore((s) => s.toggleAssetPanel);
 	const snapToGrid = useUiStore((s) => s.snapToGrid);
@@ -78,11 +80,14 @@ export function AssetPanel() {
 						assets.map((a) => (
 							<div
 								key={a.id}
-								draggable
-								onDragStart={(e) => {
-									e.dataTransfer.setData("text/plain", JSON.stringify({ source: "library", assetId: a.id, kind: a.kind }));
-									e.dataTransfer.effectAllowed = "copy";
-								}}
+								onMouseDown={(e) =>
+									startDragToCanvas(e, {
+										type: "asset",
+										assetId: a.id,
+										kind: a.kind,
+										name: a.name,
+									})
+								}
 								className="relative flex h-14 w-14 shrink-0 items-center justify-center rounded-lg border border-border bg-secondary font-mono text-[9px] text-muted-foreground cursor-grab hover:border-primary transition-colors overflow-hidden select-none"
 								title={`${a.name} (${a.kind})`}
 							>
