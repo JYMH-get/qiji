@@ -1,0 +1,935 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+
+/* ===== 设计 token（深色玻璃拟态，源自上传 UI theme.css） ===== */
+:root {
+  --background: #0a0b0f;
+  --foreground: #e8eaf0;
+  --card: #12141a;
+  --card-foreground: #e8eaf0;
+  --popover: #12141a;
+  --popover-foreground: #e8eaf0;
+  --primary: #5b8df6;
+  --primary-foreground: #0a0b0f;
+  --secondary: #1c1f28;
+  --secondary-foreground: #e8eaf0;
+  --muted: #1c1f28;
+  --muted-foreground: #98a2b3;
+  --accent: #1c1f28;
+  --accent-foreground: #e8eaf0;
+  --destructive: #e05b5b;
+  --destructive-foreground: #ffffff;
+  --border: rgba(255, 255, 255, 0.07);
+  --input: rgba(255, 255, 255, 0.1);
+  --ring: #5b8df6;
+  --radius: 0.75rem;
+
+  /* 六类节点色 */
+  --node-script: #f06b6b;
+  --node-text: #56cfb2;
+  --node-image: #5b8df6;
+  --node-video: #f0a05a;
+  --node-audio: #b57bee;
+  --node-file: #e8a44a;
+}
+
+@theme {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --font-mono:
+    "JetBrains Mono", "SFMono-Regular", "Menlo", "Consolas", monospace;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    border-color: var(--border);
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: -apple-system, "Noto Sans SC", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+/* ===== 画布外壳 ===== */
+.Qiji-shell {
+  position: relative;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: var(--background);
+}
+.Qiji-canvas {
+  position: absolute;
+  inset: 0;
+}
+.Qiji-flow {
+  width: 100%;
+  height: 100%;
+}
+
+/* 点阵 + 径向渐变背景 */
+.react-flow__background {
+  background-color: var(--background);
+  background-image: radial-gradient(
+    circle at 50% 0%,
+    rgba(91, 141, 246, 0.08),
+    transparent 55%
+  );
+}
+
+/* 连线：贝塞尔 + 流动光效（取消箭头） */
+.react-flow__edge-path {
+  stroke: rgba(255, 255, 255, 0.25);
+  stroke-width: 2.2;
+  stroke-dasharray: 6, 6;
+  animation: Qiji-edge-flow 1.5s linear infinite;
+}
+
+@keyframes Qiji-edge-flow {
+  from {
+    stroke-dashoffset: 24;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: var(--primary);
+  stroke-width: 2.8;
+  filter: drop-shadow(0 0 3px var(--primary));
+  animation-duration: 0.8s;
+}
+
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke: var(--primary);
+  stroke-width: 2.8;
+}
+
+.react-flow__edge.animated .react-flow__edge-path {
+  stroke: var(--node-video);
+  filter: drop-shadow(0 0 2px var(--node-video));
+}
+
+.react-flow__arrowhead {
+  display: none;
+}
+
+/* ===== Handle 连线按鈕（常态显示，悬浮在外） ===== */
+.react-flow__handle {
+  width: 22px !important;
+  height: 22px !important;
+  border-radius: 50% !important;
+  background: rgba(18, 20, 26, 0.85) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  backdrop-filter: blur(8px);
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  opacity: 1 !important;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  cursor: pointer;
+  z-index: 30 !important;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.3);
+}
+/* 节点按鈕 + 图标 */
+.Qiji-handle-btn__icon {
+  width: 11px;
+  height: 11px;
+  pointer-events: none;
+  flex-shrink: 0;
+}
+/* 悬浮在外面，并且使用 translate 确保在连线上完美居中 */
+.react-flow__handle-left {
+  left: -13px !important;
+  transform: translate(-50%, -50%) scale(1) !important;
+}
+.react-flow__handle-left:hover {
+  border-color: var(--node-accent, var(--primary)) !important;
+  transform: translate(-50%, -50%) scale(1.15) !important;
+  box-shadow: 0 0 10px 2px
+    color-mix(in srgb, var(--node-accent, var(--primary)) 40%, transparent);
+  background: rgba(26, 29, 38, 0.95) !important;
+}
+
+.react-flow__handle-right {
+  right: -13px !important;
+  transform: translate(50%, -50%) scale(1) !important;
+}
+.react-flow__handle-right:hover {
+  border-color: var(--node-accent, var(--primary)) !important;
+  transform: translate(50%, -50%) scale(1.15) !important;
+  box-shadow: 0 0 10px 2px
+    color-mix(in srgb, var(--node-accent, var(--primary)) 40%, transparent);
+  background: rgba(26, 29, 38, 0.95) !important;
+}
+
+/* 彻底解决 React Flow 节点包裹容器裁剪悬浮连接处的问题 */
+.react-flow__node {
+  overflow: visible !important;
+}
+
+/* ===== 节点玻璃卡片（节点对外只展示结果） ===== */
+.Qiji-node {
+  --node-accent: var(--primary);
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: rgba(15, 16, 22, 0.92);
+  border: none !important;
+  border-radius: 11px;
+  overflow: visible !important;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+  transition: box-shadow 0.15s ease;
+}
+.Qiji-node__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: none;
+  font-size: 12px;
+  font-weight: 600;
+}
+.Qiji-node__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--node-accent);
+  background: color-mix(in srgb, var(--node-accent) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--node-accent) 35%, transparent);
+}
+.Qiji-node__status {
+  margin-left: auto;
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.Qiji-node__body {
+  flex: 1;
+  min-height: 0;
+  padding: 10px;
+}
+.Qiji-node__body--full {
+  padding: 0;
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 11px;
+}
+.Qiji-node__footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-top: none;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+/* ===== 精简模式（未激活时） ===== */
+.Qiji-node--compact {
+  /* 深圆色背景，明显区别于画布 */
+  background: rgba(22, 24, 34, 0.94);
+  border: none !important;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+}
+.Qiji-node--compact:hover {
+  box-shadow:
+    0 6px 28px rgba(0, 0, 0, 0.5),
+    0 0 12px rgba(255, 255, 255, 0.08);
+}
+/* compact 内 result 边框较轻 */
+.Qiji-node--compact .Qiji-result {
+  border-color: rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.Qiji-node--compact .Qiji-result--filled {
+  border: none;
+  background: transparent;
+}
+
+/* ===== 堆叠卡片样式 ===== */
+.Qiji-node--stacked::before,
+.Qiji-node--stacked::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 11px;
+  background: rgba(18, 20, 26, 0.75);
+  backdrop-filter: blur(4px);
+  z-index: -1;
+  transition: transform 0.15s ease;
+  pointer-events: none;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.35);
+}
+.Qiji-node--stacked::before {
+  transform: translate(5px, 5px);
+  z-index: -1;
+}
+.Qiji-node--stacked::after {
+  transform: translate(10px, 10px);
+  z-index: -2;
+}
+.Qiji-node--stacked:hover::before {
+  transform: translate(7px, 7px);
+}
+.Qiji-node--stacked:hover::after {
+  transform: translate(14px, 14px);
+}
+
+/* 左上角悬浮徽章（compact 时始终可见） */
+.Qiji-node__hover-badge {
+  position: absolute;
+  top: 7px;
+  left: 8px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--node-accent, var(--primary));
+  background: color-mix(
+    in srgb,
+    var(--node-accent, var(--primary)) 20%,
+    rgba(0, 0, 0, 0.6)
+  );
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+}
+
+/* 选中 / 编辑态（采用高阶阴影发光，完全无硬边框） */
+.Qiji-node.is-selected {
+  border: none !important;
+  box-shadow:
+    0 0 15px 1px color-mix(in srgb, var(--node-accent) 30%, transparent),
+    0 10px 35px rgba(0, 0, 0, 0.5);
+}
+.Qiji-node.is-editing,
+.react-flow__node.selected .Qiji-node {
+  border: none !important;
+  box-shadow:
+    0 0 15px 1px color-mix(in srgb, var(--node-accent) 50%, transparent),
+    0 10px 35px rgba(0, 0, 0, 0.5);
+  animation: pulse-glow 1.8s ease-out infinite;
+}
+@keyframes pulse-glow {
+  0% {
+    box-shadow:
+      0 0 10px 1px color-mix(in srgb, var(--node-accent) 40%, transparent),
+      0 10px 35px rgba(0, 0, 0, 0.5);
+  }
+  70% {
+    box-shadow:
+      0 0 25px 4px color-mix(in srgb, var(--node-accent) 15%, transparent),
+      0 10px 35px rgba(0, 0, 0, 0.5);
+  }
+  100% {
+    box-shadow:
+      0 0 10px 1px color-mix(in srgb, var(--node-accent) 40%, transparent),
+      0 10px 35px rgba(0, 0, 0, 0.5);
+  }
+}
+.Qiji-node[data-status="running"],
+.Qiji-node[data-status="scheduled"],
+.Qiji-node[data-status="failed"] {
+  border: none !important;
+}
+
+/* 结果展示区 */
+.Qiji-result {
+  position: relative;
+  height: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--node-accent) 16%, transparent),
+    rgba(255, 255, 255, 0.02)
+  );
+  border: 1px dashed var(--border);
+}
+.Qiji-result--filled {
+  border: none !important;
+  color: var(--foreground);
+}
+.Qiji-result__text {
+  height: 100%;
+  width: 100%;
+  padding: 10px;
+  text-align: left;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--foreground);
+}
+.Qiji-result__badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.45);
+  color: var(--foreground);
+}
+.Qiji-result__play {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  opacity: 0.9;
+}
+.Qiji-result__img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+}
+.Qiji-result__video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+}
+.Qiji-result__audio-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  width: 100%;
+  color: var(--foreground);
+}
+
+/* ===== 文件节点 ===== */
+.Qiji-file-node {
+  --node-accent: var(--node-file);
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(15, 16, 22, 0.88);
+  border: none !important;
+  transition: box-shadow 0.15s ease;
+  cursor: pointer;
+}
+.Qiji-file-node:hover,
+.Qiji-file-node.is-active {
+  box-shadow:
+    0 0 15px 1px color-mix(in srgb, var(--node-file) 40%, transparent),
+    0 8px 30px rgba(0, 0, 0, 0.4);
+}
+.Qiji-file-node__badge {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px 2px 5px;
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--node-file);
+  background: color-mix(in srgb, var(--node-file) 18%, rgba(0, 0, 0, 0.6));
+  backdrop-filter: blur(6px);
+}
+.Qiji-file-node__name {
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.55);
+  margin-left: 2px;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.Qiji-file-node__clear {
+  display: flex;
+  align-items: center;
+  padding: 1px;
+  margin-left: 2px;
+  border-radius: 3px;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  transition: color 0.1s;
+}
+.Qiji-file-node__clear:hover {
+  color: rgba(255, 80, 80, 0.9);
+}
+.Qiji-file-node__upload {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.35);
+  border: 2px dashed rgba(232, 164, 74, 0.2);
+  border-radius: 8px;
+  margin: 4px;
+  width: calc(100% - 8px);
+  height: calc(100% - 8px);
+  transition:
+    border-color 0.15s,
+    color 0.15s;
+  cursor: pointer;
+}
+.Qiji-file-node__upload:hover {
+  border-color: rgba(232, 164, 74, 0.6);
+  color: rgba(255, 255, 255, 0.7);
+}
+.Qiji-file-node__preview {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.Qiji-file-node__img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+}
+.Qiji-file-node__video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+}
+.Qiji-file-node__audio-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  width: 100%;
+  color: var(--foreground);
+}
+/* 有文件时右上角重新上传按钮 */
+.Qiji-file-node__reupload {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.15s,
+    color 0.15s;
+}
+.Qiji-file-node:hover .Qiji-file-node__reupload,
+.Qiji-file-node.is-active .Qiji-file-node__reupload {
+  opacity: 1;
+}
+.Qiji-file-node__reupload:hover {
+  color: #fff;
+}
+/* FileNode 的 Handle 也在 hover 时显示 */
+.Qiji-file-node:hover .react-flow__handle,
+.Qiji-file-node.is-active .react-flow__handle {
+  opacity: 1;
+  transform: scale(1);
+}
+/* file handle 用 node-file 颜色 */
+.Qiji-handle-btn--file:hover {
+  background: var(--node-file) !important;
+  border-color: var(--node-file) !important;
+}
+
+/* ===== 底部上下文操作面板 ===== */
+.Qiji-dock,
+.Qiji-toolbar,
+.Qiji-asset,
+.Qiji-panel,
+.Qiji-statusbar {
+  background: rgba(18, 20, 26, 0.82);
+  border: none !important;
+  backdrop-filter: blur(14px);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+}
+
+.Qiji-scroll-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.Qiji-scroll-thin::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+}
+
+.react-flow__minimap {
+  display: none !important; /* 彻底隐藏内置小地图，防止残留 */
+}
+
+/* ===== 自定义小地图 ===== */
+.minimap-custom {
+  width: 210px;
+  background: rgba(18, 20, 28, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(12px);
+  overflow: hidden;
+  padding: 4px;
+}
+.minimap-custom svg {
+  display: block;
+  border-radius: 7px;
+}
+.minimap-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 50px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.3);
+  letter-spacing: 0.03em;
+}
+.react-flow__controls {
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.react-flow__controls-button {
+  background: rgba(18, 20, 26, 0.9);
+  border-bottom: 1px solid var(--border);
+  color: var(--foreground);
+  fill: var(--foreground);
+}
+.react-flow__controls-button:hover {
+  background: var(--secondary);
+}
+
+/* ===== TitleBar 标题栏 ===== */
+.Qiji-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background: var(--background);
+}
+
+.Qiji-canvas {
+  flex: 1;
+  position: relative;
+}
+
+.Qiji-titlebar {
+  position: relative;
+  height: 38px;
+  background: rgba(13, 14, 21, 0.95);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  user-select: none;
+  z-index: 1000;
+  color: var(--foreground);
+}
+
+.Qiji-titlebar__drag-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+.Qiji-titlebar__left,
+.Qiji-titlebar__controls {
+  position: relative;
+  z-index: 10;
+}
+
+.Qiji-titlebar__app {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.Qiji-titlebar__logo {
+  color: var(--primary);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.Qiji-titlebar__sep {
+  opacity: 0.3;
+}
+
+.Qiji-titlebar__project {
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+}
+
+.Qiji-titlebar__controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.Qiji-titlebar__btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.6);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.Qiji-titlebar__btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.Qiji-titlebar__btn--close:hover {
+  background: #ea4335;
+  color: #fff;
+}
+
+/* ===== Titlebar Menu ===== */
+.Qiji-titlebar__left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+}
+
+.Qiji-titlebar__menu-container {
+  position: relative;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+.Qiji-titlebar__menu-trigger {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-weight: 500;
+}
+
+.Qiji-titlebar__menu-trigger:hover,
+.Qiji-titlebar__menu-trigger.is-active {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.Qiji-titlebar__dropdown {
+  position: absolute;
+  top: calc(100% - 2px);
+  left: 0;
+  width: 200px;
+  background: rgba(20, 22, 28, 0.96);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.Qiji-titlebar__dropdown-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12px;
+  text-align: left;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.Qiji-titlebar__dropdown-item:hover {
+  background: var(--primary);
+  color: #fff;
+}
+
+.Qiji-titlebar__dropdown-item--danger:hover {
+  background: #ea4335 !important;
+}
+
+.Qiji-titlebar__dropdown-shortcut {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.Qiji-titlebar__dropdown-item:hover .Qiji-titlebar__dropdown-shortcut {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.Qiji-titlebar__dropdown-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.06);
+  margin: 4px 6px;
+}
+
+/* ===== History Container ===== */
+.Qiji-titlebar__history-container {
+  position: relative;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+.Qiji-titlebar__history-trigger {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+}
+
+.Qiji-titlebar__history-trigger:hover,
+.Qiji-titlebar__history-trigger.is-active {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.react-flow__node-group {
+  background: transparent !important;
+  border: none !important;
+}
+
+.Qiji-group-node {
+  height: 100%;
+  width: 100%;
+  border-radius: 1rem;
+  border: 1.5px dashed rgba(255, 255, 255, 0.16);
+  background-color: rgba(255, 255, 255, 0.015);
+  backdrop-filter: blur(2px);
+  padding: 1rem;
+  transition: all 0.2s ease;
+}
+
+.Qiji-group-node:hover {
+  border-color: rgba(91, 141, 246, 0.45);
+  background-color: rgba(91, 141, 246, 0.01);
+}
+
+.react-flow__node.selected .Qiji-group-node,
+.Qiji-group-node.is-selected {
+  border: 2px solid var(--primary) !important;
+  background-color: rgba(91, 141, 246, 0.04) !important;
+  box-shadow:
+    0 0 20px 2px rgba(91, 141, 246, 0.25),
+    inset 0 0 10px rgba(91, 141, 246, 0.03) !important;
+}
+
+/* ===== Login & Dashboard Animations & Helpers ===== */
+@keyframes Qiji-pulse-slow {
+  0%, 100% {
+    opacity: 0.12;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.22;
+    transform: scale(1.08);
+  }
+}
+
+.animate-pulse-slow {
+  animation: Qiji-pulse-slow 10s ease-in-out infinite;
+}
