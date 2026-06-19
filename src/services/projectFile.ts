@@ -22,17 +22,50 @@ export interface CommitSnapshot {
     groups: Record<string, CanvasGroup>;
     viewport?: { x: number; y: number; zoom: number };
   };
-  assets?: Record<string, any>;
+  assets?: Record<string, import("@/store/libraryStore").Asset>;
+}
+
+export interface MigrationLogEntry {
+  fromVersion: string;
+  toVersion: string;
+  migratedAt: string;
+  description: string;
 }
 
 export interface QijiProject {
   version: string;
   name: string;
   savedAt: string;
-  head: string; // 当前指向的 commitId
-  commits: Record<string, CommitSnapshot>; // 历史版本快照字典
-  /** fileId → localPath */
+  head: string;
+  commits: Record<string, CommitSnapshot>;
   files: Record<string, string | null>;
+  /** 迁移日志，记录版本升级历史 */
+  migrationLog?: MigrationLogEntry[];
+  scriptText?: string;
+  visualStyle?: string;
+  characters?: Array<{ id: string; name: string; features: string; philosophy: string; prompt: string; image?: string }>;
+  scenes?: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string }>;
+  items?: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string }>;
+  organisms?: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string }>;
+  isAnalyzed?: boolean;
+  analysisTime?: string;
+  projectModelConfig?: {
+    tableText?: string;
+    tableImage?: string;
+    tableVideo?: string;
+    tableAudio?: string;
+    canvasText?: string;
+    canvasImage?: string;
+    canvasVideo?: string;
+    canvasAudio?: string;
+  };
+  /** Legacy v1.x 顶层字段（兼容旧格式读取） */
+  nodes?: Record<string, CanvasNode>;
+  edges?: Record<string, CanvasEdge>;
+  groups?: Record<string, CanvasGroup>;
+  viewport?: { x: number; y: number; zoom: number };
+  assets?: Record<string, import("@/store/libraryStore").Asset>;
+  canvas?: CommitSnapshot["canvas"];
 }
 
 function isTauri(): boolean {
@@ -47,33 +80,99 @@ async function getTauriFs() {
 }
 
 /**
- * 迁移兼容：将 1.0 版本的旧项目数据平滑转化为版本快照结构
+ * 版本迁移注册表：从 v1.x 到 v2.0 的迁移函数
+ */
+interface MigrationFunction {
+  (project: any): any;
+}
+
+const migrations: Record<string, MigrationFunction> = {
+  // v1.x -> v2.0: 引入 commits 历史快照结构
+  "1.x-to-2.0": (oldProj: any) => {
+    const initialCommitId = "commit-init";
+    const initialCommit: CommitSnapshot = {
+      commitId: initialCommitId,
+      parentIds: [],
+      message: "从 v1.x 迁移",
+      author: "System",
+      timestamp: oldProj.savedAt || new Date().toISOString(),
+      canvas: oldProj.canvas || {
+        nodes: oldProj.nodes || {},
+        edges: oldProj.edges || {},
+        groups: oldProj.groups || {},
+        viewport: oldProj.viewport || { x: 0, y: 0, zoom: 1 },
+      },
+      assets: oldProj.assets || {},
+    };
+
+    return {
+      version: "2.0",
+      name: oldProj.name || "未命名项目",
+      savedAt: oldProj.savedAt || new Date().toISOString(),
+      head: initialCommitId,
+      commits: { [initialCommitId]: initialCommit },
+      files: oldProj.files || {},
+      migrationLog: [
+        {
+          fromVersion: oldProj.version || "1.x",
+          toVersion: "2.0",
+          migratedAt: new Date().toISOString(),
+          description: "引入 commits 历史快照结构，支持版本回滚",
+        },
+      ],
+    };
+  },
+};
+
+/**
+ * 迁移兼容：将旧版本项目数据平滑转化为最新版本结构
  */
 export function migrateProject(oldProj: any): QijiProject {
-  if (oldProj.commits && oldProj.head) {
+  // 如果已经是 v2.0+ 且包含 commits，直接返回
+  if (oldProj.commits && oldProj.head && oldProj.version === "2.0") {
     return oldProj as QijiProject;
   }
 
-  const initialCommitId = "commit-init";
-  const initialCommit: CommitSnapshot = {
-    commitId: initialCommitId,
-    parentIds: [],
-    message: "迁移自旧版本项目",
-    author: "System",
-    timestamp: oldProj.savedAt || new Date().toISOString(),
-    canvas: oldProj.canvas || { nodes: {}, edges: {}, groups: {}, viewport: { x: 0, y: 0, zoom: 1 } },
-    assets: oldProj.assets || {},
-  };
+  // 检查版本号并执行对应迁移
+  const version = oldProj.version || "1.x";
 
+  // v1.x -> v2.0
+  if (version.startsWith("1") || !oldProj.commits) {
+    const migrated = migrations["1.x-to-2.0"](oldProj);
+    return migrated;
+  }
+
+  // 未知版本，尝试作为 v2.0 处理
   return {
     version: Qiji_VERSION,
     name: oldProj.name || "未命名项目",
     savedAt: oldProj.savedAt || new Date().toISOString(),
-    head: initialCommitId,
-    commits: {
-      [initialCommitId]: initialCommit,
-    },
+    head: oldProj.head || "commit-init",
+    commits: oldProj.commits || {},
     files: oldProj.files || {},
+    migrationLog: oldProj.migrationLog || [],
+  };
+}
+
+/**
+ * 记录迁移日志
+ */
+export function addMigrationLog(
+  project: QijiProject,
+  fromVersion: string,
+  toVersion: string,
+  description: string,
+): QijiProject {
+  const log: MigrationLogEntry = {
+    fromVersion,
+    toVersion,
+    migratedAt: new Date().toISOString(),
+    description,
+  };
+
+  return {
+    ...project,
+    migrationLog: [...(project.migrationLog || []), log],
   };
 }
 

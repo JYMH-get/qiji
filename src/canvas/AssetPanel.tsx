@@ -18,7 +18,7 @@ export function AssetPanel() {
 		Object.values(s.assets).filter((a) => !a.deletedByUser),
 	);
 	return (
-		<div className="Qiji-asset pointer-events-auto absolute left-1/2 top-4 z-20 w-[min(640px,calc(100%-160px))] -translate-x-1/2 rounded-2xl px-3 py-2">
+		<div className="Qiji-asset pointer-events-auto absolute left-1/2 top-4 z-[10100] w-[min(640px,calc(100%-160px))] -translate-x-1/2 rounded-2xl px-3 py-2">
 			<div className="flex items-center gap-2 text-xs text-muted-foreground">
 				<Images className="h-4 w-4" />
 				<span className="font-medium text-foreground">素材库</span>

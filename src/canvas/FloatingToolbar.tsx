@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { Layers, Settings } from "lucide-react";
+import { Layers, Settings, Terminal } from "lucide-react";
 import { listPlugins } from "@/nodes/pluginRegistry";
 import { dispatchCommand } from "@/command/dispatch";
 import { makeNode, NODE_W, NODE_H } from "./nodeFactory";
@@ -22,10 +22,10 @@ export function FloatingToolbar() {
 		dispatchCommand({ type: "addNode", node: makeNode(type, x, y) });
 	};
 
-	const plugins = listPlugins().filter((p) => !p.type.startsWith("file_"));
+	const plugins = listPlugins().filter((p) => !p.type.startsWith("file_") && p.isActive !== false && p.isDeleted !== true);
 
 	return (
-		<div className="Qiji-toolbar pointer-events-auto absolute left-4 top-1/2 z-20 flex -translate-y-1/2 flex-col gap-1 rounded-2xl p-1.5">
+		<div className="Qiji-toolbar pointer-events-auto absolute left-4 top-1/2 z-[10100] flex -translate-y-1/2 flex-col gap-1 rounded-2xl p-1.5">
 			<div className="flex flex-col items-center gap-0.5 px-1 pb-1.5 pt-1 text-muted-foreground">
 				<Layers className="h-4 w-4" />
 			</div>
@@ -61,6 +61,15 @@ export function FloatingToolbar() {
 			>
 				<Settings className="h-4.5 w-4.5" />
 				<span className="text-[9px]">设置</span>
+			</button>
+
+			<button
+				onClick={() => useUiStore.getState().setBlackboxOpen(true)}
+				title="任务黑匣子"
+				className="group flex h-11 w-11 cursor-pointer flex-col items-center justify-center gap-0.5 rounded-xl text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+			>
+				<Terminal className="h-4.5 w-4.5" />
+				<span className="text-[9px]">日志</span>
 			</button>
 		</div>
 	);

@@ -14,6 +14,10 @@ import {
   Clapperboard,
   AudioLines,
   ScrollText,
+  Sparkles,
+  Scissors,
+  Download,
+  UploadCloud,
 } from "lucide-react";
 import { useUiStore } from "@/store/uiStore";
 import { useCanvasStore } from "@/store/canvasStore";
@@ -24,20 +28,24 @@ import { makeNode } from "./nodeFactory";
 import type { NodeType } from "@/types";
 import { storeDroppedFile } from "@/services/fileStorage";
 import { useLibraryStore } from "@/store/libraryStore";
+import { useAssistantStore } from "@/store/assistantStore";
+import { exportPlugin, importPlugin } from "@/nodes/pluginShare";
+import { copyToClipboard } from "@/lib/clipboard";
 
 export function ContextMenu() {
   const menu = useUiStore((s) => s.contextMenu);
   const close = useUiStore((s) => s.closeContextMenu);
   const selectedNodeIds = useUiStore((s) => s.selectedNodeIds);
+  const setImageEditNodeId = useUiStore((s) => s.setImageEditNodeId);
 
   const canUndo = useCanvasStore((s) => s.past.length > 0);
   const canRedo = useCanvasStore((s) => s.future.length > 0);
   const nodesMap = useCanvasStore((s) => s.nodes);
 
   const [activeSubmenu, setActiveSubmenu] = useState<
-    "create" | "upload" | null
+    "create" | "upload" | "plugins" | null
   >(null);
-  const submenuTimerRef = useRef<any>(null);
+  const submenuTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { screenToFlowPosition } = useReactFlow();
 
@@ -53,6 +61,7 @@ export function ContextMenu() {
   const nodeId = menu.nodeId;
   const node = nodeId ? nodesMap[nodeId] : null;
   const isGroupNode = node?.type === "group";
+  const isImageNode = node?.type === "image" || node?.type === "file_image";
 
   const pos: CSSProperties = { left: menu.x, top: menu.y };
 
@@ -113,7 +122,49 @@ export function ContextMenu() {
     close();
   };
 
-  const handleMouseEnter = (submenu: "create" | "upload") => {
+  const onCopyNode = () => {
+    if (!nodeId || !node) return;
+    copyToClipboard([node], []);
+    close();
+  };
+
+  const onEditImage = () => {
+    if (!nodeId) return;
+    setImageEditNodeId(nodeId);
+    close();
+  };
+
+  const onSendToAssistant = () => {
+    if (!nodeId) return;
+    const node = nodesMap[nodeId];
+    const typeLabel = node?.type ?? "unknown";
+    useAssistantStore.getState().addMessage({
+      id: `user-${Date.now()}`,
+      role: "user",
+      content: `[引用节点 ${typeLabel}: ${nodeId.slice(0, 8)}]`,
+      refNodeIds: [nodeId],
+      timestamp: Date.now(),
+    });
+    useAssistantStore.getState().setOpen(true);
+    close();
+  };
+
+  const onExportPlugin = async (type?: string) => {
+    await exportPlugin(type);
+    close();
+  };
+
+  const onImportPlugin = async () => {
+    const result = await importPlugin();
+    if (result.success) {
+      console.log(`插件 ${result.type} 导入成功`);
+    } else {
+      console.error(`插件导入失败: ${result.error}`);
+    }
+    close();
+  };
+
+  const handleMouseEnter = (submenu: "create" | "upload" | "plugins") => {
     if (submenuTimerRef.current) clearTimeout(submenuTimerRef.current);
     setActiveSubmenu(submenu);
   };
@@ -173,7 +224,7 @@ export function ContextMenu() {
   return (
     <>
       <div
-        className="fixed inset-0 z-40"
+        className="fixed inset-0 z-[10400]"
         onClick={close}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -181,7 +232,7 @@ export function ContextMenu() {
         }}
       />
       <div
-        className="Qiji-panel fixed z-50 w-36 rounded-xl p-1 text-xs text-foreground shadow-2xl"
+        className="Qiji-panel fixed z-[10401] w-36 rounded-xl p-1 text-xs text-foreground shadow-2xl"
         style={pos}
         onClick={(e) => e.stopPropagation()}
       >
@@ -267,11 +318,27 @@ export function ContextMenu() {
               </>
             )}
             <button
-              disabled
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-muted-foreground select-none"
+              onClick={onCopyNode}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-secondary cursor-pointer transition-colors"
             >
               <Copy className="h-3.5 w-3.5" />
-              复制（Phase 2）
+              复制节点
+            </button>
+            {isImageNode && (
+              <button
+                onClick={onEditImage}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-secondary cursor-pointer transition-colors"
+              >
+                <Scissors className="h-3.5 w-3.5 text-blue-400" />
+                编辑图像
+              </button>
+            )}
+            <button
+              onClick={onSendToAssistant}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-secondary cursor-pointer transition-colors"
+            >
+              <Sparkles className="h-3.5 w-3.5 text-primary" />
+              发送到助手
             </button>
             <button
               onClick={onDelete}
@@ -300,7 +367,7 @@ export function ContextMenu() {
                   onMouseLeave={handleMouseLeave}
                 >
                   {listPlugins()
-                    .filter((p) => !p.type.startsWith("file_"))
+                    .filter((p) => !p.type.startsWith("file_") && p.isActive !== false && p.isDeleted !== true)
                     .map((plugin) => {
                       const Icon = plugin.icon;
                       return (
@@ -364,6 +431,40 @@ export function ContextMenu() {
                 </div>
               )}
             </div>
+
+            <div
+              className="relative flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-secondary cursor-pointer transition-colors"
+              onMouseEnter={() => handleMouseEnter("plugins")}
+              onMouseLeave={handleMouseLeave}
+            >
+              <Sparkles className="h-3.5 w-3.5 text-cyan-400" />
+              <span>插件管理</span>
+              <span className="ml-auto text-[9px] opacity-65">▶</span>
+
+              {activeSubmenu === "plugins" && (
+                <div
+                  className="Qiji-panel absolute left-full top-0 ml-1 w-32 rounded-xl p-1 text-xs text-foreground shadow-2xl animate-in fade-in slide-in-from-left-1 duration-150"
+                  onMouseEnter={() => handleMouseEnter("plugins")}
+                  onMouseLeave={handleMouseLeave}
+                >
+                  <button
+                    onClick={onImportPlugin}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-secondary cursor-pointer transition-colors"
+                  >
+                    <UploadCloud className="h-3.5 w-3.5 text-green-400" />
+                    导入插件
+                  </button>
+                  <button
+                    onClick={() => onExportPlugin()}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-secondary cursor-pointer transition-colors"
+                  >
+                    <Download className="h-3.5 w-3.5 text-yellow-400" />
+                    导出所有自定义插件
+                  </button>
+                </div>
+              )}
+            </div>
+
             <button
               onClick={onUndo}
               disabled={!canUndo}

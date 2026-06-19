@@ -1,229 +1,413 @@
 import {
-  Type,
-  ScrollText,
-  Image as ImageIcon,
-  Clapperboard,
-  AudioLines,
-  type LucideIcon,
+	Type,
+	ScrollText,
+	Image as ImageIcon,
+	Clapperboard,
+	AudioLines,
+	type LucideIcon,
 } from "lucide-react";
-import { genId } from "@/lib/id";
+import type { Asset } from "@/store/libraryStore";
 
 export interface PortType {
-  name: string;
-  formats: string[]; // e.g. ["image", "video"]
+	name: string;
+	formats: string[];
 }
 
 export interface NodeAction {
-  name: string;
-  label: string;
-  targetNodeType: string;
-  handler: (
-    nodeId: string,
-    context: {
-      store: any;
-      dispatch: (command: any) => void;
-    }
-  ) => void;
+	name: string;
+	label: string;
+	targetNodeType: string;
+	handler: (
+		nodeId: string,
+		context: {
+			store: ReturnType<typeof import("@/store/canvasStore").useCanvasStore.getState>;
+			dispatch: (command: unknown) => void;
+		}
+	) => void;
 }
 
 export interface NodePlugin {
-  type: string;
-  label: string;
-  code: string;
-  icon: LucideIcon;
-  accentVar: string;
-  resultKind: string;
-  defaultModel: string;
-  inputs: PortType[];
-  outputs: PortType[];
-  canStack?: boolean;
-  actions?: NodeAction[];
+	type: string;
+	label: string;
+	code: string;
+	icon: LucideIcon;
+	accentVar: string;
+	resultKind: string;
+	defaultModel: string;
+	description?: string;
+	category?: string;
+	thumbnail?: string | null;
+	inputs: PortType[];
+	outputs: PortType[];
+	canStack?: boolean;
+	actions?: NodeAction[];
+	execute?: (nodeId: string) => Promise<void>;
+	isActive?: boolean;
+	isDeleted?: boolean;
 }
 
 const plugins = new Map<string, NodePlugin>();
 
+export async function defaultNodeExecute(nodeId: string): Promise<void> {
+	const { useCanvasStore } = await import("@/store/canvasStore");
+	const { useLibraryStore } = await import("@/store/libraryStore");
+	const { useProjectStore } = await import("@/store/projectStore");
+
+	const store = useCanvasStore.getState();
+	const node = store.nodes[nodeId];
+	if (!node) return;
+
+	const type = node.type;
+	const plugin = getPlugin(type);
+	if (!plugin) return;
+
+	const params = node.data.params;
+	const { resolveActiveModelKey } = await import("@/services/adapters/channelAdapter");
+	const modelKey = resolveActiveModelKey(node.type, params.model, plugin.defaultModel);
+
+	// 查找 adapter — 找不到直接报错，不回退 mock
+	const { getAdapter } = await import("@/services/modelAdapter");
+	const adapter = getAdapter(modelKey);
+	if (!adapter) {
+		const errorMsg = modelKey
+			? `未找到模型适配器「${modelKey}」，请在「设置→模型」中选择已启用的模型`
+			: `节点未选择模型，请在节点面板中选择模型`;
+		store.setRuntime(nodeId, { status: "failed", progress: 100, error: errorMsg });
+		return;
+	}
+
+	try {
+		store.setRuntime(nodeId, { status: "queued", progress: 0 });
+
+		const { resolveMentions } = await import("@/lib/mentionResolver");
+		const resolvedPrompt = resolveMentions(nodeId, String(params.prompt || ""));
+		const inputData = { prompt: resolvedPrompt, ...node.data.input || {} };
+
+		const { taskId } = await adapter.submit(inputData, params, type);
+		// 黑匣子：attach 到实际 taskId
+		const traceId = nodeId;
+		console.log(`[Blackbox] ${traceId} → adapter=${adapter.key} model=${modelKey} taskId=${taskId}`);
+
+		store.setRuntime(nodeId, { status: "running", progress: 10 });
+
+		let pollCount = 0;
+		const maxPolls = 120;
+		const runPolling = () => {
+			setTimeout(async () => {
+				try {
+					const pollResult = await adapter.poll(taskId);
+					pollCount++;
+					console.log(`[Blackbox] ${traceId} poll#${pollCount} status=${pollResult.status} progress=${pollResult.progress}`);
+
+					if (pollResult.status === "success") {
+						const resultUri = pollResult.resultUri || "";
+						const aid = `asset-${taskId}`;
+						const filename = `${plugin.type}_output_${Date.now()}`;
+						useLibraryStore.getState().addAsset({
+							id: aid,
+							kind: plugin.resultKind as Asset["kind"],
+							name: filename,
+							uri: resultUri,
+							thumbnailUri: null,
+							createdAt: new Date().toISOString(),
+							deletedByUser: false,
+							localPath: null,
+						});
+						const updatedNodes = { ...store.nodes };
+						if (updatedNodes[nodeId]) {
+							updatedNodes[nodeId] = { ...updatedNodes[nodeId], data: { ...updatedNodes[nodeId].data, resultAssetId: aid } };
+							useCanvasStore.setState({ nodes: updatedNodes });
+						}
+						store.setRuntime(nodeId, { status: "success", progress: 100 });
+						useProjectStore.getState().scheduleAutoSave("history");
+					} else if (pollResult.status === "failed") {
+						store.setRuntime(nodeId, { status: "failed", progress: 100, error: pollResult.error || "生成失败" });
+					} else {
+						store.setRuntime(nodeId, { status: pollResult.status, progress: pollResult.progress || Math.min(pollCount * 10, 95) });
+						if (pollCount < maxPolls) runPolling();
+						else store.setRuntime(nodeId, { status: "failed", progress: 100, error: "生成超时，已取消" });
+					}
+				} catch (err) {
+					console.error("[Blackbox] Polling error:", err);
+					store.setRuntime(nodeId, { status: "failed", progress: 100, error: err instanceof Error ? err.message : "轮询异常" });
+				}
+			}, 1000);
+		};
+		runPolling();
+	} catch (err) {
+		console.error(`[Blackbox] Node ${nodeId} submit failed:`, err);
+		const msg = err instanceof Error ? err.message : "请求发送失败";
+		store.setRuntime(nodeId, { status: "failed", progress: 100, error: msg });
+	}
+}
+
 export function registerPlugin(plugin: NodePlugin) {
-  plugins.set(plugin.type, plugin);
+	if (!plugin.execute) {
+		plugin.execute = defaultNodeExecute;
+	}
+	plugins.set(plugin.type, plugin);
 }
 
 export function getPlugin(type: string): NodePlugin | undefined {
-  return plugins.get(type);
+	return plugins.get(type);
 }
 
 export function listPlugins(): NodePlugin[] {
-  return Array.from(plugins.values());
+	return Array.from(plugins.values());
 }
 
-// ── 注册默认核心节点插件 ──
+// ── 本地加载核心集成 ──
+import { Sparkles, FileUp } from "lucide-react";
 
-registerPlugin({
-  type: "text",
-  label: "文本",
-  code: "TEXT",
-  icon: Type,
-  accentVar: "var(--node-text)",
-  resultKind: "text",
-  defaultModel: "gvlm-text",
-  inputs: [],
-  outputs: [{ name: "text", formats: ["text"] }],
-});
+export const iconMap: Record<string, LucideIcon> = {
+	Type,
+	ScrollText,
+	ImageIcon,
+	Clapperboard,
+	AudioLines,
+	Sparkles,
+	FileUp,
+};
 
-registerPlugin({
-  type: "script",
-  label: "脚本",
-  code: "SCRIPT",
-  icon: ScrollText,
-  accentVar: "var(--node-script)",
-  resultKind: "script",
-  defaultModel: "gvlm-script",
-  inputs: [{ name: "text", formats: ["text"] }],
-  outputs: [{ name: "shot", formats: ["shot", "text"] }],
-});
+export function registerSerializedPlugin(plugin: any) {
+	const nodePlugin: NodePlugin = {
+		type: plugin.type || plugin.id,
+		label: plugin.label || plugin.name,
+		code: plugin.code || (plugin.id || plugin.type || "").toUpperCase(),
+		icon: iconMap[plugin.iconName] || Sparkles,
+		accentVar: plugin.accentVar || "var(--node-accent)",
+		resultKind: plugin.resultKind || plugin.type || "text",
+		defaultModel: plugin.defaultModel || (plugin.models && plugin.models[0]?.id) || "",
+		description: plugin.description || "",
+		category: plugin.category || "other",
+		thumbnail: plugin.thumbnail || null,
+		inputs: plugin.inputs || [],
+		outputs: plugin.outputs || [],
+		canStack: plugin.canStack,
+		actions: [],
+		isActive: plugin.isActive !== false,
+		isDeleted: !!plugin.isDeleted,
+	};
 
-registerPlugin({
-  type: "image",
-  label: "图片",
-  code: "IMAGE",
-  icon: ImageIcon,
-  accentVar: "var(--node-image)",
-  resultKind: "image",
-  defaultModel: "lib-image",
-  inputs: [{ name: "shot", formats: ["shot", "text"] }],
-  outputs: [{ name: "frame", formats: ["frame", "image"] }],
-  canStack: true,
-});
+	// Compile cost estimation function if provided
+	let estimateCostFn = (modeKey: string, params: Record<string, unknown>) => {
+		if (plugin.estimateCost) {
+			try {
+				return plugin.estimateCost(modeKey, params);
+			} catch (e) {
+				console.error("Error evaluating estimateCost function:", e);
+			}
+		}
+		return plugin.adapter?.baseCost || 10;
+	};
+	if (plugin.scripts?.estimateCost) {
+		try {
+			const compiledCost = new Function("modeKey", "params", "baseCost", plugin.scripts.estimateCost);
+			estimateCostFn = (modeKey, params) => {
+				try {
+					return compiledCost(modeKey, params, plugin.adapter?.baseCost || 10);
+				} catch (e) {
+					console.error("Error evaluating estimateCost script:", e);
+					return plugin.adapter?.baseCost || 10;
+				}
+			};
+		} catch (err) {
+			console.error(`Failed to compile estimateCost for ${plugin.type || plugin.id}:`, err);
+		}
+	}
 
-registerPlugin({
-  type: "video",
-  label: "视频",
-  code: "VIDEO",
-  icon: Clapperboard,
-  accentVar: "var(--node-video)",
-  resultKind: "video",
-  defaultModel: "seedance-2",
-  inputs: [
-    { name: "frame", formats: ["frame", "image"] },
-    { name: "clip", formats: ["clip", "video"] },
-    { name: "audio", formats: ["audio"] },
-    { name: "text", formats: ["shot", "text"] },
-  ],
-  outputs: [{ name: "clip", formats: ["clip", "video"] }],
-  canStack: true,
-  actions: [
-    {
-      name: "hd_upscale",
-      label: "超分高清",
-      targetNodeType: "video",
-      handler: (nodeId, { store, dispatch }) => {
-        const parentNode = store.nodes[nodeId];
-        if (!parentNode) return;
+	// Compile transformInput function if provided
+	let transformInputFn = (params: Record<string, unknown>, _nodeId: string) => {
+		return { prompt: params.prompt || "", ...params };
+	};
+	if (plugin.scripts?.transformInput) {
+		try {
+			const compiledTransform = new Function("params", "nodeId", plugin.scripts.transformInput);
+			transformInputFn = (params, nodeId) => {
+				try {
+					return compiledTransform(params, nodeId);
+				} catch (e) {
+					console.error("Error evaluating transformInput script:", e);
+					return { prompt: params.prompt || "", ...params };
+				}
+			};
+		} catch (err) {
+			console.error(`Failed to compile transformInput for ${plugin.type || plugin.id}:`, err);
+		}
+	}
 
-        const newX = parentNode.x + (parentNode.w || 240) + 100;
-        const newY = parentNode.y;
+	const hasJsAdapter = !!(plugin.createTask && plugin.queryTask);
+	const adapterKey = plugin.adapter?.key || plugin.id || plugin.type;
+	const adapterModes = plugin.adapter?.modes || (plugin.models?.map((m: any) => ({
+		key: m.id,
+		label: m.name,
+		inputHint: m.inputHint || "根据提示词生成...",
+		paramsSchema: m.paramsSchema || []
+	}))) || [];
 
-        const newId = genId("video");
-        const hdNode = {
-          id: newId,
-          type: "video",
-          x: newX,
-          y: newY,
-          w: parentNode.w || 240,
-          h: parentNode.h || 200,
-          parentId: parentNode.parentId || null,
-          parentScriptId: parentNode.parentScriptId || null,
-          data: {
-            input: {},
-            params: {
-              model: "seedance-2",
-              mode: "hd",
-              prompt: parentNode.data.params?.prompt || "",
-            },
-            resultAssetId: null,
-            sourceVersion: 0,
-          },
-        };
+	// If adapter is defined or standard methods are present, register it dynamically
+	if (plugin.adapter || hasJsAdapter) {
+		const dynamicSubmit = async (input: Record<string, unknown>, params: Record<string, unknown>) => {
+			if (plugin.createTask) {
+				const config = {};
+				const taskId = await plugin.createTask(config, { ...input, ...params });
+				return { taskId };
+			}
+			const { getAdapter } = await import("@/services/modelAdapter");
+			const adapter = getAdapter(adapterKey);
+			if (adapter) {
+				return adapter.submit(input, params);
+			}
+			throw new Error(`Adapter ${adapterKey} not registered`);
+		};
 
-        // 1. 自动生成高清视频节点
-        dispatch({ type: "addNode", node: hdNode });
+		const dynamicPoll = async (taskId: string) => {
+			if (plugin.queryTask) {
+				const config = {};
+				const result = await plugin.queryTask(config, taskId);
+				return {
+					status: result.status,
+					progress: result.progress,
+					resultUri: result.video_url || result.image_url || result.audio_url || result.text || "",
+					error: result.error
+				};
+			}
+			const { getAdapter } = await import("@/services/modelAdapter");
+			const adapter = getAdapter(adapterKey);
+			if (adapter) {
+				return adapter.poll(taskId);
+			}
+			throw new Error(`Adapter ${adapterKey} not registered`);
+		};
 
-        // 2. 自动连接新节点输入与旧节点输出
-        dispatch({
-          type: "connect",
-          edge: {
-            id: genId("edge"),
-            kind: "dataflow",
-            source: nodeId,
-            sourcePort: "clip",
-            target: newId,
-            targetPort: "frame",
-          },
-        });
-      },
-    },
-  ],
-});
+		const dynamicAdapter = {
+			key: adapterKey,
+			displayName: plugin.adapter?.displayName || plugin.name || plugin.label,
+			vendor: plugin.adapter?.vendor || "内置",
+			nodeTypes: [nodePlugin.type],
+			modes: adapterModes,
+			baseCost: plugin.adapter?.baseCost || 10,
+			estimateCost: estimateCostFn,
+			submit: dynamicSubmit,
+			poll: dynamicPoll,
+		};
 
-registerPlugin({
-  type: "audio",
-  label: "音频",
-  code: "AUDIO",
-  icon: AudioLines,
-  accentVar: "var(--node-audio)",
-  resultKind: "audio",
-  defaultModel: "lib-audio",
-  inputs: [
-    { name: "clip", formats: ["clip", "video"] },
-    { name: "text", formats: ["shot", "text"] },
-  ],
-  outputs: [{ name: "audio", formats: ["audio"] }],
-});
+		import("@/services/modelAdapter").then(({ registerAdapter }) => {
+			registerAdapter(dynamicAdapter);
+		});
+	}
 
-registerPlugin({
-  type: "file_image",
-  label: "图片素材",
-  code: "FILE_IMAGE",
-  icon: ImageIcon,
-  accentVar: "var(--node-image)",
-  resultKind: "image",
-  defaultModel: "",
-  inputs: [],
-  outputs: [{ name: "frame", formats: ["frame", "image"] }],
-});
+	// Compile execute method or use adapter-based execution
+	let executeFn = defaultNodeExecute;
 
-registerPlugin({
-  type: "file_video",
-  label: "视频素材",
-  code: "FILE_VIDEO",
-  icon: Clapperboard,
-  accentVar: "var(--node-video)",
-  resultKind: "video",
-  defaultModel: "",
-  inputs: [],
-  outputs: [{ name: "clip", formats: ["clip", "video"] }],
-});
+	if (plugin.adapter || hasJsAdapter) {
+		executeFn = async (nodeId: string) => {
+			const { useCanvasStore } = await import("@/store/canvasStore");
+			const { useLibraryStore } = await import("@/store/libraryStore");
+			const { useProjectStore } = await import("@/store/projectStore");
+			const { getAdapter } = await import("@/services/modelAdapter");
 
-registerPlugin({
-  type: "file_audio",
-  label: "音频素材",
-  code: "FILE_AUDIO",
-  icon: AudioLines,
-  accentVar: "var(--node-audio)",
-  resultKind: "audio",
-  defaultModel: "",
-  inputs: [],
-  outputs: [{ name: "audio", formats: ["audio"] }],
-});
+			const store = useCanvasStore.getState();
+			const node = store.nodes[nodeId];
+			if (!node) return;
 
-registerPlugin({
-  type: "file_document",
-  label: "文档素材",
-  code: "FILE_DOCUMENT",
-  icon: ScrollText,
-  accentVar: "var(--node-script)",
-  resultKind: "script",
-  defaultModel: "",
-  inputs: [],
-  outputs: [{ name: "text", formats: ["text"] }],
-});
+			const params = node.data.params;
+			const { resolveActiveModelKey } = await import("@/services/adapters/channelAdapter");
+			const modelKey = resolveActiveModelKey(node.type, params.model, nodePlugin.defaultModel);
+			const adapter = getAdapter(modelKey);
+			if (!adapter) {
+				const errorMsg = `未找到模型适配器「${modelKey || "未选择"}」，请在节点面板中选择模型`;
+				store.setRuntime(nodeId, { status: "failed", progress: 100, error: errorMsg });
+				return;
+			}
 
+			try {
+				store.setRuntime(nodeId, { status: "queued", progress: 0 });
 
+				const { resolveMentions } = await import("@/lib/mentionResolver");
+				const resolvedPrompt = resolveMentions(nodeId, String(params.prompt || ""));
+				const inputData = transformInputFn({ prompt: resolvedPrompt, ...params, ...node.data.input || {} }, nodeId);
+				const { taskId } = await adapter.submit(inputData, params, node.type);
+				console.log(`[Blackbox] ${nodeId} → adapter=${adapter.key} model=${modelKey} taskId=${taskId}`);
+
+				store.setRuntime(nodeId, { status: "running", progress: 10 });
+
+				let pollCount = 0;
+				const maxPolls = 120;
+				const runPolling = () => {
+					setTimeout(async () => {
+						try {
+							const pollResult = await adapter.poll(taskId);
+							pollCount++;
+							console.log(`[Blackbox] ${nodeId} poll#${pollCount} status=${pollResult.status} progress=${pollResult.progress}`);
+
+							if (pollResult.status === "success") {
+								const resultUri = pollResult.resultUri || "";
+								const assetId = `asset-${taskId}`;
+								const filename = `${nodePlugin.type}_output_${Date.now()}`;
+
+								useLibraryStore.getState().addAsset({
+									id: assetId,
+									kind: nodePlugin.resultKind as Asset["kind"],
+									name: filename,
+									uri: resultUri,
+									thumbnailUri: null,
+									createdAt: new Date().toISOString(),
+									deletedByUser: false,
+									localPath: null,
+								});
+
+								const updatedNodes = { ...store.nodes };
+								if (updatedNodes[nodeId]) {
+									updatedNodes[nodeId] = {
+										...updatedNodes[nodeId],
+										data: {
+											...updatedNodes[nodeId].data,
+											resultAssetId: assetId,
+										},
+									};
+									useCanvasStore.setState({ nodes: updatedNodes });
+								}
+
+								store.setRuntime(nodeId, { status: "success", progress: 100 });
+								useProjectStore.getState().scheduleAutoSave("history");
+							} else if (pollResult.status === "failed") {
+								store.setRuntime(nodeId, { status: "failed", progress: 100, error: pollResult.error || "生成失败" });
+							} else {
+								store.setRuntime(nodeId, {
+									status: pollResult.status,
+									progress: pollResult.progress || Math.min(pollCount * 10, 95),
+								});
+								if (pollCount < maxPolls) {
+									runPolling();
+								} else {
+									store.setRuntime(nodeId, { status: "failed", progress: 100, error: "生成超时，已取消" });
+								}
+							}
+						} catch (err) {
+							console.error("[Blackbox] Polling error:", err);
+							const msg = err instanceof Error ? err.message : "轮询异常";
+							store.setRuntime(nodeId, { status: "failed", progress: 100, error: msg });
+						}
+					}, 1000);
+				};
+				runPolling();
+			} catch (err) {
+				console.error(`[Blackbox] Node ${nodeId} submit failed:`, err);
+				const msg = err instanceof Error ? err.message : "请求发送失败";
+				store.setRuntime(nodeId, { status: "failed", progress: 100, error: msg });
+			}
+		};
+	}
+
+	nodePlugin.execute = executeFn;
+	plugins.set(nodePlugin.type, nodePlugin);
+}
+
+// ── 加载并注册本地 JS 插件文件 ──
+const localPluginModules = import.meta.glob("./plugins/*.js", { eager: true });
+for (const path in localPluginModules) {
+	const mod = localPluginModules[path];
+	const pluginData = (mod as any).default || mod;
+	registerSerializedPlugin(pluginData);
+}

@@ -13,13 +13,16 @@ import { ResultView } from "./ResultView";
 import { dispatchCommand } from "@/command/dispatch";
 import type { NodeType } from "@/types";
 import { useUiStore } from "@/store/uiStore";
-import { useLibraryStore } from "@/store/libraryStore";
+
 import {
   Type,
   Image as ImageIcon,
   Clapperboard,
   AudioLines,
   Plus,
+  Info,
+  Trash2,
+  PanelBottomOpen,
 } from "lucide-react";
 import { HandlePopup } from "./HandlePopup";
 
@@ -39,15 +42,7 @@ function getFormatIconAndColor(formats: string[]) {
   return { Icon: Plus, colorClass: "text-muted-foreground" };
 }
 
-const STATUS_LABEL: Record<string, string> = {
-  idle: "待命",
-  editing: "编辑中",
-  queued: "排队中",
-  scheduled: "已排期",
-  running: "生成中",
-  success: "完成",
-  failed: "失败",
-};
+
 
 export function BaseNode({
   id,
@@ -60,7 +55,6 @@ export function BaseNode({
 }) {
   const def = getPlugin(type);
   if (!def) return null;
-  const Icon = def.icon;
   const status = useCanvasStore((s) => s.runtime[id]?.status ?? "idle");
   const accentStyle = { "--node-accent": def.accentVar } as CSSProperties;
   const activeNodeId = useUiStore((s) => s.activeNodeId);
@@ -70,6 +64,7 @@ export function BaseNode({
     Number(s.nodes[id]?.data.params?.quantity ?? 1),
   );
   const isStacked = def.canStack && quantity > 1;
+  const zoom = useCanvasStore((s) => s.viewport.zoom);
 
   const [handleMenu, setHandleMenu] = useState<{
     handleId: string;
@@ -77,6 +72,18 @@ export function BaseNode({
     formats: string[];
     topPercent: number;
   } | null>(null);
+
+  // ── 悬停工具栏：统一由父容器管理，避免闪烁 ──
+  const [hovered, setHovered] = useState(false);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleMouseEnter = () => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = setTimeout(() => setHovered(true), 120);
+  };
+  const handleMouseLeave = () => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = setTimeout(() => setHovered(false), 80);
+  };
 
   const pointerStartRef = useRef<{ x: number; y: number; time: number } | null>(
     null,
@@ -116,12 +123,7 @@ export function BaseNode({
     pointerStartRef.current = null;
   };
 
-  const assetId = useCanvasStore((s) => s.nodes[id]?.data.resultAssetId);
-  const asset = useLibraryStore((s) =>
-    assetId ? (s.assets[assetId] ?? null) : null,
-  );
-  const isUploadNode = type.startsWith("file_");
-  const displayLabel = isUploadNode && asset ? asset.name : def.label;
+
 
   const [resolution, setResolution] = useState<string>("");
 
@@ -141,20 +143,81 @@ export function BaseNode({
     [id],
   );
 
-  const statusText = isUploadNode ? "" : (STATUS_LABEL[status] ?? "");
-  const rightLabel = resolution || statusText;
+
+  const nodeTypeLabel =
+    def.label.endsWith("素材") || def.label.endsWith("节点")
+      ? def.label
+      : `${def.label}节点`;
+  const formattedResolution = resolution
+    ? resolution.replace(/\s*[×x]\s*/gi, "*")
+    : "";
 
   return (
     <div className="relative w-full h-full overflow-visible">
-      {/* ── 节点外部的超轻量标题栏（仅字体，无边框） ── */}
-      <div className="absolute bottom-full left-0 right-0 mb-1.5 flex items-center justify-between text-[9px] text-muted-foreground select-none nodrag px-0.5">
-        <div className="flex items-center gap-1 font-medium truncate max-w-[75%]">
-          <Icon className="h-3 w-3 text-primary shrink-0" />
-          <span className="truncate">{displayLabel}</span>
-        </div>
-        <span className="font-mono text-[9px] opacity-75 shrink-0">
-          {rightLabel}
-        </span>
+      {/* ── 节点上方常驻的类型与规格 ── */}
+      <div
+        className="absolute bottom-full left-0 right-0 mb-1.5 flex items-center justify-between text-[10px] text-muted-foreground select-none nodrag px-0.5 cursor-default font-medium transition-opacity duration-150"
+        style={{
+          opacity: hovered ? 0 : 1,
+          pointerEvents: hovered ? "none" : "auto",
+        }}
+      >
+        <span className="opacity-90">{nodeTypeLabel}</span>
+        {formattedResolution && (
+          <span className="font-mono opacity-80">{formattedResolution}</span>
+        )}
+      </div>
+
+      {/* ── 悬停快捷工具栏 ── */}
+      <div
+        className="absolute bottom-full left-1/2 mb-1.5 z-50 nodrag flex flex-row items-center gap-0.5 rounded-lg px-1 py-1 opacity-0 pointer-events-none transition-opacity duration-150 whitespace-nowrap w-max"
+        style={{
+          background: "rgba(18, 22, 34, 0.92)",
+          border: "1px solid rgba(255, 255, 255, 0.1)",
+          backdropFilter: "blur(12px)",
+          boxShadow: "0 4px 16px rgba(0, 0, 0, 0.4)",
+          transform: `translate(-50%, 0) scale(${1 / zoom})`,
+          transformOrigin: "bottom center",
+          ...(hovered ? { opacity: 1, pointerEvents: "auto" } : {}),
+        }}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+      >
+        <button
+          className="flex flex-row items-center gap-1 rounded-md px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground hover:bg-white/8 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+          onClick={(e) => {
+            e.stopPropagation();
+            useUiStore.getState().setActiveNodeId(id);
+          }}
+          title="打开面板"
+        >
+          <PanelBottomOpen className="h-3 w-3 shrink-0" />
+          <span>面板</span>
+        </button>
+        <div className="h-3 w-[1px] bg-white/10 shrink-0" />
+        <button
+          className="flex flex-row items-center gap-1 rounded-md px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground hover:bg-white/8 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+          onClick={(e) => {
+            e.stopPropagation();
+            useUiStore.getState().setNodeInfoNodeId(id);
+          }}
+          title="信息"
+        >
+          <Info className="h-3 w-3 shrink-0" />
+          <span>信息</span>
+        </button>
+        <div className="h-3 w-[1px] bg-white/10 shrink-0" />
+        <button
+          className="flex flex-row items-center gap-1 rounded-md px-2 py-1 text-[10px] text-destructive hover:bg-destructive/10 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+          onClick={(e) => {
+            e.stopPropagation();
+            dispatchCommand({ type: "deleteNode", id });
+          }}
+          title="删除"
+        >
+          <Trash2 className="h-3 w-3 shrink-0" />
+          <span>删除</span>
+        </button>
       </div>
 
       <div
@@ -162,6 +225,8 @@ export function BaseNode({
         data-status={status}
         style={accentStyle}
         onClick={() => !isActive && useUiStore.getState().setActiveNodeId(id)}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
       >
         {/* NodeResizer：激活时才显示 */}
         {isActive && (
@@ -171,6 +236,9 @@ export function BaseNode({
             minHeight={150}
             lineClassName="!border-[color:var(--node-accent)]"
             handleClassName="!bg-[color:var(--node-accent)]"
+            onResize={(_, p) => {
+              useCanvasStore.getState().resizeNode(id, p.width, p.height);
+            }}
             onResizeEnd={(_, p) => {
               dispatchCommand({
                 type: "resizeNode",

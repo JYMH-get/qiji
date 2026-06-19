@@ -16,6 +16,11 @@ export type Command =
   | { type: "connect"; edge: CanvasEdge }
   | { type: "disconnect"; edgeId: string }
   | {
+      type: "pasteNodes";
+      nodes: CanvasNode[];
+      edges: CanvasEdge[];
+    }
+  | {
       type: "insertOnEdge";
       edgeId: string;
       node: CanvasNode;
@@ -48,6 +53,7 @@ export const STRUCTURAL_COMMANDS: ReadonlySet<CommandType> =
     "deleteNode",
     "connect",
     "disconnect",
+    "pasteNodes",
     "insertOnEdge",
     "group",
     "ungroup",
@@ -59,5 +65,8 @@ export const STRUCTURAL_COMMANDS: ReadonlySet<CommandType> =
  * Agent 错峰自动模式命令白名单 = 仅生成/调度类，禁止一切结构命令。
  * 把 Agent 自动行为牢牢限制在「执行既有图」。
  */
-export const AGENT_AUTO_ALLOWED: ReadonlySet<CommandType> =
-  new Set<CommandType>(["run", "schedule", "cancelSchedule"]);
+export const AGENT_AUTO_ALLOWED: ReadonlySet<CommandType> = new Set<CommandType>([
+  "run",
+  "schedule",
+  "cancelSchedule",
+]);

@@ -1,0 +1,227 @@
+/* ===== Day/Night Dark Theme Overrides ===== */
+
+body.dark {
+  background-color: #07080a !important;
+  color: #e8eaf0 !important;
+}
+
+body.dark .scroll-container {
+  background-color: #07080a !important;
+}
+
+/* Base structural containers: darken them */
+body.dark [class*="Pixso-frame-"] {
+  background-color: #12141a;
+  color: #e8eaf0;
+}
+
+/* Structural page backgrounds (main halls/areas) should be extra dark */
+body.dark .Pixso-frame-2_1,
+body.dark .Pixso-frame-2_45,
+body.dark .Pixso-frame-2_46,
+body.dark .Pixso-frame-2_56,
+body.dark .Pixso-frame-16_4,
+body.dark .Pixso-frame-16_5,
+body.dark .Pixso-frame-16_93,
+body.dark .Pixso-frame-16_123,
+body.dark .Pixso-frame-16_175,
+body.dark .Pixso-frame-16_213,
+body.dark .Pixso-frame-16_221,
+body.dark .Pixso-frame-16_226,
+body.dark .Pixso-frame-16_1307,
+body.dark .Pixso-frame-10_902,
+body.dark .Pixso-frame-10_926,
+body.dark .Pixso-frame-10_1044,
+body.dark .Pixso-frame-10_1086 {
+  background-color: #07080a !important;
+}
+
+/* Sidebar background styling */
+body.dark .Pixso-frame-2_2,
+body.dark .Pixso-frame-16_124,
+body.dark .Pixso-frame-10_903,
+body.dark .Pixso-frame-10_927 {
+  background-color: #0d0e14 !important;
+}
+
+/* Main inner panel cards */
+body.dark .Pixso-frame-2_57,
+body.dark .Pixso-frame-2_125,
+body.dark .Pixso-frame-2_140,
+body.dark .Pixso-frame-16_6,
+body.dark .Pixso-frame-16_12,
+body.dark .Pixso-frame-16_13,
+body.dark .Pixso-frame-16_176,
+body.dark .Pixso-frame-16_214 {
+  background-color: #11121b !important;
+}
+
+/* Border and separator line styling */
+body.dark [class*="stroke-"] {
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* Inner input and selection fields */
+body.dark .Pixso-frame-2_47,
+body.dark .Pixso-frame-2_52,
+body.dark .Pixso-frame-16_18,
+body.dark .Pixso-frame-16_23,
+body.dark .Pixso-frame-16_28,
+body.dark .Pixso-frame-16_43,
+body.dark .Pixso-frame-16_46,
+body.dark .Pixso-frame-16_50,
+body.dark .Pixso-frame-16_53,
+body.dark .Pixso-frame-16_57,
+body.dark .Pixso-frame-16_58,
+body.dark .Pixso-frame-16_61,
+body.dark .Pixso-frame-16_65,
+body.dark .Pixso-frame-16_68,
+body.dark .Pixso-frame-16_72,
+body.dark .Pixso-frame-16_73,
+body.dark .Pixso-frame-16_76,
+body.dark .Pixso-frame-16_80,
+body.dark .Pixso-frame-16_83,
+body.dark .Pixso-frame-16_188,
+body.dark .Pixso-frame-16_198,
+body.dark .Pixso-frame-16_205,
+body.dark .Pixso-frame-16_221,
+body.dark .Pixso-frame-16_230,
+body.dark .Pixso-frame-16_240,
+body.dark .Pixso-frame-16_250,
+body.dark .Pixso-frame-16_260,
+body.dark .Pixso-frame-16_270,
+body.dark .Pixso-frame-16_280,
+body.dark .Pixso-frame-16_1282,
+body.dark .Pixso-frame-16_1287,
+body.dark .Pixso-frame-16_1292,
+body.dark .Pixso-frame-16_1297,
+body.dark .Pixso-frame-16_1302,
+body.dark .Pixso-frame-16_1328 {
+  background-color: #171924 !important;
+}
+
+/* Card headers/details inside grids */
+body.dark .Pixso-frame-2_126,
+body.dark .Pixso-frame-16_189,
+body.dark .Pixso-frame-16_229 {
+  background-color: #1f2130 !important;
+}
+
+/* Generic text rules: make main text brighter and sub-text muted */
+body.dark [class*="Pixso-paragraph-"],
+body.dark [class*="Pixso-span-"] {
+  color: #abb2bf !important;
+}
+
+/* Specific heading/active items should be bright white */
+body.dark .Pixso-paragraph-2_53,
+body.dark .Pixso-paragraph-2_62,
+body.dark .Pixso-paragraph-2_133,
+body.dark .Pixso-paragraph-2_135,
+body.dark .Pixso-paragraph-16_7,
+body.dark .Pixso-paragraph-16_16,
+body.dark .Pixso-paragraph-16_40,
+body.dark .Pixso-paragraph-16_44,
+body.dark .Pixso-paragraph-16_47,
+body.dark .Pixso-paragraph-16_51,
+body.dark .Pixso-paragraph-16_54,
+body.dark .Pixso-paragraph-16_59,
+body.dark .Pixso-paragraph-16_62,
+body.dark .Pixso-paragraph-16_66,
+body.dark .Pixso-paragraph-16_69,
+body.dark .Pixso-paragraph-16_74,
+body.dark .Pixso-paragraph-16_77,
+body.dark .Pixso-paragraph-16_81,
+body.dark .Pixso-paragraph-16_84,
+body.dark .Pixso-paragraph-16_101,
+body.dark .Pixso-paragraph-16_130,
+body.dark .Pixso-paragraph-16_179,
+body.dark .Pixso-paragraph-16_216,
+body.dark .Pixso-paragraph-16_224,
+body.dark .Pixso-paragraph-16_227,
+body.dark .Pixso-paragraph-16_238,
+body.dark .Pixso-paragraph-16_1273,
+body.dark .Pixso-paragraph-16_1290,
+body.dark .Pixso-paragraph-16_1295,
+body.dark .Pixso-paragraph-16_1300,
+body.dark .Pixso-paragraph-16_1305,
+body.dark .Pixso-paragraph-16_1310,
+body.dark .Pixso-paragraph-16_1315,
+body.dark .Pixso-paragraph-16_1320,
+body.dark .Pixso-paragraph-16_1327 {
+  color: #ffffff !important;
+}
+
+/* Purple text highlights in active sidebar selections */
+body.dark .Pixso-paragraph-16_138,
+body.dark .Pixso-paragraph-16_103,
+body.dark .Pixso-paragraph-2_65,
+body.dark .Pixso-paragraph-2_144 {
+  color: #c084fc !important;
+}
+
+/* Green status tags text */
+body.dark .Pixso-paragraph-16_109 {
+  color: #4ade80 !important;
+}
+
+/* Green status tag backgrounds */
+body.dark .Pixso-frame-16_105 {
+  background-color: rgba(34, 197, 94, 0.15) !important;
+}
+
+/* Scrollbars inside lists */
+body.dark .scroll-container::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Active tab backgrounds */
+body.dark .Pixso-frame-2_7,
+body.dark .Pixso-frame-16_131,
+body.dark .Pixso-frame-16_1227.active,
+body.dark .Pixso-frame-16_1235.active,
+body.dark .Pixso-frame-16_1240.active,
+body.dark .Pixso-frame-16_1245.active,
+body.dark .Pixso-frame-16_1259.active,
+body.dark .Pixso-frame-16_1266.active,
+body.dark .Pixso-frame-16_custom_storyboard.active,
+body.dark .Pixso-frame-16_custom_canvas.active {
+  background-color: rgba(139, 92, 246, 0.18) !important;
+}
+
+/* Unselected sidebar items: transparent bg */
+body.dark .Pixso-frame-2_20,
+body.dark .Pixso-frame-16_125,
+body.dark .Pixso-frame-16_139,
+body.dark .Pixso-frame-16_144,
+body.dark .Pixso-frame-16_149,
+body.dark .Pixso-frame-16_163,
+body.dark .Pixso-frame-16_170 {
+  background-color: transparent !important;
+}
+
+/* Text area input text fields */
+body.dark textarea,
+body.dark input[type="text"],
+body.dark select {
+  background-color: transparent !important;
+  color: #ffffff !important;
+  border: none !important;
+  outline: none !important;
+}
+
+body.dark select option {
+  background-color: #1a1b24 !important;
+  color: #ffffff !important;
+}
+
+body.dark textarea::placeholder,
+body.dark input::placeholder {
+  color: rgba(255, 255, 255, 0.4) !important;
+}
+
+/* Theme toggle active styles */
+body.dark .Pixso-vector-16_118 {
+  background-image: url(@/assets/images/zap.svg) !important; /* changes bell to zap/light icon */
+  filter: invert(1);
+}

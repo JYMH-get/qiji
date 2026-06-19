@@ -28,12 +28,12 @@ export function ParamControl({
 			typeof value === "string" ? value : String(field.default ?? "");
 		return (
 			<Select value={current} onValueChange={onChange}>
-				<SelectTrigger>
+				<SelectTrigger className="h-9 text-sm">
 					<SelectValue placeholder="选择" />
 				</SelectTrigger>
 				<SelectContent>
 					{(field.options ?? []).map((opt) => (
-						<SelectItem key={opt} value={opt}>
+						<SelectItem key={opt} value={opt} className="text-sm">
 							{opt}
 						</SelectItem>
 					))}
@@ -49,7 +49,7 @@ export function ParamControl({
 		const max = field.max ?? 100;
 		const step = field.step ?? 1;
 		return (
-			<div className="flex items-center gap-3">
+			<div className="flex items-center gap-3.5 py-1">
 				<Slider
 					value={[current]}
 					min={min}
@@ -58,7 +58,7 @@ export function ParamControl({
 					onValueChange={(v) => onChange(v[0])}
 					className="flex-1"
 				/>
-				<span className="w-12 text-right font-mono text-xs text-foreground">
+				<span className="w-12 text-right font-mono text-sm text-foreground">
 					{current}
 					{field.unit ?? ""}
 				</span>
@@ -71,7 +71,7 @@ export function ParamControl({
 		return (
 			<Button
 				variant={current ? "default" : "outline"}
-				size="sm"
+				className="h-9 px-4 text-sm"
 				onClick={() => onChange(!current)}
 			>
 				{current ? "开" : "关"}
@@ -87,7 +87,7 @@ export function ParamControl({
 			value={current}
 			onChange={(e) => onChange(e.target.value)}
 			className={cn(
-				"h-8 w-full rounded-md border border-input bg-background/60 px-3 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring",
+				"h-9 w-full rounded-md border border-input bg-background/60 px-3.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-ring",
 			)}
 		/>
 	);

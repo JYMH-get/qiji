@@ -5,10 +5,13 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
+		"dev:desktop": "tauri dev",
 		"build": "tsc -b && vite build",
 		"preview": "vite preview",
 		"typecheck": "tsc --noEmit",
 		"format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
+		"test": "vitest run",
+		"test:watch": "vitest",
 		"tauri": "tauri"
 	},
 	"dependencies": {
@@ -31,6 +34,7 @@
 		"motion": "^12.0.0",
 		"react": "^18.3.1",
 		"react-dom": "^18.3.1",
+		"react-router": "^7.8.2",
 		"tailwind-merge": "^2.5.4",
 		"zustand": "^4.5.5"
 	},
@@ -43,6 +47,7 @@
 		"@vitejs/plugin-react": "^4.3.1",
 		"tailwindcss": "^4.0.0",
 		"typescript": "^5.5.4",
-		"vite": "^5.4.2"
+		"vite": "^5.4.2",
+		"vitest": "^4.1.9"
 	}
 }

@@ -22,8 +22,9 @@ interface LibraryState {
 
 export const useLibraryStore = create<LibraryState>((set) => ({
 	assets: {},
-	addAsset: (asset) =>
-		set((s) => ({ assets: { ...s.assets, [asset.id]: asset } })),
+	addAsset: (asset) => {
+		set((s) => ({ assets: { ...s.assets, [asset.id]: asset } }));
+	},
 	deleteAsset: (id) =>
 		set((s) =>
 			s.assets[id]

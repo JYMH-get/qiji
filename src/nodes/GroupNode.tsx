@@ -1,5 +1,6 @@
 import { NodeResizer } from "@xyflow/react";
 import { dispatchCommand } from "@/command/dispatch";
+import { useCanvasStore } from "@/store/canvasStore";
 
 export function GroupNode({
   id,
@@ -16,6 +17,9 @@ export function GroupNode({
         minHeight={120}
         lineClassName="!border-[#5b8df6]"
         handleClassName="!bg-[#5b8df6]"
+        onResize={(_, params) => {
+          useCanvasStore.getState().resizeNode(id, params.width, params.height);
+        }}
         onResizeEnd={(_, params) => {
           dispatchCommand({
             type: "resizeNode",

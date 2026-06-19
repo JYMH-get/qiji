@@ -1,11 +1,14 @@
-import { ImageOff, ScrollText } from "lucide-react";
+
+import { ImageOff, RefreshCw, ScrollText } from "lucide-react";
 import { useCanvasStore } from "@/store/canvasStore";
 import { useLibraryStore } from "@/store/libraryStore";
+import { dispatchCommand } from "@/command/dispatch";
 import type { ResultKind } from "@/types";
 
 /**
  * 节点对外只展示结果（图片/视频/文本/脚本/音频）。
- * 结果显示与模型无关、恒定不变；参数/模型选择均在底部操作面板。
+ * 四态状态机：idle / loading(queued+running) / success / error，
+ * 每种状态有明确的视觉反馈。
  */
 export function ResultView({
 	nodeId,
@@ -22,6 +25,46 @@ export function ResultView({
 		assetId ? (s.assets[assetId] ?? null) : null,
 	);
 	const params = node?.data.params ?? {};
+	const status = useCanvasStore((s) => s.runtime[nodeId]?.status ?? "idle");
+	const progress = useCanvasStore((s) => s.runtime[nodeId]?.progress ?? 0);
+	const errorMsg = useCanvasStore((s) => s.runtime[nodeId]?.error ?? null);
+
+	const isLoading = status === "queued" || status === "running" || status === "scheduled";
+	const isFailed = status === "failed";
+
+	// Loading 态：旋转动画 + 进度文字
+	if (isLoading) {
+		return (
+			<div className="Qiji-result flex flex-col items-center justify-center gap-2.5">
+				<div className="Qiji-spinner" />
+				<span className="text-[10px] text-muted-foreground tracking-widest font-medium select-none">
+					{status === "queued" ? "排队中…" : status === "scheduled" ? "已排期" : `生成中 ${progress}%`}
+				</span>
+			</div>
+		);
+	}
+
+	// Error 态：错误信息 + 重试按钮
+	if (isFailed) {
+		return (
+			<div className="Qiji-result flex flex-col items-center justify-center gap-2.5 px-4">
+				<div className="text-[11px] text-red-400/90 text-center leading-snug line-clamp-2 max-w-[220px]">
+					{errorMsg || "生成失败"}
+				</div>
+				<button
+					type="button"
+					className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-medium text-foreground/80 transition hover:scale-[1.03] hover:bg-white/10 hover:text-foreground cursor-pointer select-none"
+					onClick={(e) => {
+						e.stopPropagation();
+						dispatchCommand({ type: "run", nodeId });
+					}}
+				>
+					<RefreshCw className="size-3" />
+					重试
+				</button>
+			</div>
+		);
+	}
 
 	// 针对文档素材节点 (file_document)，展示文档预览样式
 	if (node?.type === "file_document") {
@@ -38,12 +81,14 @@ export function ResultView({
 		);
 	}
 
-	// 文本 / 脚本：直接展示生成文本（当前以提示词占位）
+	// 文本 / 脚本：展示生成结果（优先 asset 内容，回退到 prompt 占位）
 	if (kind === "text" || kind === "script") {
 		const text =
-			typeof params.prompt === "string" && params.prompt.trim()
-				? (params.prompt as string)
-				: "";
+			asset?.kind === "script" && asset.uri
+				? asset.name // 显示资产名作为占位（完整内容需异步加载）
+				: typeof params.prompt === "string" && params.prompt.trim()
+					? (params.prompt as string)
+					: "";
 		return (
 			<div className={"Qiji-result " + (text ? "Qiji-result--filled" : "")}>
 				{text ? (

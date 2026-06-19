@@ -1,9 +1,14 @@
+/**
+ * assetStore.ts — 资产存储抽象
+ *
+ * 职责：
+ *   - 内存中的资产管理
+ *   - 资产 ID 生成
+ *
+ * 架构变更：不再依赖 guanli 后端，所有资产存储完全本地化
+ */
 import type { AssetId } from "@/types";
 
-/**
- * 资产 ID：全局唯一、单调递增、永不复用。
- * Phase 0 用本地内存计数；落地时换为后端持久序列。
- */
 let counter = 0;
 export function nextAssetId(): AssetId {
 	counter += 1;

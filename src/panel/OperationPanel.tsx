@@ -1,23 +1,16 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import type { CSSProperties } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Play, Sparkles, X, ChevronDown } from "lucide-react";
-import { useReactFlow } from "@xyflow/react";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "@/components/ui/select";
-import { Button } from "@/components/ui/button";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ParamControl } from "./ParamControls";
-import { useUiStore } from "@/store/uiStore";
+import { Play, Sparkles, ChevronDown, AtSign, ChevronRight } from "lucide-react";
 import { useCanvasStore } from "@/store/canvasStore";
+import { ParamControl } from "./ParamControls";
+import { PromptComposer } from "./PromptComposer";
 import { getAdapter, listAdaptersForNodeType } from "@/services/modelAdapter";
 import { getPlugin } from "@/nodes/pluginRegistry";
 import { dispatchCommand } from "@/command/dispatch";
+import { getMentionSuggestions } from "@/lib/mentionResolver";
+import { getChannelModelsForNodeType, resolveActiveModelKey } from "@/services/adapters/channelAdapter";
+import { useLibraryStore } from "@/store/libraryStore";
 
 const panelTransition = { duration: 0.18 };
 
@@ -30,10 +23,27 @@ const panelTransition = { duration: 0.18 };
 export function OperationPanel({ nodeId }: { nodeId: string }) {
 	const node = useCanvasStore((s) => s.nodes[nodeId]);
 	const runtime = useCanvasStore((s) => s.runtime[nodeId]);
-	const setActiveNodeId = useUiStore((s) => s.setActiveNodeId);
-	const { setNodes } = useReactFlow();
 
-	const [showParams, setShowParams] = useState(false);
+
+	const [activePopoverKey, setActivePopoverKey] = useState<string | null>(null);
+	const [mentionMenu, setMentionMenu] = useState<{ anchorEl: HTMLElement; x: number; y: number } | null>(null);
+	const [paramPanelExpanded, setParamPanelExpanded] = useState(false);
+	const [hoveredModelKey, setHoveredModelKey] = useState<string | null>(null);
+
+	useEffect(() => {
+		const handleDocumentClick = () => {
+			setActivePopoverKey(null);
+			setMentionMenu(null);
+			setParamPanelExpanded(false);
+			setHoveredModelKey(null);
+		};
+		document.addEventListener("click", handleDocumentClick);
+		return () => {
+			document.removeEventListener("click", handleDocumentClick);
+		};
+	}, []);
+
+	const channelModelOptions = useMemo(() => getChannelModelsForNodeType(node?.type ?? "text"), [node]);
 
 	const view = useMemo(() => {
 		if (!node) return null;
@@ -41,48 +51,139 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 		if (!def) return null;
 		const adapters = listAdaptersForNodeType(node.type);
 		const params = node.data.params;
-		const modelKey =
-			typeof params.model === "string" ? params.model : def.defaultModel;
-		const adapter = getAdapter(modelKey) ?? adapters[0];
-		if (!adapter) return null;
+		const modelKey = resolveActiveModelKey(node.type, params.model, def.defaultModel);
+
+		// 优先从 channelModelOptions 匹配，再从 registry 匹配
+		let adapter = getAdapter(modelKey);
+		if (!adapter) {
+			adapter = adapters[0];
+		}
+		if (!adapter) {
+			adapter = {
+				key: modelKey || `${node.type}-model`,
+				displayName: def.defaultModel || `${def.label}模型`,
+				vendor: "内置",
+				nodeTypes: [node.type],
+				baseCost: 10,
+				modes: [
+					{
+						key: "default",
+						label: "默认模式",
+						inputHint: "输入提示词...",
+						paramsSchema: [],
+					}
+				],
+				estimateCost: () => 10,
+				submit: async () => ({ taskId: `task-fallback-${Date.now()}` }),
+				poll: async () => ({ status: "success", progress: 100 }),
+			} as any;
+		}
+		const activeAdapter = adapter!;
 		const modeKey =
 			typeof params.mode === "string" &&
-			adapter.modes.some((m) => m.key === params.mode)
+			activeAdapter.modes.some((m) => m.key === params.mode)
 				? (params.mode as string)
-				: adapter.modes[0].key;
+				: activeAdapter.modes[0].key;
 		const mode =
-			adapter.modes.find((m) => m.key === modeKey) ?? adapter.modes[0];
-		const cost = adapter.estimateCost(mode.key, params);
-		return { def, adapters, params, adapter, modeKey, mode, cost };
-	}, [node]);
+			activeAdapter.modes.find((m) => m.key === modeKey) ?? activeAdapter.modes[0];
+		const cost = activeAdapter.estimateCost(mode.key, params);
+		return { def, adapters, params, adapter: activeAdapter, modeKey, mode, cost };
+	}, [node, channelModelOptions]);
 
 	// 监听视口坐标以计算屏幕绝对位置
 	const viewport = useCanvasStore((s) => s.viewport);
 
+	// ── Composer: mention 自动补全 ──
+	const edgesMap = useCanvasStore((s) => s.edges);
+	const mentionSuggestions = useMemo(() => {
+		const suggestions = getMentionSuggestions(nodeId);
+		return suggestions.filter((s) => s.upstreamNodeId !== null);
+	}, [nodeId, node, edgesMap]);
+
+	const prompt = typeof (node?.data?.params?.prompt) === "string" ? node.data.params.prompt : "";
+
 	if (!node || !view) return null;
-	const { def, adapters, params, adapter, modeKey, mode, cost } = view;
-	const Icon = def.icon;
-	const prompt = typeof params.prompt === "string" ? params.prompt : "";
+	const { def, params, adapter, modeKey, mode, cost } = view;
 	const running = runtime?.status === "running" || runtime?.status === "queued";
-	const accentStyle = { "--node-accent": def.accentVar } as CSSProperties;
 
 	const setParam = (patch: Record<string, unknown>) =>
 		dispatchCommand({ type: "updateNodeParams", id: nodeId, params: patch });
 
-	const onModel = (key: string) => {
-		const next = getAdapter(key);
-		setParam({ model: key, mode: next?.modes[0]?.key });
+	const insertMention = (portName: string) => {
+		const newPrompt = prompt + ` @[${portName}] `;
+		setParam({ prompt: newPrompt });
+		setMentionMenu(null);
 	};
+
+	const handlePromptKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+		if (e.key === "@" && mentionSuggestions.length > 0) {
+			const el = e.currentTarget;
+			const rect = el.getBoundingClientRect();
+			setMentionMenu({ anchorEl: el, x: 16, y: rect.height });
+		}
+		if (mentionMenu && e.key === "Escape") {
+			setMentionMenu(null);
+		}
+	};
+
 	const onRun = () => {
 		setParam({ model: adapter.key, mode: mode.key });
 		dispatchCommand({ type: "run", nodeId });
 	};
 
-	const onClose = (e?: React.MouseEvent) => {
-		if (e) e.stopPropagation();
-		setActiveNodeId(null);
-		setNodes((nds) => nds.map((n) => ({ ...n, selected: false })));
-	};
+
+
+	const nodes = useCanvasStore((s) => s.nodes);
+	const edges = useCanvasStore((s) => s.edges);
+	const assets = useLibraryStore((s) => s.assets);
+
+	const mediaInputs = useMemo(() => {
+		if (!node) return [];
+		const def = getPlugin(node.type);
+		if (!def) return [];
+		return def.inputs.filter((input) => input.name !== "text" && !input.formats.includes("text"));
+	}, [node]);
+
+	const connectedMediaItems = useMemo(() => {
+		const items: { portName: string; upstreamNodeId: string; asset: any }[] = [];
+		for (const input of mediaInputs) {
+			const incoming = Object.values(edges).filter(
+				(edge) => edge.target === nodeId && edge.targetPort === input.name
+			);
+			for (const edge of incoming) {
+				const upstreamNode = nodes[edge.source];
+				const assetId = upstreamNode?.data?.resultAssetId;
+				const asset = assetId ? assets[assetId] : null;
+				items.push({
+					portName: input.name,
+					upstreamNodeId: edge.source,
+					asset,
+				});
+			}
+		}
+		return items;
+	}, [nodeId, mediaInputs, nodes, edges, assets]);
+
+	const hasUnconnectedMedia = useMemo(() => {
+		for (const input of mediaInputs) {
+			const hasIncoming = Object.values(edges).some(
+				(edge) => edge.target === nodeId && edge.targetPort === input.name
+			);
+			if (!hasIncoming) {
+				return true;
+			}
+		}
+		return false;
+	}, [nodeId, mediaInputs, edges]);
+
+	const paramsSummary = useMemo(() => {
+		return mode.paramsSchema
+			.map((field) => {
+				const val = params[field.key] ?? field.default;
+				return `${field.label}: ${val}`;
+			})
+			.join(" · ") || "参数";
+	}, [mode, params]);
 
 	// 动态计算该节点在屏幕视图空间下的中心底端坐标 (100% 抵御 zoom 缩放)
 	const zoom = viewport.zoom;
@@ -94,212 +195,374 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 		left: `${nodeCenterX}px`,
 		top: `${nodeBottomY + 8}px`,
 		transform: "translate(-50%, 0)",
-		zIndex: 1000,
+		zIndex: 10001,
 	};
-
-	// 胶囊汇总选中的参数摘要，如 16:9 · 720P · 5s
-	const paramSummary = useMemo(() => {
-		const parts: string[] = [];
-		if (params.ratio) parts.push(String(params.ratio));
-		if (params.resolution) parts.push(String(params.resolution));
-		if (params.quality) parts.push(String(params.quality));
-		if (params.duration) parts.push(String(params.duration));
-		if (params.camera && params.camera !== "无") parts.push(String(params.camera));
-
-		if (parts.length === 0 && mode.paramsSchema.length > 0) {
-			mode.paramsSchema.slice(0, 2).forEach((f) => {
-				const val = params[f.key] ?? f.default;
-				if (val !== undefined && val !== null) {
-					parts.push(`${f.label}: ${val}`);
-				}
-			});
-		}
-		return parts.join(" · ") || "调整参数";
-	}, [params, mode]);
 
 	return (
 		<div
 			style={wrapperStyle}
-			className="pointer-events-auto flex flex-col items-center gap-1.5 w-[380px]"
+			className="pointer-events-auto flex flex-col items-center gap-2 w-fit"
 			onClick={(e) => e.stopPropagation()}
 			onMouseDown={(e) => e.stopPropagation()}
 			onPointerDown={(e) => e.stopPropagation()}
 		>
-			{/* ── 主操作面板 (精简化) ── */}
+			{/* ─ 主操作面板 ── */}
 			<motion.div
 				initial={{ y: 10, opacity: 0 }}
 				animate={{ y: 0, opacity: 1 }}
 				exit={{ y: 10, opacity: 0 }}
 				transition={panelTransition}
-				style={accentStyle}
-				className="Qiji-panel w-full rounded-xl p-2.5 text-foreground shadow-2xl"
+				style={{
+					background: "rgba(22, 27, 38, 0.98)",
+					border: "1px solid rgba(255, 255, 255, 0.1)",
+					backdropFilter: "blur(20px)",
+					boxShadow: "0 16px 48px rgba(0, 0, 0, 0.6)",
+				}}
+				className="w-[680px] rounded-2xl text-foreground flex flex-col overflow-visible"
 			>
-				{/* 第一行：模型选择 & Modes 切换 */}
-				<div className="flex items-center justify-between gap-1.5">
-					<div className="flex items-center gap-1">
-						<span
-							className="flex h-5 w-5 items-center justify-center rounded-md"
-							style={accentStyle}
-						>
-							<Icon className="h-3 w-3 text-[color:var(--node-accent)]" />
-						</span>
-						<Select value={adapter.key} onValueChange={onModel}>
-							<SelectTrigger className="h-5.5 text-[10px] px-1.5 py-0 bg-secondary/40 border-none hover:bg-secondary/70 transition-colors w-24">
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent className="bg-secondary/95 border-border/40">
-								{adapters.map((a) => (
-									<SelectItem key={a.key} value={a.key} className="text-[10px] py-1">
-										{a.displayName}
-									</SelectItem>
-								))}
-							</SelectContent>
-						</Select>
+				{/* 上列 80%：提示词 & 上游输出 */}
+				<div className="flex flex-col p-5 flex-1 min-h-[140px] border-b border-white/5">
+					{/* 上游输出预览卡 */}
+					{(connectedMediaItems.length > 0 || hasUnconnectedMedia) && (
+						<div className="flex flex-row gap-2 mb-3 shrink-0 flex-wrap">
+							{connectedMediaItems.map((item, idx) => (
+								<div
+									key={`${item.upstreamNodeId}-${item.portName}-${idx}`}
+									className="relative group w-11 h-11 rounded-xl border border-dashed border-white/10 hover:border-white/20 bg-white/3 flex flex-col items-center justify-center overflow-hidden transition-all"
+									title={`上游输入: [${item.portName}]`}
+								>
+									{item.asset ? (
+										<div className="relative w-full h-full">
+											{item.asset.kind === "image" && (
+												<img src={item.asset.uri} className="w-full h-full object-cover" />
+											)}
+											{item.asset.kind === "video" && (
+												<video src={item.asset.uri} className="w-full h-full object-cover" />
+											)}
+											{item.asset.kind !== "image" && item.asset.kind !== "video" && (
+												<div className="w-full h-full flex flex-col items-center justify-center p-1 bg-white/5">
+													<span className="text-[10px] text-white/90 font-medium truncate max-w-full leading-tight select-none">
+														{item.asset.name}
+													</span>
+												</div>
+											)}
+											<div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+												<span className="text-[8px] text-white/95 font-mono select-none">[{item.portName}]</span>
+											</div>
+										</div>
+									) : (
+										<div className="flex flex-col items-center justify-center text-muted-foreground/60 hover:text-muted-foreground transition-colors cursor-pointer select-none">
+											<span className="text-sm font-light leading-none">+</span>
+											<span className="text-[8px] mt-0.5 font-mono leading-none">[{item.portName}]</span>
+										</div>
+									)}
+								</div>
+							))}
+							{hasUnconnectedMedia && (
+								<div className="w-11 h-11 rounded-xl border border-dashed border-white/10 bg-white/2 flex flex-col items-center justify-center text-muted-foreground/30 select-none">
+									<span className="text-sm font-light leading-none">+</span>
+									<span className="text-[8px] mt-0.5 leading-none">素材</span>
+								</div>
+							)}
+						</div>
+					)}
+
+					{/* 提示词输入区 */}
+					<div className="flex-1 min-w-0 h-full relative">
+						<PromptComposer
+							nodeId={nodeId}
+							prompt={prompt}
+							onChange={(value) => setParam({ prompt: value })}
+							onKeyDown={handlePromptKeyDown}
+							placeholder={mode.inputHint ?? "输入提示词..."}
+							minHeight={100}
+							maxHeight={140}
+						/>
+						{/* Mention suggestions */}
+						<AnimatePresence>
+							{mentionMenu && mentionSuggestions.length > 0 && (
+								<motion.div
+									initial={{ y: 6, opacity: 0 }}
+									animate={{ y: 0, opacity: 1 }}
+									exit={{ y: 6, opacity: 0 }}
+									transition={panelTransition}
+									style={{
+										position: "absolute",
+										left: "8px",
+										top: "100%",
+										marginTop: "4px",
+										background: "rgba(22, 27, 38, 0.98)",
+										border: "1px solid rgba(255, 255, 255, 0.12)",
+										backdropFilter: "blur(20px)",
+										boxShadow: "0 8px 32px rgba(0, 0, 0, 0.6)",
+										zIndex: 1020,
+									}}
+									className="rounded-xl p-1.5 flex flex-col gap-0.5 min-w-[200px]"
+									onClick={(e) => e.stopPropagation()}
+								>
+									<div className="px-2 py-1 text-[9px] text-muted-foreground font-semibold uppercase tracking-wider select-none">
+										引用上游节点
+									</div>
+									{mentionSuggestions.map((s) => (
+										<button
+											key={s.portName}
+											onClick={() => insertMention(s.portName)}
+											className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs text-left text-foreground hover:bg-white/5 transition-colors cursor-pointer w-full"
+										>
+											<AtSign className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+											<span className="font-mono">[{s.portName}]</span>
+											{s.upstreamLabel && (
+												<span className="text-muted-foreground truncate">
+													— {s.upstreamLabel}
+												</span>
+											)}
+										</button>
+									))}
+								</motion.div>
+							)}
+						</AnimatePresence>
 					</div>
-
-					{adapter.modes.length > 1 ? (
-						<Tabs
-							value={modeKey}
-							onValueChange={(v) => setParam({ mode: v })}
-							className="mx-1"
-						>
-							<TabsList className="h-5.5 p-0.5 bg-secondary/35 rounded-md gap-0.5">
-								{adapter.modes.map((m) => (
-									<TabsTrigger
-										key={m.key}
-										value={m.key}
-										className="text-[9px] py-0.5 px-2 rounded-sm"
-									>
-										{m.label}
-									</TabsTrigger>
-								))}
-							</TabsList>
-						</Tabs>
-					) : null}
-
-					<button
-						onClick={onClose}
-						className="rounded p-0.5 text-muted-foreground hover:bg-secondary cursor-pointer shrink-0"
-						aria-label="关闭"
-					>
-						<X className="h-3.5 w-3.5" />
-					</button>
 				</div>
 
-				{/* 第二行：提示词输入框 (精简高度) */}
-				<textarea
-					className="nodrag w-full bg-secondary/25 border border-border/25 rounded-lg p-2 text-[10px] leading-relaxed resize-none h-13 focus:outline-none focus:border-[color:var(--node-accent)]/55 transition-colors mt-2"
-					placeholder={mode.inputHint ?? "输入提示词（可 @ 引用上游素材）…"}
-					value={prompt}
-					onChange={(e) => setParam({ prompt: e.target.value })}
-				/>
+				{/* 下列 20%：可选功能区 */}
+				<div className="flex items-center justify-between gap-3 px-5 py-3 shrink-0">
+					<div className="flex items-center gap-2 overflow-x-auto [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: "none" }}>
+						{/* 模型选择 */}
+						<div className="relative">
+							<button
+								onClick={(e) => {
+									e.stopPropagation();
+									setActivePopoverKey(activePopoverKey === "model" ? null : "model");
+								}}
+								className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-white/5 border border-white/5 text-foreground cursor-pointer whitespace-nowrap transition-colors ${
+									activePopoverKey === "model" ? "bg-white/10 border-white/10" : "hover:bg-white/8"
+								}`}
+							>
+								{adapter.displayName}
+								<ChevronDown className="h-3 w-3 text-muted-foreground" />
+							</button>
+							<AnimatePresence>
+								{activePopoverKey === "model" && (
+									<motion.div
+										initial={{ y: 8, opacity: 0 }}
+										animate={{ y: 0, opacity: 1 }}
+										exit={{ y: 8, opacity: 0 }}
+										transition={panelTransition}
+										style={{
+											position: "absolute",
+											bottom: "100%",
+											left: 0,
+											marginBottom: "6px",
+											background: "rgba(22, 27, 38, 0.98)",
+											border: "1px solid rgba(255, 255, 255, 0.12)",
+											backdropFilter: "blur(20px)",
+											boxShadow: "0 8px 32px rgba(0, 0, 0, 0.6)",
+											zIndex: 1010,
+										}}
+										className="rounded-xl overflow-visible min-w-[180px] py-1"
+										onClick={(e) => e.stopPropagation()}
+									>
+										{/* 跟随默认选项 */}
+										<div className="relative">
+											<button
+												onClick={() => {
+													setParam({ model: "default" });
+													setActivePopoverKey(null);
+												}}
+												className={`flex items-center justify-between w-full px-3.5 py-2.5 text-xs transition-colors cursor-pointer text-left ${
+													!params.model || params.model === "default"
+														? "bg-white/10 text-white font-medium"
+														: "text-muted-foreground hover:bg-white/5 hover:text-foreground"
+												}`}
+											>
+												<span className="flex-1 pr-2">跟随项目/全局默认</span>
+												{(!params.model || params.model === "default") && (
+													<span className="text-green-400 text-[10px] ml-2">✓</span>
+												)}
+											</button>
+										</div>
+										<div className="h-[1px] bg-white/5 my-0.5" />
 
-				{/* 第三行：积分预估 & 胶囊参数汇总 & 运行按钮 */}
-				<div className="flex items-center justify-between mt-2 pt-1 border-t border-border/15">
-					<span className="flex items-center gap-0.5 text-[9px] text-muted-foreground font-medium">
-						<Sparkles className="h-3 w-3 text-[color:var(--node-accent)]" />
-						<span>{cost}积分</span>
-					</span>
+										{channelModelOptions.map((opt) => {
+											const optAdapter = getAdapter(opt.id);
+											const optModes = optAdapter?.modes ?? [];
+											return (
+												<div
+													key={opt.id}
+													className="relative"
+													onMouseEnter={() => setHoveredModelKey(opt.id)}
+													onMouseLeave={() => setHoveredModelKey(null)}
+												>
+													<button
+														className={`flex items-center justify-between w-full px-3.5 py-2.5 text-xs transition-colors cursor-pointer text-left ${
+															opt.id === adapter.key
+																? "bg-white/10 text-white"
+																: "text-muted-foreground hover:bg-white/5 hover:text-foreground"
+														}`}
+													>
+														<span className="flex-1 pr-2">
+															{opt.modelName} <span className="text-muted-foreground text-[10px]">({opt.channelName})</span>
+														</span>
+														<ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+													</button>
+													{hoveredModelKey === opt.id && optModes.length > 0 && (
+														<div
+															style={{
+																position: "absolute",
+																left: "100%",
+																bottom: 0,
+																marginLeft: "4px",
+																background: "rgba(22, 27, 38, 0.98)",
+																border: "1px solid rgba(255, 255, 255, 0.12)",
+																backdropFilter: "blur(20px)",
+																boxShadow: "0 8px 32px rgba(0, 0, 0, 0.6)",
+																zIndex: 1020,
+															}}
+															className="rounded-xl overflow-hidden min-w-[140px] py-1"
+														>
+															{optModes.map((m) => (
+																<button
+																	key={m.key}
+																	onClick={() => {
+																		setParam({ model: opt.id, mode: m.key });
+																		setActivePopoverKey(null);
+																		setHoveredModelKey(null);
+																	}}
+																	className={`flex items-center justify-between w-full px-3.5 py-2 text-xs transition-colors cursor-pointer text-left ${
+																		opt.id === adapter.key && m.key === modeKey
+																			? "bg-white/10 text-white font-medium"
+																			: "text-muted-foreground hover:bg-white/5 hover:text-foreground"
+																	}`}
+																>
+																	<span>{m.label}</span>
+																	{opt.id === adapter.key && m.key === modeKey && (
+																		<span className="text-green-400 text-[10px] ml-2">✓</span>
+																	)}
+																</button>
+															))}
+														</div>
+													)}
+												</div>
+											);
+										})}
+									</motion.div>
+								)}
+							</AnimatePresence>
+						</div>
 
-					{mode.paramsSchema.length > 0 ? (
-						<button
-							onClick={() => setShowParams(!showParams)}
-							className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[9px] font-medium border border-border/25 bg-secondary/30 hover:bg-secondary/60 transition-all cursor-pointer ${
-								showParams ? "border-[color:var(--node-accent)] text-[color:var(--node-accent)]" : "text-foreground"
-							}`}
-						>
-							<span>{paramSummary}</span>
-							<ChevronDown className={`h-2.5 w-2.5 transition-transform ${showParams ? "rotate-180" : ""}`} />
-						</button>
-					) : null}
+						{/* 参数汇总胶囊 */}
+						{mode.paramsSchema.length > 0 && (
+							<button
+								onClick={(e) => {
+									e.stopPropagation();
+									setParamPanelExpanded(!paramPanelExpanded);
+								}}
+								className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all cursor-pointer whitespace-nowrap ${
+									paramPanelExpanded
+										? "bg-white/15 border-white/20 text-white"
+										: "bg-white/5 border-white/5 hover:bg-white/8 text-foreground"
+								}`}
+							>
+								{paramsSummary}
+								<ChevronDown className={`h-3 w-3 text-muted-foreground transition-transform ${paramPanelExpanded ? "rotate-180" : ""}`} />
+							</button>
+						)}
 
-					<div className="flex items-center gap-1">
+						{/* 功能动作按钮 */}
 						{def.actions?.map((act) => (
-							<Button
+							<button
 								key={act.name}
-								variant="outline"
-								className="h-5.5 px-2 text-[9px] cursor-pointer border-[color:var(--node-accent)]/50 text-[color:var(--node-accent)] hover:bg-[color:var(--node-accent)] hover:text-white transition-colors"
 								onClick={() => dispatchCommand({ type: "executeNodeAction", nodeId, actionName: act.name })}
-								disabled={running}
+								className="px-3 py-1.5 rounded-full text-xs font-semibold bg-white/5 border border-white/5 hover:bg-white/8 text-foreground cursor-pointer transition-colors"
 							>
 								{act.label}
-							</Button>
+							</button>
 						))}
+					</div>
+
+					{/* 右侧：积分 + 运行按钮 */}
+					<div className="flex items-center gap-2.5 shrink-0">
+						<span className="flex items-center gap-1 text-xs text-muted-foreground font-semibold">
+							<Sparkles className="h-3.5 w-3.5 text-amber-400" />
+							<span>{cost}积分</span>
+						</span>
 						<button
 							onClick={onRun}
 							disabled={running}
-							className="h-5.5 w-5.5 rounded-full p-0 flex items-center justify-center cursor-pointer bg-[color:var(--node-accent)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+							className="h-8 w-8 rounded-full p-0 flex items-center justify-center cursor-pointer bg-[color:var(--node-accent)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
 							title="运行节点"
 						>
-							<Play className="h-2.5 w-2.5" fill="currentColor" />
+							<Play className="h-4 w-4" fill="currentColor" />
 						</button>
 					</div>
 				</div>
 			</motion.div>
 
-			{/* ── 下拉式二级参数调节面板 (精简字体，网格/滑块化) ── */}
+			{/* 二级面板 (直接在下方展开) */}
 			<AnimatePresence>
-				{showParams && (
+				{paramPanelExpanded && mode.paramsSchema.length > 0 && (
 					<motion.div
 						initial={{ y: -8, opacity: 0 }}
 						animate={{ y: 0, opacity: 1 }}
 						exit={{ y: -8, opacity: 0 }}
 						transition={panelTransition}
-						className="Qiji-panel w-full rounded-xl p-2.5 text-foreground shadow-xl border border-border/30"
+						style={{
+							background: "rgba(22, 27, 38, 0.98)",
+							border: "1px solid rgba(255, 255, 255, 0.1)",
+							backdropFilter: "blur(20px)",
+							boxShadow: "0 12px 32px rgba(0, 0, 0, 0.5)",
+							width: "680px",
+						}}
+						className="rounded-xl p-4 text-foreground flex flex-col gap-4 mt-1.5"
+						onClick={(e) => e.stopPropagation()}
 					>
-						{mode.paramsSchema.length ? (
-							<div className="flex flex-col gap-2.5">
-								{mode.paramsSchema.map((field) => (
-									<div key={field.key} className="flex flex-col gap-1">
-										<div className="flex items-center justify-between text-[9px] text-muted-foreground">
-											<span className="font-medium">{field.label}</span>
-											{field.type === "number" && (
-												<span className="font-mono text-foreground">
-													{String(params[field.key] ?? field.default)}
-													{field.unit || ""}
-												</span>
-											)}
+						{mode.paramsSchema.map((field) => {
+							const val = params[field.key] ?? field.default;
+							const displayVal = String(val) + (field.unit || "");
+							return (
+								<div key={field.key} className="flex flex-col gap-1.5">
+									<div className="text-[11px] text-muted-foreground font-semibold">{field.label}</div>
+									{field.type === "enum" ? (
+										<div className="flex flex-wrap gap-1.5">
+											{field.options?.map((opt) => (
+												<button
+													key={opt}
+													onClick={() => setParam({ [field.key]: opt })}
+													className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+														val === opt
+															? "bg-white text-black font-semibold"
+															: "bg-white/5 text-muted-foreground hover:bg-white/8 hover:text-foreground"
+													}`}
+												>
+													{opt}
+												</button>
+											))}
 										</div>
-										
-										{field.type === "enum" ? (
-											<div className="flex flex-wrap gap-1">
-												{field.options?.map((opt) => (
-													<button
-														key={opt}
-														onClick={() => setParam({ [field.key]: opt })}
-														className={`px-2 py-0.5 rounded text-[9px] transition-colors cursor-pointer ${
-															(params[field.key] ?? field.default) === opt
-																? "bg-[color:var(--node-accent)] text-white font-semibold"
-																: "bg-secondary/45 text-muted-foreground hover:text-foreground"
-														}`}
-													>
-														{opt}
-													</button>
-												))}
-											</div>
-										) : field.type === "number" ? (
+									) : field.type === "number" ? (
+										<div>
+											<div className="text-lg font-bold text-white mb-1">{displayVal}</div>
 											<input
 												type="range"
 												min={field.min ?? 0}
 												max={field.max ?? 100}
 												step={field.step ?? 1}
-												value={Number(params[field.key] ?? field.default)}
+												value={Number(val)}
 												onChange={(e) => setParam({ [field.key]: Number(e.target.value) })}
-												className="w-full h-1 bg-secondary/45 rounded-lg appearance-none cursor-pointer accent-[color:var(--node-accent)]"
+												className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-white"
 											/>
-										) : (
+										</div>
+									) : (
+										<div className="p-1 min-w-[150px]">
 											<ParamControl
 												field={field}
-												value={params[field.key]}
+												value={val}
 												onChange={(next) => setParam({ [field.key]: next })}
 											/>
-										)}
-									</div>
-								))}
-							</div>
-						) : (
-							<div className="text-muted-foreground text-center py-2 text-[9px]">无调节参数</div>
-						)}
+										</div>
+									)}
+								</div>
+							);
+						})}
 					</motion.div>
 				)}
 			</AnimatePresence>

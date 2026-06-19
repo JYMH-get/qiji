@@ -15,6 +15,10 @@ interface UiState {
 	snapToGrid: boolean;
 	showMinimap: boolean;
 	settingsOpen: boolean;
+	projectSettingsOpen: boolean;
+	blackboxOpen: boolean;
+	imageEditNodeId: string | null;
+	nodeInfoNodeId: string | null;
 
 	// 导航与登录状态
 	currentScreen: "login" | "dashboard" | "canvas";
@@ -28,6 +32,10 @@ interface UiState {
 	toggleSnapToGrid: () => void;
 	toggleMinimap: () => void;
 	setSettingsOpen: (open: boolean) => void;
+	setProjectSettingsOpen: (open: boolean) => void;
+	setBlackboxOpen: (open: boolean) => void;
+	setImageEditNodeId: (id: string | null) => void;
+	setNodeInfoNodeId: (id: string | null) => void;
 
 	setScreen: (screen: "login" | "dashboard" | "canvas") => void;
 	setCurrentUser: (user: string | null) => void;
@@ -43,6 +51,10 @@ export const useUiStore = create<UiState>((set) => ({
 	snapToGrid: false,
 	showMinimap: true,
 	settingsOpen: false,
+	projectSettingsOpen: false,
+	blackboxOpen: false,
+	imageEditNodeId: null,
+	nodeInfoNodeId: null,
 
 	currentScreen: initialUser ? "dashboard" : "login",
 	currentUser: initialUser,
@@ -55,6 +67,10 @@ export const useUiStore = create<UiState>((set) => ({
 	toggleSnapToGrid: () => set((s) => ({ snapToGrid: !s.snapToGrid })),
 	toggleMinimap: () => set((s) => ({ showMinimap: !s.showMinimap })),
 	setSettingsOpen: (open) => set({ settingsOpen: open }),
+	setProjectSettingsOpen: (open) => set({ projectSettingsOpen: open }),
+	setBlackboxOpen: (open) => set({ blackboxOpen: open }),
+	setImageEditNodeId: (id) => set({ imageEditNodeId: id }),
+	setNodeInfoNodeId: (id) => set({ nodeInfoNodeId: id }),
 
 	setScreen: (currentScreen) => set({ currentScreen }),
 	setCurrentUser: (currentUser) => {

@@ -7,8 +7,10 @@
  */
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useProjectStore } from "@/store/projectStore";
-import { useUiStore } from "@/store/uiStore";
-import { Minus, Square, X, Circle, History, Home } from "lucide-react";
+import { useCommitStore } from "@/store/commitStore";
+
+import { Minus, Square, X, Circle, History, Home, ArrowLeft } from "lucide-react";
+import { useLocation, useNavigate } from "react-router";
 
 function isTauri(): boolean {
   return typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
@@ -29,9 +31,14 @@ export function TitleBar() {
   const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
   const historyRef = useRef<HTMLDivElement>(null);
 
-  const head = useProjectStore((s) => s.head);
-  const commits = useProjectStore((s) => s.commits);
-  const currentScreen = useUiStore((s) => s.currentScreen);
+  const head = useCommitStore((s) => s.head);
+  const commits = useCommitStore((s) => s.commits);
+
+  const location = useLocation();
+  const navigate = useNavigate();
+  const isWorkspace = location.pathname !== "/" && location.pathname !== "/frame164";
+  const isCanvas = location.pathname === "/frame-canvas";
+  const isStoryboard = location.pathname === "/frame-storyboard";
 
   const sortedCommits = useMemo(() => {
     return Object.values(commits).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
@@ -105,10 +112,20 @@ export function TitleBar() {
       <div className="Qiji-titlebar__left">
         <span className="Qiji-titlebar__logo">Qiji</span>
         
-        {currentScreen === "canvas" && (
+        {isWorkspace && (
           <>
+            {(isCanvas || isStoryboard) && (
+              <button
+                onClick={() => navigate("/frame1693")}
+                className="flex items-center gap-1 px-1.5 py-0.5 ml-3 rounded text-[10px] text-primary hover:text-primary-foreground hover:bg-primary/20 transition-all cursor-pointer border border-primary/20 active:scale-95"
+                title="返回配置编辑器"
+              >
+                <ArrowLeft className="h-3 w-3" />
+                <span>返回配置</span>
+              </button>
+            )}
             <button
-              onClick={() => useUiStore.getState().setScreen("dashboard")}
+              onClick={() => navigate("/")}
               className="flex items-center gap-1 px-1.5 py-0.5 ml-3 rounded text-[10px] text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-all cursor-pointer border border-white/5 active:scale-95"
               title="返回项目大厅"
             >
@@ -224,7 +241,7 @@ export function TitleBar() {
                     className={`Qiji-titlebar__dropdown-item flex flex-col items-start gap-0.5 py-1.5 ${isActive ? "bg-primary/10 border-l-2 border-primary" : ""}`}
                     onClick={() => {
                       setHistoryMenuOpen(false);
-                      useProjectStore.getState().checkoutCommit(c.commitId);
+                      useCommitStore.getState().checkoutCommit(c.commitId);
                     }}
                   >
                     <div className="flex w-full justify-between items-center text-[11px]">

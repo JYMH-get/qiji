@@ -47,8 +47,6 @@ async function getFileHash(buffer: ArrayBuffer | ArrayBufferLike): Promise<strin
   return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
-
-
 /**
  * 打开原生文件选择对话框，将选中文件复制到 AppData 并返回 FileInfo。
  * 浏览器降级：弹出 <input> 并用 FileReader 读 dataURL。
@@ -112,7 +110,6 @@ function pickAndStoreBrowser(): Promise<FileInfo | null> {
       const reader = new FileReader();
       reader.onload = async (e) => {
         const uri = e.target?.result as string;
-        // 计算 hash 并在浏览器环境下识别
         let hash = "";
         try {
           const buffer = await file.arrayBuffer();
@@ -178,28 +175,31 @@ export async function storeDroppedFile(file: File): Promise<FileInfo | null> {
       return null;
     }
   } else {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        const uri = e.target?.result as string;
-        let hash = "";
-        try {
-          const buffer = await file.arrayBuffer();
-          hash = await getFileHash(buffer);
-        } catch {}
-        resolve({
-          fileId: hash ? `sha256-${hash}` : genId("file"),
-          fileName: file.name,
-          fileMime: file.type,
-          fileUri: uri,
-          localPath: null,
-        });
-      };
-      reader.readAsDataURL(file);
-    });
+    try {
+      const buffer = await file.arrayBuffer();
+      const hash = await getFileHash(buffer);
+      const fileId = `sha256-${hash}`;
+      const mime = file.type || guessMime(file.name.split(".").pop()?.toLowerCase() || "");
+
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          resolve({
+            fileId,
+            fileName: file.name,
+            fileMime: mime,
+            fileUri: reader.result as string,
+            localPath: null,
+          });
+        };
+        reader.readAsDataURL(file);
+      });
+    } catch (err) {
+      console.error("Browser storeDroppedFile error:", err);
+      return null;
+    }
   }
 }
-
 
 /**
  * 删除 AppData 中存储的文件（节点删除时调用）。

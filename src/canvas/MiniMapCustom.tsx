@@ -1,12 +1,12 @@
 /**
- * MiniMapCustom — 完全自定义小地图，绕开 ReactFlow 内置 MiniMap。
- * 直接从 canvasStore 读取节点数据，用纯 SVG 渲染。
+ * MiniMapCustom — 完全自定义小地图
  * 功能：
  *   - 彩色节点缩略矩形
- *   - 灰底 + 深灰框表示当前视口范围
+ *   - 灰底 + 视口范围框
  *   - 点击跳转视口
+ *   - 拖拽视口框平移画布
  */
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { useCanvasStore } from "@/store/canvasStore";
 import { useReactFlow, useViewport, useStoreApi } from "@xyflow/react";
 
@@ -24,16 +24,22 @@ const NODE_COLORS: Record<string, string> = {
 // 小地图 SVG 尺寸（px）
 const MAP_W = 210;
 const MAP_H = 140;
-// 节点区留边距，让节点不完全贴边
+// 节点区留边距
 const PADDING = 14;
-// 视口框额外扩展量（让视口框在节点覆盖范围之外也能显示）
+// 视口框额外扩展量
 const VP_EXTRA = 60;
 
 export function MiniMapCustom() {
   const nodesMap = useCanvasStore((s) => s.nodes);
   const { setCenter } = useReactFlow();
-  const viewport = useViewport();           // { x, y, zoom } —— 实时响应式
-  const storeApi = useStoreApi();           // 读取 ReactFlow 容器实际宽高
+  const viewport = useViewport();
+  const storeApi = useStoreApi();
+
+  const dragRef = useRef<{ active: boolean; startSvgX: number; startSvgY: number }>({
+    active: false,
+    startSvgX: 0,
+    startSvgY: 0,
+  });
 
   const nodes = useMemo(() => Object.values(nodesMap), [nodesMap]);
 
@@ -51,12 +57,9 @@ export function MiniMapCustom() {
   }, [nodes]);
 
   // ── 2. 当前视口矩形（flow 坐标系）──────────────────────────────────────
-  //    viewport.x/y 是 ReactFlow pane 的平移量（屏幕像素）
-  //    容器宽高从内部 store 读取
   const vpRect = useMemo(() => {
     const { width: cw, height: ch } = storeApi.getState();
     const { x: tx, y: ty, zoom } = viewport;
-    // flow 坐标系中可见区域的左上角和宽高
     const left   = -tx / zoom;
     const top    = -ty / zoom;
     const width  = cw  / zoom;
@@ -65,7 +68,6 @@ export function MiniMapCustom() {
   }, [viewport, storeApi]);
 
   // ── 3. 合并 bbox（节点 + 视口，留 VP_EXTRA 余量）────────────────────────
-  //    使小地图始终能同时展示节点和视口框
   const totalBbox = useMemo(() => {
     const minX = Math.min(nodeBbox.minX, vpRect.left)   - VP_EXTRA;
     const minY = Math.min(nodeBbox.minY, vpRect.top)    - VP_EXTRA;
@@ -89,20 +91,16 @@ export function MiniMapCustom() {
     [totalBbox, miniScale],
   );
 
-  // ── 5. 点击小地图跳转视口 ───────────────────────────────────────────────
-  const handleClick = useCallback(
-    (e: React.MouseEvent<SVGSVGElement>) => {
-      const rect = e.currentTarget.getBoundingClientRect();
-      const svgX = e.clientX - rect.left;
-      const svgY = e.clientY - rect.top;
-      const flowX = (svgX - PADDING) / miniScale + totalBbox.minX;
-      const flowY = (svgY - PADDING) / miniScale + totalBbox.minY;
-      setCenter(flowX, flowY, { zoom: viewport.zoom, duration: 350 });
-    },
-    [totalBbox, miniScale, setCenter, viewport.zoom],
+  // SVG 坐标 → flow 坐标
+  const toFlowCoord = useCallback(
+    (svgX: number, svgY: number) => ({
+      flowX: (svgX - PADDING) / miniScale + totalBbox.minX,
+      flowY: (svgY - PADDING) / miniScale + totalBbox.minY,
+    }),
+    [totalBbox, miniScale],
   );
 
-  // ── 6. 计算视口框的 SVG 坐标 ────────────────────────────────────────────
+  // ── 5. 计算视口框的 SVG 坐标 ────────────────────────────────────────────
   const vpSvg = useMemo(() => {
     const { x, y } = toSvgCoord(vpRect.left, vpRect.top);
     return {
@@ -112,6 +110,56 @@ export function MiniMapCustom() {
       h: Math.max(vpRect.height * miniScale, 4),
     };
   }, [vpRect, toSvgCoord, miniScale]);
+
+  // ── 6. 点击跳转 ───────────────────────────────────────────────────────
+  const handleClick = useCallback(
+    (e: React.MouseEvent<SVGSVGElement>) => {
+      if (dragRef.current.active) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const svgX = e.clientX - rect.left;
+      const svgY = e.clientY - rect.top;
+      const { flowX, flowY } = toFlowCoord(svgX, svgY);
+      setCenter(flowX, flowY, { zoom: viewport.zoom, duration: 350 });
+    },
+    [toFlowCoord, setCenter, viewport.zoom],
+  );
+
+  // ── 7. 拖拽视口框平移 ──────────────────────────────────────────────────
+  const onViewportPointerDown = useCallback(
+    (e: React.PointerEvent<SVGRectElement>) => {
+      e.stopPropagation();
+      e.preventDefault();
+      (e.target as Element).setPointerCapture(e.pointerId);
+      const rect = (e.currentTarget.ownerSVGElement!).getBoundingClientRect();
+      dragRef.current = {
+        active: true,
+        startSvgX: e.clientX - rect.left,
+        startSvgY: e.clientY - rect.top,
+      };
+    },
+    [],
+  );
+
+  const onViewportPointerMove = useCallback(
+    (e: React.PointerEvent<SVGRectElement>) => {
+      if (!dragRef.current.active) return;
+      const svgEl = e.currentTarget.ownerSVGElement!;
+      const rect = svgEl.getBoundingClientRect();
+      const curX = e.clientX - rect.left;
+      const curY = e.clientY - rect.top;
+      const dxSvg = curX - dragRef.current.startSvgX;
+      const dySvg = curY - dragRef.current.startSvgY;
+      dragRef.current.startSvgX = curX;
+      dragRef.current.startSvgY = curY;
+      const { flowX, flowY } = toFlowCoord(vpSvg.x + dxSvg, vpSvg.y + dySvg);
+      setCenter(flowX, flowY, { zoom: viewport.zoom, duration: 0 });
+    },
+    [toFlowCoord, vpSvg, setCenter, viewport.zoom],
+  );
+
+  const onViewportPointerUp = useCallback(() => {
+    dragRef.current.active = false;
+  }, []);
 
   return (
     <div className="minimap-custom">
@@ -148,7 +196,7 @@ export function MiniMapCustom() {
           );
         })}
 
-        {/* 当前视口框：深灰半透明填充 + 稍亮描边 */}
+        {/* 当前视口框：可拖拽平移 */}
         <rect
           x={vpSvg.x}
           y={vpSvg.y}
@@ -158,6 +206,10 @@ export function MiniMapCustom() {
           fill="rgba(120,130,150,0.15)"
           stroke="rgba(180,190,210,0.6)"
           strokeWidth={1.5}
+          style={{ cursor: "grab" }}
+          onPointerDown={onViewportPointerDown}
+          onPointerMove={onViewportPointerMove}
+          onPointerUp={onViewportPointerUp}
         />
       </svg>
     </div>

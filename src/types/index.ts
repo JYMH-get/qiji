@@ -26,7 +26,7 @@ export interface NodeData {
 	fileName?: string;
 	fileMime?: string;
 	/** 预留：脏传播版本号，当前不消费 */
-	sourceVersion: number;
+	sourceVersion?: number;
 }
 
 export interface CanvasNode {
