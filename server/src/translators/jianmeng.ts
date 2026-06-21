@@ -9,6 +9,7 @@
  */
 import { buildPrompt } from "./prompt.ts";
 import type { Upstream } from "./upstream.ts";
+import type { OnUpstream } from "./openai.ts";
 import type { GenerateRequest, AssetRef } from "../contract.ts";
 
 export type JianmengSubmit = { ok: true; taskId: string } | { ok: false; error: string };
@@ -22,7 +23,7 @@ function publicUrls(refs?: AssetRef[]): string[] {
 }
 
 /** ① 提交视频生成任务 → 返回上游 task_id */
-export async function submitJianmengVideo(req: GenerateRequest, up: Upstream): Promise<JianmengSubmit> {
+export async function submitJianmengVideo(req: GenerateRequest, up: Upstream, onUpstream?: OnUpstream): Promise<JianmengSubmit> {
 	if (!up.apiKey) {
 		return { ok: false, error: "简梦视频未配置上游密钥（管理端模型设置或环境 JIANMENG_API_KEY）" };
 	}
@@ -45,6 +46,8 @@ export async function submitJianmengVideo(req: GenerateRequest, up: Upstream): P
 	if (vids.length) body.extra_videos = vids.slice(0, 3);
 	if (auds.length) body.extra_audios = auds.slice(0, 3);
 
+	onUpstream?.({ request: { url: `${up.baseUrl}/v1/videos`, body } });
+
 	let resp: Response;
 	try {
 		resp = await fetch(`${up.baseUrl}/v1/videos`, {
@@ -57,6 +60,7 @@ export async function submitJianmengVideo(req: GenerateRequest, up: Upstream): P
 		return { ok: false, error: `简梦提交失败：${(err as Error).message}` };
 	}
 	const data: any = await resp.json().catch(() => ({}));
+	onUpstream?.({ response: { httpStatus: resp.status, body: data } });
 	if (!resp.ok) {
 		return { ok: false, error: data?.error?.message || data?.message || `简梦提交 HTTP ${resp.status}` };
 	}

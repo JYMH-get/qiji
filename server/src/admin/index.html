@@ -344,8 +344,10 @@ async function showLog(id){
       <div><div class="muted">taskId</div><span class="mono">${esc(l.taskId||"—")}</span></div>
     </div>
     ${l.error?`<div class="bad" style="margin-bottom:8px">错误：${esc(l.error)}</div>`:""}
-    <div class="muted">完整请求</div><pre>${esc(JSON.stringify(l.request,null,2))}</pre>
-    <div class="muted">完整响应 / 结果</div><pre>${esc(JSON.stringify(l.response,null,2))}</pre>`;
+    <div class="muted">① 用户 → 管理端 请求</div><pre>${esc(JSON.stringify(l.request,null,2))}</pre>
+    <div class="muted">② 管理端 → 用户 响应 / 结果</div><pre>${esc(JSON.stringify(l.response,null,2))}</pre>
+    <div class="muted">③ 管理端 → 上游(网关/第三方) 请求</div><pre>${l.upstreamRequest!==undefined?esc(JSON.stringify(l.upstreamRequest,null,2)):"（无：echo/stub 或上游未发起）"}</pre>
+    <div class="muted">④ 上游 → 管理端 原始响应</div><pre>${l.upstreamResponse!==undefined?esc(JSON.stringify(l.upstreamResponse,null,2)):"（无）"}</pre>`;
   $("#dlg").showModal();
 }
 

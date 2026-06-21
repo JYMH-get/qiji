@@ -11,7 +11,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getSchema } from "../catalog.ts";
 import { buildPrompt } from "./prompt.ts";
-import type { SyncResult, OnDelta } from "./openai.ts";
+import type { SyncResult, OnDelta, OnUpstream } from "./openai.ts";
 import type { Upstream } from "./upstream.ts";
 import type { GenerateRequest } from "../contract.ts";
 
@@ -24,7 +24,7 @@ const CLIENT_TIMEOUT_MS = 20 * 60 * 1000;
  * 文本：messages.stream + on("text") 累积，规避长任务断连、可回传部分正文。
  * 结构化：tool-use 强制 + 流式 finalMessage 取 tool_use.input。
  */
-export async function translateAnthropicText(req: GenerateRequest, up: Upstream, onDelta?: OnDelta): Promise<SyncResult> {
+export async function translateAnthropicText(req: GenerateRequest, up: Upstream, onDelta?: OnDelta, onUpstream?: OnUpstream): Promise<SyncResult> {
 	if (!up.apiKey) {
 		return { status: "failed", error: "该模型未配置上游密钥（管理端模型设置或网关 GATEWAY_API_KEY），可改用 echo-text 联调" };
 	}
@@ -34,6 +34,7 @@ export async function translateAnthropicText(req: GenerateRequest, up: Upstream,
 	const model = up.upstreamModel;
 	const prompt = buildPrompt(req);
 	const wantJson = req.output?.format === "json";
+	onUpstream?.({ request: { baseUrl: up.baseUrl, model, wantJson, schemaId: req.output?.schemaId, messages: [{ role: "user", content: prompt }] } });
 
 	try {
 		// 结构化输出：tool-use 强制（流式累积后取 finalMessage 的 tool_use）
@@ -59,6 +60,7 @@ export async function translateAnthropicText(req: GenerateRequest, up: Upstream,
 			const final = await stream.finalMessage();
 			const toolUse = final.content.find((b) => b.type === "tool_use");
 			if (toolUse && toolUse.type === "tool_use") {
+				onUpstream?.({ response: { stop_reason: final.stop_reason, tool_use: toolUse.input } });
 				return { status: "success", result: { json: toolUse.input, text: JSON.stringify(toolUse.input) } };
 			}
 			return { status: "failed", error: "Claude 未返回 tool_use 结构化结果" };
@@ -80,9 +82,11 @@ export async function translateAnthropicText(req: GenerateRequest, up: Upstream,
 			.filter((b) => b.type === "text")
 			.map((b) => (b.type === "text" ? b.text : ""))
 			.join("");
+		onUpstream?.({ response: { stop_reason: final.stop_reason, text: full || text } });
 		return { status: "success", result: { text: full || text } };
 	} catch (err) {
 		const e = err as { status?: number; message?: string };
+		onUpstream?.({ response: { error: e.message ?? String(err) } });
 		return { status: "failed", error: `Claude 调用失败：${e.message ?? String(err)}` };
 	}
 }

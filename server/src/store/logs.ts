@@ -22,8 +22,10 @@ export interface LogEntry {
 	startedAt: string;
 	finishedAt?: string;
 	durationMs?: number;
-	request: unknown; // 完整请求（截断 base64）
-	response?: unknown; // 完整响应 / 结果（截断 base64）
+	request: unknown; // ① 用户 → 管理端 的完整请求（截断 base64）
+	response?: unknown; // ② 管理端 → 用户 的完整响应 / 结果（截断 base64）
+	upstreamRequest?: unknown; // ③ 管理端 → 上游(网关/第三方) 的请求体
+	upstreamResponse?: unknown; // ④ 上游 → 管理端 的原始响应
 	error?: string;
 }
 
@@ -65,6 +67,15 @@ export function finishLog(
 	if (patch.error) e.error = patch.error;
 	if (patch.taskId) e.taskId = patch.taskId;
 	if (logs.length > MAX_KEEP) logs = logs.slice(-MAX_KEEP);
+	writeJsonl(FILE, logs);
+}
+
+/** 记录上游(管理端↔网关/第三方)的请求体与原始响应；可多次调用（合并）。 */
+export function attachUpstream(id: string, rec: { request?: unknown; response?: unknown }): void {
+	const e = logs.find((x) => x.id === id);
+	if (!e) return;
+	if (rec.request !== undefined) e.upstreamRequest = truncateBase64(rec.request);
+	if (rec.response !== undefined) e.upstreamResponse = truncateBase64(rec.response);
 	writeJsonl(FILE, logs);
 }
 

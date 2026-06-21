@@ -14,6 +14,9 @@ export type SyncResult = { status: "success" | "failed"; result?: TaskState["res
 /** 流式增量回调：每次收到 token 时回传"已累积全文"（边流边落任务，轮询可见） */
 export type OnDelta = (fullText: string) => void;
 
+/** 上游请求/响应记录回调：把「管理端↔上游」的请求体与原始响应回传给日志 */
+export type OnUpstream = (rec: { request?: unknown; response?: unknown }) => void;
+
 /** 图像翻译器统一返回：成功给字节 + MIME，失败给原因 */
 export type ImageResult = { ok: true; data: Buffer; contentType: string } | { ok: false; error: string };
 
@@ -25,7 +28,7 @@ const STREAM_IDLE_MS = 120000;
  * 用 stream:true 持续接收 token：连接保活、可累积部分正文与进度、不受单次总时长限制。
  * 结构化输出(json)同样流式累积，末尾整体 JSON.parse。
  */
-export async function translateOpenAIText(req: GenerateRequest, up: Upstream, onDelta?: OnDelta): Promise<SyncResult> {
+export async function translateOpenAIText(req: GenerateRequest, up: Upstream, onDelta?: OnDelta, onUpstream?: OnUpstream): Promise<SyncResult> {
 	if (!up.apiKey) {
 		return { status: "failed", error: "该模型未配置上游密钥（管理端模型设置或网关 GATEWAY_API_KEY），可改用 echo-text 联调" };
 	}
@@ -54,6 +57,8 @@ export async function translateOpenAIText(req: GenerateRequest, up: Upstream, on
 		}
 	}
 
+	onUpstream?.({ request: { url: `${up.baseUrl}/v1/chat/completions`, body } });
+
 	// 空闲超时控制器：每收到一个 chunk 就重置计时；只有长时间无数据才中断
 	const ctrl = new AbortController();
 	let idle: ReturnType<typeof setTimeout> | null = null;
@@ -80,6 +85,7 @@ export async function translateOpenAIText(req: GenerateRequest, up: Upstream, on
 	if (!resp.ok || !resp.body) {
 		clearIdle();
 		const data: any = await resp.json().catch(() => ({}));
+		onUpstream?.({ response: { httpStatus: resp.status, body: data } });
 		return { status: "failed", error: data?.error?.message || `下游 HTTP ${resp.status}` };
 	}
 
@@ -114,6 +120,7 @@ export async function translateOpenAIText(req: GenerateRequest, up: Upstream, on
 		return { status: "failed", error: `下游流式中断：${(err as Error).message}` };
 	}
 	clearIdle();
+	onUpstream?.({ response: { httpStatus: resp.status, content } });
 
 	if (!content) return { status: "failed", error: "下游未返回任何内容" };
 	if (wantJson) {
@@ -130,7 +137,7 @@ export async function translateOpenAIText(req: GenerateRequest, up: Upstream, on
  * 图像生成（g-aisc /v1/images/generations）。
  * 文生图 + 图生图（images[].image_url，须公网 HTTPS）；response_format=url，再下载回字节落本地资产。
  */
-export async function translateOpenAIImage(req: GenerateRequest, up: Upstream): Promise<ImageResult> {
+export async function translateOpenAIImage(req: GenerateRequest, up: Upstream, onUpstream?: OnUpstream): Promise<ImageResult> {
 	if (!up.apiKey) return { ok: false, error: "该图像模型未配置上游密钥" };
 	const prompt = buildPrompt(req);
 	const inputImages = (req.inputs?.images ?? [])
@@ -147,6 +154,8 @@ export async function translateOpenAIImage(req: GenerateRequest, up: Upstream): 
 	// 图生图：参考图作为 images[].image_url（平台会中转到海外对象存储再发上游）
 	if (inputImages.length) body.images = inputImages.map((u) => ({ image_url: u }));
 
+	onUpstream?.({ request: { url: `${up.baseUrl}/v1/images/generations`, body } });
+
 	let resp: Response;
 	try {
 		resp = await fetch(`${up.baseUrl}/v1/images/generations`, {
@@ -159,6 +168,7 @@ export async function translateOpenAIImage(req: GenerateRequest, up: Upstream): 
 		return { ok: false, error: `图像上游请求失败：${(err as Error).message}` };
 	}
 	const data: any = await resp.json().catch(() => ({}));
+	onUpstream?.({ response: { httpStatus: resp.status, body: data } });
 	if (!resp.ok) return { ok: false, error: data?.error?.message || `图像上游 HTTP ${resp.status}` };
 
 	const item = data?.data?.[0];

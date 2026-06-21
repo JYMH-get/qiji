@@ -5,7 +5,7 @@
  * 响应从 candidates[].content.parts[].inlineData 取 base64 图像字节。
  */
 import { buildPrompt } from "./prompt.ts";
-import type { ImageResult } from "./openai.ts";
+import type { ImageResult, OnUpstream } from "./openai.ts";
 import type { Upstream } from "./upstream.ts";
 import type { GenerateRequest } from "../contract.ts";
 import { getAsset } from "../store/assets.ts";
@@ -32,7 +32,7 @@ async function baseImagePart(req: GenerateRequest): Promise<{ inlineData: { mime
 	return null;
 }
 
-export async function translateGeminiImage(req: GenerateRequest, up: Upstream): Promise<ImageResult> {
+export async function translateGeminiImage(req: GenerateRequest, up: Upstream, onUpstream?: OnUpstream): Promise<ImageResult> {
 	if (!up.apiKey) return { ok: false, error: "该图像模型未配置上游密钥" };
 	const prompt = buildPrompt(req);
 	const url = `${up.baseUrl}/v1beta/models/${encodeURIComponent(up.upstreamModel)}:generateContent`;
@@ -47,6 +47,8 @@ export async function translateGeminiImage(req: GenerateRequest, up: Upstream): 
 		},
 	};
 
+	onUpstream?.({ request: { url, hasBaseImage: !!baseImg, prompt, generationConfig: body.generationConfig } });
+
 	let resp: Response;
 	try {
 		resp = await fetch(url, {
@@ -59,6 +61,7 @@ export async function translateGeminiImage(req: GenerateRequest, up: Upstream): 
 		return { ok: false, error: `Gemini 请求失败：${(err as Error).message}` };
 	}
 	const data: any = await resp.json().catch(() => ({}));
+	onUpstream?.({ response: { httpStatus: resp.status, body: data } });
 	if (!resp.ok) return { ok: false, error: data?.error?.message || `Gemini HTTP ${resp.status}` };
 
 	const parts: any[] = data?.candidates?.[0]?.content?.parts ?? [];

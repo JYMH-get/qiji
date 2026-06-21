@@ -11,9 +11,9 @@ import { getModelDef } from "../store/models.ts";
 import { getTemplateDef } from "../store/templates.ts";
 import { createTask, createRunningTask, completeTask, failTask, appendTaskText, setTaskProgress } from "../store/tasks.ts";
 import { createAsset } from "../store/assets.ts";
-import { finishLog } from "../store/logs.ts";
+import { finishLog, attachUpstream } from "../store/logs.ts";
 import { resolveUpstream } from "./upstream.ts";
-import { translateOpenAIText, translateOpenAIImage, translateEcho, type ImageResult, type OnDelta } from "./openai.ts";
+import { translateOpenAIText, translateOpenAIImage, translateEcho, type ImageResult, type OnDelta, type OnUpstream } from "./openai.ts";
 import { translateAnthropicText } from "./anthropic.ts";
 import { translateGeminiImage } from "./gemini.ts";
 import { submitJianmengVideo, pollJianmengVideo } from "./jianmeng.ts";
@@ -48,10 +48,10 @@ function createStubTask(req: GenerateRequest, capability: Capability, logId?: st
  * 简梦视频：上游本身异步（submit→poll）。先回 taskId，后台提交+周期轮询上游(8s)，
  * completed 取 video_url 落任务（链接 6h 有效），failed/超时置失败。进度随上游推进。
  */
-function createVideoPollingTask(req: GenerateRequest, up: Upstream, logId?: string): DispatchResult {
+function createVideoPollingTask(req: GenerateRequest, up: Upstream, logId?: string, onUpstream?: OnUpstream): DispatchResult {
 	const rec = createRunningTask("video", req.clientTaskId);
 	(async () => {
-		const sub = await submitJianmengVideo(req, up);
+		const sub = await submitJianmengVideo(req, up, onUpstream);
 		if (!sub.ok) {
 			failTask(rec.taskId, sub.error);
 			if (logId) finishLog(logId, { status: "failed", error: sub.error, taskId: rec.taskId });
@@ -117,17 +117,18 @@ type Upstream = ReturnType<typeof resolveUpstream>;
 const TEXT_PROTOCOLS = new Set(["echo", "openai-chat", "anthropic-messages"]);
 
 /** 内部：执行文本翻译器（echo/openai-chat/anthropic-messages）；onDelta 边流边回传部分正文 */
-async function runTextSync(req: GenerateRequest, model: ModelDef, up: Upstream, onDelta?: OnDelta): Promise<SyncOutcome> {
+async function runTextSync(req: GenerateRequest, model: ModelDef, up: Upstream, onDelta?: OnDelta, onUpstream?: OnUpstream): Promise<SyncOutcome> {
 	switch (model.protocol) {
 		case "echo": {
 			const r = translateEcho(req);
 			if (r.status === "success" && r.result?.text) onDelta?.(r.result.text);
+			onUpstream?.({ request: { protocol: "echo", prompt: req.variables?.prompt ?? req.promptOverride }, response: r.result });
 			return r;
 		}
 		case "openai-chat":
-			return await translateOpenAIText(req, up, onDelta);
+			return await translateOpenAIText(req, up, onDelta, onUpstream);
 		case "anthropic-messages":
-			return await translateAnthropicText(req, up, onDelta);
+			return await translateAnthropicText(req, up, onDelta, onUpstream);
 		default:
 			return { status: "failed", error: `非文本协议无法同步执行：${model.protocol}` };
 	}
@@ -143,8 +144,9 @@ async function runChain(
 	model: ModelDef,
 	up: Upstream,
 	onDelta?: OnDelta,
+	onUpstream?: OnUpstream,
 ): Promise<SyncOutcome> {
-	// A 段为中间结果，不对外回传部分正文；B 段是最终输出，流式回传
+	// A 段为中间结果，不对外回传部分正文；B 段是最终输出，流式回传（上游记录以 B 段为准）
 	const a = await runTextSync({ ...req, output: { format: "text" } }, model, up);
 	if (a.status !== "success") return { status: "failed", error: a.error || "链式A段失败" };
 	const outputA = a.result?.text ?? "";
@@ -155,7 +157,7 @@ async function runChain(
 		variables: { ...(req.variables ?? {}), [pipeVar]: outputA },
 		promptOverride: undefined,
 	};
-	return runTextSync(reqB, model, up, onDelta);
+	return runTextSync(reqB, model, up, onDelta, onUpstream);
 }
 
 /**
@@ -195,23 +197,25 @@ export async function dispatchGenerate(
 		return { kind: "sync", status: "failed", error };
 	}
 	const up = resolveUpstream(model);
+	// 上游(管理端↔网关/第三方)请求/响应记录器：写入对应日志（③④）
+	const onUpstream: OnUpstream | undefined = logId ? (rec) => attachUpstream(logId, rec) : undefined;
 
 	// 文本：一律异步任务 + 后台执行（含链式），客户端轮询取结果
 	if (TEXT_PROTOCOLS.has(model.protocol)) {
 		const tplA = !opts?.noChain && req.templateId ? getTemplateDef(req.templateId) : undefined;
 		const runner = tplA?.chainNextId
-			? (onDelta: OnDelta) => runChain(req, tplA, model, up, onDelta)
-			: (onDelta: OnDelta) => runTextSync(req, model, up, onDelta);
+			? (onDelta: OnDelta) => runChain(req, tplA, model, up, onDelta, onUpstream)
+			: (onDelta: OnDelta) => runTextSync(req, model, up, onDelta, onUpstream);
 		return createTextTask(req, runner, logId);
 	}
 
 	switch (model.protocol) {
 		case "openai-image":
-			return createImageTask(req, () => translateOpenAIImage(req, up), logId);
+			return createImageTask(req, () => translateOpenAIImage(req, up, onUpstream), logId);
 		case "gemini-image":
-			return createImageTask(req, () => translateGeminiImage(req, up), logId);
+			return createImageTask(req, () => translateGeminiImage(req, up, onUpstream), logId);
 		case "jianmeng-video":
-			return createVideoPollingTask(req, up, logId);
+			return createVideoPollingTask(req, up, logId, onUpstream);
 		case "stub":
 		default:
 			return createStubTask(req, model.capability, logId);
