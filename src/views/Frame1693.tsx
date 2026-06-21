@@ -6,7 +6,7 @@ import { runPurpose } from "@/services/purposeRunner";
 import "@/styles/Frame1693.css";
 
 // @ts-ignore
-import defaultPromptTemplate from "../../skills/剧本/角色提取提示词.md?raw";
+import defaultPromptTemplate from "../../skills/小说2资产/资产拆分.md?raw";
 
 // Helper formatters for template variables
 function formatCharactersForTemplate(characters: any[]) {
@@ -180,8 +180,8 @@ const Frame1693 = () => {
     const visualStyle = useProjectStore((s) => s.visualStyle) || "国漫电影感";
 
     const [scriptText, setScriptText] = useState(useProjectStore.getState().scriptText || "");
-    const [templates, setTemplates] = useState<string[]>(["角色提取提示词.md"]);
-    const [selectedTemplate, setSelectedTemplate] = useState("角色提取提示词.md");
+    const [templates, setTemplates] = useState<string[]>(["资产拆分.md"]);
+    const [selectedTemplate, setSelectedTemplate] = useState("资产拆分.md");
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [analysisProgress, setAnalysisProgress] = useState(0);
 
@@ -196,16 +196,16 @@ const Frame1693 = () => {
             if (typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window)) {
                 try {
                     const { readDir } = await import("@tauri-apps/plugin-fs");
-                    const entries = await readDir("e:/Kaifa/Qiji/qiji/skills/剧本");
+                    const entries = await readDir("e:/Kaifa/Qiji/qiji/skills/小说2资产");
                     const mdFiles = entries
                         .filter(entry => entry.isFile && entry.name?.endsWith(".md"))
                         .map(entry => entry.name || "");
                     const validFiles = mdFiles.filter(Boolean);
                     if (validFiles.length > 0) {
                         setTemplates(validFiles);
-                        // If "角色提取提示词.md" is not present, default to the first one
-                        if (validFiles.includes("角色提取提示词.md")) {
-                            setSelectedTemplate("角色提取提示词.md");
+                        // If "资产拆分.md" is not present, default to the first one
+                        if (validFiles.includes("资产拆分.md")) {
+                            setSelectedTemplate("资产拆分.md");
                         } else {
                             setSelectedTemplate(validFiles[0]);
                         }
@@ -233,7 +233,7 @@ const Frame1693 = () => {
                 try {
                     if (typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window)) {
                         const { readTextFile } = await import("@tauri-apps/plugin-fs");
-                        const fileText = await readTextFile(`e:/Kaifa/Qiji/qiji/skills/剧本/${selectedTemplate}`);
+                        const fileText = await readTextFile(`e:/Kaifa/Qiji/qiji/skills/小说2资产/${selectedTemplate}`);
                         if (fileText && fileText.trim()) {
                             templateText = fileText;
                         }
