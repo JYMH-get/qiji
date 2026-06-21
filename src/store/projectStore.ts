@@ -96,6 +96,8 @@ interface ProjectState {
   scenes: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
   items: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
   organisms: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
+  // 群像/阵营（G 编号）；与画布节点分组 groups 无关
+  crowds: Array<{ id: string; name: string; features: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
   isAnalyzed: boolean;
   analysisTime: string;
   episodes: VideoEpisode[];
@@ -110,8 +112,9 @@ interface ProjectState {
   setScriptText: (text: string) => void;
   setVisualStyle: (style: string) => void;
   setCoverImage: (cover: string) => void;
-  setAnalysisResult: (data: { characters: any[], scenes: any[], items: any[], organisms: any[], time: string }) => void;
+  setAnalysisResult: (data: { characters: any[], scenes: any[], items: any[], organisms: any[], crowds?: any[], time: string }) => void;
   updateCharacterImage: (charId: string, imageUri: string) => void;
+  updateCrowdImage: (crowdId: string, imageUri: string) => void;
   setProjectModelConfig: (config: Partial<ProjectModelConfig>) => void;
   // ── 视频/分镜 ──
   setEpisodes: (episodes: VideoEpisode[]) => void;
@@ -159,6 +162,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   scenes: [],
   items: [],
   organisms: [],
+  crowds: [],
   isAnalyzed: false,
   analysisTime: "",
   episodes: [],
@@ -185,6 +189,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       scenes: data.scenes,
       items: data.items,
       organisms: data.organisms,
+      crowds: data.crowds ?? [],
       isAnalyzed: true,
       analysisTime: data.time,
       isDirty: true,
@@ -194,6 +199,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   updateCharacterImage: (charId, imageUri) => {
     set((s) => ({
       characters: s.characters.map((c) => c.id === charId ? { ...c, image: imageUri } : c),
+      isDirty: true,
+    }));
+    get().scheduleAutoSave("canvas");
+  },
+  updateCrowdImage: (crowdId, imageUri) => {
+    set((s) => ({
+      crowds: s.crowds.map((c) => c.id === crowdId ? { ...c, image: imageUri } : c),
       isDirty: true,
     }));
     get().scheduleAutoSave("canvas");
@@ -304,6 +316,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           scenes: s.scenes,
           items: s.items,
           organisms: s.organisms,
+          crowds: s.crowds,
           isAnalyzed: s.isAnalyzed,
           analysisTime: s.analysisTime,
           episodes: s.episodes,
@@ -344,6 +357,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           scenes: s.scenes,
           items: s.items,
           organisms: s.organisms,
+          crowds: s.crowds,
           isAnalyzed: s.isAnalyzed,
           analysisTime: s.analysisTime,
           episodes: s.episodes,
@@ -393,6 +407,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       scenes: [],
       items: [],
       organisms: [],
+      crowds: [],
       isAnalyzed: false,
       analysisTime: "",
       episodes: [],
@@ -453,6 +468,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         scenes: project.scenes || [],
         items: project.items || [],
         organisms: project.organisms || [],
+        crowds: (project as any).crowds || [],
         isAnalyzed: project.isAnalyzed || false,
         analysisTime: project.analysisTime || "",
         episodes: project.episodes || [],
@@ -552,6 +568,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             scenes: project.scenes || [],
             items: project.items || [],
             organisms: project.organisms || [],
+            crowds: (project as any).crowds || [],
             isAnalyzed: project.isAnalyzed || false,
             analysisTime: project.analysisTime || "",
             episodes: project.episodes || [],

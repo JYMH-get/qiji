@@ -108,6 +108,7 @@ export interface QijiProject {
   scenes?: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
   items?: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
   organisms?: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
+  crowds?: Array<{ id: string; name: string; features: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
   isAnalyzed?: boolean;
   analysisTime?: string;
   /** 视频/分镜：分集列表（每集含本集剧本 + 分镜 + 垫素材 + 故事板/视频产物） */

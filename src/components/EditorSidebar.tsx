@@ -2,7 +2,7 @@ import { useNavigate } from "react-router";
 import { useUiStore } from "@/store/uiStore";
 
 interface EditorSidebarProps {
-    activeTab: "剧本" | "角色" | "场景" | "生物" | "物品" | "视频" | "分镜" | "画布";
+    activeTab: "剧本" | "角色" | "群像" | "场景" | "生物" | "物品" | "视频" | "分镜" | "画布";
 }
 
 const EditorSidebar = ({ activeTab }: EditorSidebarProps) => {
@@ -70,6 +70,18 @@ const EditorSidebar = ({ activeTab }: EditorSidebarProps) => {
                         <div className="frame-content-16_139">
                             <div id="16_140" className="Pixso-vector-16_140"></div>
                             <p id="16_143" className={getTabClasses("角色").text}>{"角色"}</p>
+                        </div>
+                    </div>
+
+                    {/* 2.5 群像 */}
+                    <div
+                        className={getTabClasses("群像").container}
+                        onClick={() => navigate("/frame-group")}
+                        style={{ cursor: "pointer" }}
+                    >
+                        <div className="frame-content-16_139">
+                            <div className="Pixso-vector-16_140"></div>
+                            <p className={getTabClasses("群像").text}>{"群像"}</p>
                         </div>
                     </div>
 

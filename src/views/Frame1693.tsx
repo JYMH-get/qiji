@@ -104,9 +104,9 @@ type ParsedAsset = { id: string; name: string; features: string; philosophy: str
 // 解析资产提取 LLM 输出（asset.extract.v1）：按 C/A/G/M/S/P 编号前缀分流到 角色/场景/生物/物品，变体折叠进父资产。
 // 兼容两种结构：扁平 assets[]（带 id/type/prompt）与嵌套 characters[]/scenes[]/creatures[]/props[]。
 function parseAssetExtraction(text: string): {
-    characters: ParsedAsset[]; scenes: ParsedAsset[]; items: ParsedAsset[]; organisms: ParsedAsset[];
+    characters: ParsedAsset[]; scenes: ParsedAsset[]; items: ParsedAsset[]; organisms: ParsedAsset[]; crowds: ParsedAsset[];
 } {
-    const empty = { characters: [] as ParsedAsset[], scenes: [] as ParsedAsset[], items: [] as ParsedAsset[], organisms: [] as ParsedAsset[] };
+    const empty = { characters: [] as ParsedAsset[], scenes: [] as ParsedAsset[], items: [] as ParsedAsset[], organisms: [] as ParsedAsset[], crowds: [] as ParsedAsset[] };
     const root = extractJsonObject(text);
     if (!root) return empty;
 
@@ -139,14 +139,16 @@ function parseAssetExtraction(text: string): {
         if (head === "S") return "scenes";
         if (head === "M") return "organisms";
         if (head === "P") return "items";
-        if (head === "C" || head === "A" || head === "G") return "characters";
+        if (head === "G") return "crowds";       // 群像/阵营
+        if (head === "C" || head === "A") return "characters";
         const cat = String(a.category || a.type || "").toLowerCase();
         if (cat.includes("scene") || cat.includes("environment")) return "scenes";
         if (cat.includes("creature") || cat.includes("monster") || cat.includes("beast")) return "organisms";
         if (cat.includes("prop") || cat.includes("item") || cat.includes("weapon")) return "items";
+        if (cat.includes("group") || cat.includes("crowd") || cat.includes("ensemble")) return "crowds";
         return "characters";
     };
-    const buckets = { characters: [] as ParsedAsset[], scenes: [] as ParsedAsset[], items: [] as ParsedAsset[], organisms: [] as ParsedAsset[] };
+    const buckets = { characters: [] as ParsedAsset[], scenes: [] as ParsedAsset[], items: [] as ParsedAsset[], organisms: [] as ParsedAsset[], crowds: [] as ParsedAsset[] };
     const byCode: Record<string, ParsedAsset> = {};
 
     // 先建基础资产
@@ -211,6 +213,7 @@ const Frame1693 = () => {
     const scenes = useProjectStore((s) => s.scenes);
     const items = useProjectStore((s) => s.items);
     const organisms = useProjectStore((s) => s.organisms);
+    const crowds = useProjectStore((s) => s.crowds);
     const isAnalyzed = useProjectStore((s) => s.isAnalyzed);
     const analysisTime = useProjectStore((s) => s.analysisTime);
     const visualStyle = useProjectStore((s) => s.visualStyle) || "国漫电影感";
@@ -323,7 +326,7 @@ const Frame1693 = () => {
             // 解析 asset.extract.v1：按编号前缀分流到 角色/场景/生物/物品（变体折叠进父资产）。
             // 解析不到就为空，不编造（"没提取出来就没出来"）。
             const extracted = parseAssetExtraction(resultText);
-            if (extracted.characters.length + extracted.scenes.length + extracted.items.length + extracted.organisms.length === 0) {
+            if (extracted.characters.length + extracted.scenes.length + extracted.items.length + extracted.organisms.length + extracted.crowds.length === 0) {
                 throw new Error("已拿到模型返回，但未能从中解析出资产 JSON（asset.extract.v1）。请检查提示词是否要求输出该结构，或换用支持结构化输出的模型。");
             }
 
@@ -335,6 +338,7 @@ const Frame1693 = () => {
                 scenes: extracted.scenes,
                 items: extracted.items,
                 organisms: extracted.organisms,
+                crowds: extracted.crowds,
                 time: timeString,
             });
 
@@ -1030,6 +1034,21 @@ const Frame1693 = () => {
                                                                     </div>
                                                                 </div>
                                                                 <div className="stroke-16_259"></div>
+                                                            </div>
+
+                                                            {/* 5. Crowds Card */}
+                                                            <div className="stroke-wrapper-16_230">
+                                                                <div className="Pixso-frame-16_230">
+                                                                    <div className="frame-content-16_230">
+                                                                        <div className="Pixso-frame-16_231">
+                                                                            <div className="Pixso-vector-16_232"></div>
+                                                                            <p className="Pixso-paragraph-16_237">{"群像"}</p>
+                                                                        </div>
+                                                                        <p className="Pixso-paragraph-16_238">{crowds.length}</p>
+                                                                        <p className="Pixso-paragraph-16_239">{isAnalyzed ? "阵营/群体数量" : "未识别群像"}</p>
+                                                                    </div>
+                                                                </div>
+                                                                <div className="stroke-16_230"></div>
                                                             </div>
                                                         </div>
                                                     </div>
