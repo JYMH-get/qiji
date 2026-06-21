@@ -67,12 +67,14 @@
     <button data-tab="models" onclick="switchTab('models')">模型加载</button>
     <button data-tab="templates" onclick="switchTab('templates')">提示词</button>
     <button data-tab="logs" onclick="switchTab('logs')">请求记录</button>
+    <button data-tab="oss" onclick="switchTab('oss')">OSS存储</button>
   </div>
   <main>
     <section id="tab-users"></section>
     <section id="tab-models" class="hide"></section>
     <section id="tab-templates" class="hide"></section>
     <section id="tab-logs" class="hide"></section>
+    <section id="tab-oss" class="hide"></section>
   </main>
 </div>
 
@@ -101,11 +103,12 @@ function logout(){ localStorage.removeItem("qiji_admin_token"); TOKEN=""; showLo
 
 function switchTab(t){
   document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab===t));
-  ["users","models","templates","logs"].forEach(x => $("#tab-"+x).classList.toggle("hide", x!==t));
+  ["users","models","templates","logs","oss"].forEach(x => $("#tab-"+x).classList.toggle("hide", x!==t));
   if (t==="users") loadUsers();
   if (t==="models") loadModels();
   if (t==="templates") loadTemplates();
   if (t==="logs") loadLogs();
+  if (t==="oss") loadOss();
 }
 
 // ── 用户管理 ──
@@ -434,6 +437,44 @@ async function showLog(id){
     </div>`;
   $("#dlg").classList.add("wide");
   $("#dlg").showModal();
+}
+
+// ── OSS 对象存储设置 ──
+async function loadOss(){
+  const el = $("#tab-oss");
+  let o; try { o = await api("/admin-api/settings/oss"); } catch(e){ el.innerHTML = `<div class="bad">${esc(e.message)}</div>`; return; }
+  el.innerHTML = `
+    <div class="card" style="max-width:680px">
+      <div class="row"><strong>OSS 对象存储（S3 兼容）</strong>
+        <span class="pill ${o.configured?'ok':'bad'}">${o.configured?'已配置':'未配置'}</span></div>
+      <div class="muted" style="margin-bottom:10px">资产/项目云备份。密钥只存服务端（data/settings.json，不下发用户端）；用户端只调用、和模型一样无感。优先级：此处填写 &gt; .env。</div>
+      <label class="f">API 端点 endpoint<input id="oss_endpoint" value="${esc(o.endpoint||'')}" placeholder="https://cn-nb1.rains3.com"/></label>
+      <label class="f">桶 bucket<input id="oss_bucket" value="${esc(o.bucket||'')}" placeholder="jianqiji"/></label>
+      <label class="f">AccessKeyId<input id="oss_ak" value="${esc(o.accessKeyId||'')}" placeholder="AK"/></label>
+      <label class="f">SecretAccessKey<input id="oss_sk" type="password" placeholder="${o.secretMasked||'未设置'}（留空=不变）"/></label>
+      <label class="f">区域 region<input id="oss_region" value="${esc(o.region||'')}" placeholder="cn-nb1"/></label>
+      <label class="f">公网基址 publicBase（选填，CDN/自定义域名；留空自动 https://&lt;bucket&gt;.&lt;host&gt;）<input id="oss_pub" value="${esc(o.publicBase||'')}" placeholder="自动"/></label>
+      <div class="row" style="margin-top:10px">
+        <button class="primary" onclick="saveOss()">保存</button>
+        <button class="sm" onclick="testOss()">测试连接</button>
+        <span id="oss_msg" class="muted"></span>
+      </div>
+    </div>`;
+}
+async function saveOss(){
+  const body = {
+    endpoint: $("#oss_endpoint").value.trim(), bucket: $("#oss_bucket").value.trim(),
+    accessKeyId: $("#oss_ak").value.trim(), region: $("#oss_region").value.trim(),
+    publicBase: $("#oss_pub").value.trim(),
+  };
+  const sk = $("#oss_sk").value; if (sk) body.secretAccessKey = sk;  // 留空则不改
+  try { const r = await api("/admin-api/settings/oss",{method:"PUT",body:JSON.stringify(body)}); $("#oss_msg").textContent = r.configured?"已保存 ✅":"已保存（仍未配置完整）"; loadOss(); }
+  catch(e){ $("#oss_msg").textContent = e.message; }
+}
+async function testOss(){
+  $("#oss_msg").textContent = "测试中…";
+  try { const r = await api("/admin-api/settings/oss/test",{method:"POST"}); $("#oss_msg").textContent = r.ok? ("连接正常 ✅ "+(r.url||"")) : ("失败："+r.error); }
+  catch(e){ $("#oss_msg").textContent = "失败："+e.message; }
 }
 
 // 启动

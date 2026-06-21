@@ -21,6 +21,8 @@ import {
 	type TemplateDef,
 } from "../store/templates.ts";
 import { listLogs, getLog, logFacets } from "../store/logs.ts";
+import { getOssConfig, setOssConfig } from "../store/settings.ts";
+import { isOssConfigured, ossSelfTest } from "../store/oss.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ADMIN_HTML = join(here, "..", "admin", "index.html");
@@ -119,5 +121,29 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			if (!log) return reply.code(404).send({ error: { message: "记录不存在" } });
 			return log;
 		});
+
+		// ── OSS 对象存储设置（密钥只存服务端；secret 返回时脱敏）──
+		api.get("/admin-api/settings/oss", async () => {
+			const o = getOssConfig();
+			const tail = o.secretAccessKey ? o.secretAccessKey.slice(-4) : "";
+			return {
+				endpoint: o.endpoint, bucket: o.bucket, accessKeyId: o.accessKeyId,
+				region: o.region, publicBase: o.publicBase,
+				secretMasked: o.secretAccessKey ? "****" + tail : "",
+				configured: isOssConfigured(),
+			};
+		});
+		api.put("/admin-api/settings/oss", async (req) => {
+			const b = (req.body ?? {}) as Record<string, string>;
+			const patch: Record<string, string> = {};
+			for (const k of ["endpoint", "bucket", "accessKeyId", "region", "publicBase"]) {
+				if (b[k] !== undefined) patch[k] = b[k];
+			}
+			// secret 仅在传入“非掩码”新值时更新，避免被 **** 覆盖清空
+			if (b.secretAccessKey && !b.secretAccessKey.startsWith("****")) patch.secretAccessKey = b.secretAccessKey;
+			setOssConfig(patch);
+			return { ok: true, configured: isOssConfigured() };
+		});
+		api.post("/admin-api/settings/oss/test", async () => ossSelfTest());
 	});
 }
