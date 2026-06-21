@@ -23,8 +23,18 @@ type Form = {
     images: string[];
 };
 
-const GEN_COUNTS = [1, 2, 4];
-const VOICES = ["固定音色 (自动)", "少年音", "青年男声", "青年女声", "沉稳男声", "威严长者", "冷峻反派"];
+const GEN_COUNTS = [1, 2, 3, 4];
+const QUALITIES = ["auto", "low", "medium", "high"];
+// 比例 / 分辨率（与提示词一起进入生成请求）
+const SIZES: Array<{ v: string; label: string }> = [
+    { v: "1024x1024", label: "1024×1024 正方形" },
+    { v: "1536x1024", label: "1536×1024 横版" },
+    { v: "1024x1536", label: "1024×1536 竖版" },
+    { v: "2048x2048", label: "2048×2048 · 2K 正方形" },
+    { v: "2048x1152", label: "2048×1152 · 2K 横版" },
+    { v: "3840x2160", label: "3840×2160 · 4K 横版" },
+    { v: "2160x3840", label: "2160×3840 · 4K 竖版" },
+];
 
 const panel: React.CSSProperties = { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8 };
 const accent = "#8b5cf6";
@@ -40,7 +50,8 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
     const [selectedFormKey, setSelectedFormKey] = useState<string>("base");
     const [searchQuery, setSearchQuery] = useState("");
     const [genCount, setGenCount] = useState(1);
-    const [voice, setVoice] = useState(VOICES[0]);
+    const [quality, setQuality] = useState("auto");
+    const [size, setSize] = useState(SIZES[0].v);
     const [busy, setBusy] = useState<Record<string, boolean>>({});
     const [optimizing, setOptimizing] = useState(false);
     const [bulkRunning, setBulkRunning] = useState(false);
@@ -88,7 +99,7 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
         setBusy((p) => ({ ...p, [busyKey]: true }));
         try {
             for (let i = 0; i < count; i++) {
-                const run = await runPurpose(imagePurpose, { prompt: form.prompt, params: { size: "1024x1024", quality: "standard" } });
+                const run = await runPurpose(imagePurpose, { prompt: form.prompt, params: { size, quality } });
                 if (run.status === "no_model") throw new Error("未配置可用的图像模型，请先在「设置 → 模型」中选择后重试。");
                 if (run.status === "failed") throw new Error(run.error || "生成失败");
                 if (!run.resultUri) throw new Error("模型返回为空，未生成图片。");
@@ -109,7 +120,7 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
         try {
             for (const a of assets) {
                 if (!a.prompt?.trim()) continue;
-                const run = await runPurpose(imagePurpose, { prompt: a.prompt, params: { size: "1024x1024", quality: "standard" } });
+                const run = await runPurpose(imagePurpose, { prompt: a.prompt, params: { size, quality } });
                 if (run.status === "success" && run.resultUri) addAssetImage(cat, a.id, null, run.resultUri, true);
             }
             await useProjectStore.getState().save(true);
@@ -245,39 +256,64 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
                     <>
                         <div style={{ color: "#fff", fontSize: 14, fontWeight: 600 }}>{activeForm.title}　<span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>{activeForm.label}</span></div>
 
-                        <div>
-                            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>出图提示词</div>
-                            <textarea value={activeForm.prompt} onChange={(e) => writePrompt(activeForm, e.target.value)}
-                                style={{ width: "100%", height: 180, ...panel, color: "#fff", fontSize: 11, lineHeight: 1.5, padding: 8, outline: "none", resize: "vertical", boxSizing: "border-box" }} />
-                        </div>
-
+                        {/* 1. 设计理念 / 说明（仅展示，不进入请求） */}
                         {activeForm.desc && (
-                            <div>
-                                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>设计理念 / 说明</div>
+                            <div style={{ ...panel, padding: 8 }}>
+                                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginBottom: 4 }}>设计理念 / 说明（仅展示，不参与生成）</div>
                                 <div style={{ fontSize: 11, color: "rgba(255,255,255,0.7)", lineHeight: 1.5 }}>{activeForm.desc}</div>
                             </div>
                         )}
 
-                        <div style={{ display: "flex", gap: 10 }}>
-                            {showVoice && (
-                                <div style={{ flex: 1 }}>
-                                    <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>音色</div>
-                                    <select value={voice} onChange={(e) => setVoice(e.target.value)}
-                                        style={{ width: "100%", ...panel, color: "#fff", fontSize: 11, padding: "6px 8px", outline: "none" }}>
-                                        {VOICES.map((v) => <option key={v} value={v} style={{ background: "#1f1f2e" }}>{v}</option>)}
+                        {/* 2. 出图提示词（占满剩余空间） */}
+                        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>出图提示词</div>
+                            <textarea value={activeForm.prompt} onChange={(e) => writePrompt(activeForm, e.target.value)}
+                                style={{ flex: 1, minHeight: 140, width: "100%", ...panel, color: "#fff", fontSize: 11, lineHeight: 1.5, padding: 8, outline: "none", resize: "none", boxSizing: "border-box" }} />
+                        </div>
+
+                        {/* 3a. 绑定音色（独占一行，占位，暂未实现） */}
+                        {showVoice && (
+                            <div>
+                                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>绑定音色　<span style={{ color: "rgba(255,255,255,0.35)" }}>（音色文件将绑定到该角色，暂未实现）</span></div>
+                                <div style={{ display: "flex", gap: 8 }}>
+                                    <select disabled title="暂未实现" style={{ flex: 1, ...panel, color: "rgba(255,255,255,0.5)", fontSize: 11, padding: "6px 8px", outline: "none", cursor: "not-allowed" }}>
+                                        <option style={{ background: "#1f1f2e" }}>未绑定音色</option>
                                     </select>
+                                    <button disabled title="暂未实现" style={{ ...panel, color: "rgba(255,255,255,0.5)", fontSize: 11, padding: "6px 10px", cursor: "not-allowed" }}>音色生成</button>
+                                    <button disabled title="暂未实现" style={{ ...panel, color: "rgba(255,255,255,0.5)", fontSize: 11, padding: "6px 10px", cursor: "not-allowed" }}>本地上传</button>
                                 </div>
-                            )}
-                            <div style={{ width: showVoice ? 90 : "100%" }}>
-                                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>生成数量</div>
-                                <select value={genCount} onChange={(e) => setGenCount(Number(e.target.value))}
-                                    style={{ width: "100%", ...panel, color: "#fff", fontSize: 11, padding: "6px 8px", outline: "none" }}>
-                                    {GEN_COUNTS.map((n) => <option key={n} value={n} style={{ background: "#1f1f2e" }}>{n} 张</option>)}
-                                </select>
+                            </div>
+                        )}
+
+                        {/* 3b. 出图要求（与提示词一起进入生成请求） */}
+                        <div>
+                            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>出图要求</div>
+                            <div style={{ display: "flex", gap: 8 }}>
+                                <label style={{ flex: "0 0 64px" }}>
+                                    <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", marginBottom: 2 }}>数量</div>
+                                    <select value={genCount} onChange={(e) => setGenCount(Number(e.target.value))}
+                                        style={{ width: "100%", ...panel, color: "#fff", fontSize: 11, padding: "6px 6px", outline: "none" }}>
+                                        {GEN_COUNTS.map((n) => <option key={n} value={n} style={{ background: "#1f1f2e" }}>{n}</option>)}
+                                    </select>
+                                </label>
+                                <label style={{ flex: "0 0 84px" }}>
+                                    <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", marginBottom: 2 }}>质量</div>
+                                    <select value={quality} onChange={(e) => setQuality(e.target.value)}
+                                        style={{ width: "100%", ...panel, color: "#fff", fontSize: 11, padding: "6px 6px", outline: "none" }}>
+                                        {QUALITIES.map((q) => <option key={q} value={q} style={{ background: "#1f1f2e" }}>{q}</option>)}
+                                    </select>
+                                </label>
+                                <label style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", marginBottom: 2 }}>比例 / 分辨率</div>
+                                    <select value={size} onChange={(e) => setSize(e.target.value)}
+                                        style={{ width: "100%", ...panel, color: "#fff", fontSize: 11, padding: "6px 6px", outline: "none" }}>
+                                        {SIZES.map((s) => <option key={s.v} value={s.v} style={{ background: "#1f1f2e" }}>{s.label}</option>)}
+                                    </select>
+                                </label>
                             </div>
                         </div>
 
-                        <div style={{ display: "flex", gap: 10, marginTop: "auto" }}>
+                        <div style={{ display: "flex", gap: 10 }}>
                             <button onClick={() => activeAsset && generateForm(activeAsset.id, activeForm, genCount)} disabled={!!busy[busyKey]}
                                 style={{ flex: 1, padding: "9px 0", background: accent, color: "#fff", border: "none", borderRadius: 6, cursor: busy[busyKey] ? "not-allowed" : "pointer", opacity: busy[busyKey] ? 0.7 : 1, fontSize: 12 }}>
                                 {busy[busyKey] ? "生成中…" : "生成形象"}
