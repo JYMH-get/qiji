@@ -4,9 +4,22 @@ import {
 	Image as ImageIcon,
 	Clapperboard,
 	AudioLines,
+	Sparkles,
+	FileUp,
 	type LucideIcon,
 } from "lucide-react";
-import type { Asset } from "@/store/libraryStore";
+import type { Capability, Purpose } from "@/contract";
+import type { NodeRuntime } from "@/types";
+import { buildManagedAdapter, registerAdapter, getAdapter } from "@/services/modelAdapter";
+import { NODE_DEFAULT_PURPOSE } from "@/lib/purposeRegistry";
+
+/**
+ * 声明式节点插件注册表。
+ *
+ * 阶段1步骤B：插件不再执行任何远程/本地 JS（移除 new Function / createTask / queryTask /
+ * import.meta.glob('*.js')）。内置节点改为声明式 JSON；自定义插件亦为 JSON。
+ * 节点统一走 defaultNodeExecute → 已注册的 ManagedAdapter（经管理端网关）→ 集中轮询。
+ */
 
 export interface PortType {
 	name: string;
@@ -48,96 +61,119 @@ export interface NodePlugin {
 
 const plugins = new Map<string, NodePlugin>();
 
+/** 节点类型 → 能力（用于为内置节点合成网关适配器） */
+const CAP_BY_TYPE: Record<string, Capability> = {
+	text: "text",
+	script: "text",
+	image: "image",
+	video: "video",
+	audio: "audio",
+};
+
+/**
+ * 默认节点执行：提交到已注册适配器拿到 taskId 后，交给集中式 taskTracker 轮询。
+ * 不再在此处自建 setTimeout 轮询循环。
+ */
 export async function defaultNodeExecute(nodeId: string): Promise<void> {
 	const { useCanvasStore } = await import("@/store/canvasStore");
-	const { useLibraryStore } = await import("@/store/libraryStore");
-	const { useProjectStore } = await import("@/store/projectStore");
-
-	const store = useCanvasStore.getState();
-	const node = store.nodes[nodeId];
+	const node = useCanvasStore.getState().nodes[nodeId];
 	if (!node) return;
 
-	const type = node.type;
-	const plugin = getPlugin(type);
+	const plugin = getPlugin(node.type);
 	if (!plugin) return;
 
 	const params = node.data.params;
 	const { resolveActiveModelKey } = await import("@/services/adapters/channelAdapter");
 	const modelKey = resolveActiveModelKey(node.type, params.model, plugin.defaultModel);
 
-	// 查找 adapter — 找不到直接报错，不回退 mock
-	const { getAdapter } = await import("@/services/modelAdapter");
-	const adapter = getAdapter(modelKey);
-	if (!adapter) {
-		const errorMsg = modelKey
-			? `未找到模型适配器「${modelKey}」，请在「设置→模型」中选择已启用的模型`
-			: `节点未选择模型，请在节点面板中选择模型`;
-		store.setRuntime(nodeId, { status: "failed", progress: 100, error: errorMsg });
+	// 跨 await 后 store 快照会过期，运行态一律取最新 state 再写
+	const setRuntime = (patch: Partial<NodeRuntime>) =>
+		useCanvasStore.getState().setRuntime(nodeId, patch);
+
+	// 模型预检：给出画布特有的精确提示（runPurpose 也会兜底返回 no_model）
+	if (!getAdapter(modelKey)) {
+		setRuntime({
+			status: "failed",
+			progress: 100,
+			error: modelKey
+				? `未找到模型适配器「${modelKey}」，请在「设置」中配置管理端并选择模型`
+				: `节点未选择模型，请在节点面板中选择模型`,
+		});
 		return;
 	}
 
 	try {
-		store.setRuntime(nodeId, { status: "queued", progress: 0 });
+		setRuntime({ status: "queued", progress: 0 });
 
 		const { resolveMentions } = await import("@/lib/mentionResolver");
 		const resolvedPrompt = resolveMentions(nodeId, String(params.prompt || ""));
-		const inputData = { prompt: resolvedPrompt, ...node.data.input || {} };
 
-		const { taskId } = await adapter.submit(inputData, params, type);
-		// 黑匣子：attach 到实际 taskId
-		const traceId = nodeId;
-		console.log(`[Blackbox] ${traceId} → adapter=${adapter.key} model=${modelKey} taskId=${taskId}`);
-
-		store.setRuntime(nodeId, { status: "running", progress: 10 });
-
-		let pollCount = 0;
-		const maxPolls = 120;
-		const runPolling = () => {
-			setTimeout(async () => {
-				try {
-					const pollResult = await adapter.poll(taskId);
-					pollCount++;
-					console.log(`[Blackbox] ${traceId} poll#${pollCount} status=${pollResult.status} progress=${pollResult.progress}`);
-
-					if (pollResult.status === "success") {
-						const resultUri = pollResult.resultUri || "";
-						const aid = `asset-${taskId}`;
-						const filename = `${plugin.type}_output_${Date.now()}`;
-						useLibraryStore.getState().addAsset({
-							id: aid,
-							kind: plugin.resultKind as Asset["kind"],
-							name: filename,
-							uri: resultUri,
-							thumbnailUri: null,
-							createdAt: new Date().toISOString(),
-							deletedByUser: false,
-							localPath: null,
-						});
-						const updatedNodes = { ...store.nodes };
-						if (updatedNodes[nodeId]) {
-							updatedNodes[nodeId] = { ...updatedNodes[nodeId], data: { ...updatedNodes[nodeId].data, resultAssetId: aid } };
-							useCanvasStore.setState({ nodes: updatedNodes });
-						}
-						store.setRuntime(nodeId, { status: "success", progress: 100 });
-						useProjectStore.getState().scheduleAutoSave("history");
-					} else if (pollResult.status === "failed") {
-						store.setRuntime(nodeId, { status: "failed", progress: 100, error: pollResult.error || "生成失败" });
-					} else {
-						store.setRuntime(nodeId, { status: pollResult.status, progress: pollResult.progress || Math.min(pollCount * 10, 95) });
-						if (pollCount < maxPolls) runPolling();
-						else store.setRuntime(nodeId, { status: "failed", progress: 100, error: "生成超时，已取消" });
-					}
-				} catch (err) {
-					console.error("[Blackbox] Polling error:", err);
-					store.setRuntime(nodeId, { status: "failed", progress: 100, error: err instanceof Error ? err.message : "轮询异常" });
+		// 收口：画布节点与表格按键共用唯一提交路径 runPurpose（单例 taskCenter 集中轮询）
+		const purpose =
+			(params.purpose as Purpose) ||
+			(NODE_DEFAULT_PURPOSE as Record<string, Purpose | undefined>)[node.type] ||
+			"script.analyze";
+		const { runPurpose } = await import("@/services/purposeRunner");
+		const templateId =
+			typeof params.templateId === "string" && params.templateId ? params.templateId : undefined;
+		const run = await runPurpose(purpose, {
+			prompt: resolvedPrompt,
+			params,
+			input: node.data.input || undefined,
+			modelKey,
+			templateId,
+			onProgress: (progress, status) => {
+				if (status === "queued" || status === "running") {
+					setRuntime({ status, progress: progress || 10 });
 				}
-			}, 1000);
-		};
-		runPolling();
+			},
+		});
+
+		if (run.status !== "success") {
+			setRuntime({
+				status: "failed",
+				progress: 100,
+				error: run.status === "no_model" ? "未配置可用模型" : run.error,
+			});
+			return;
+		}
+
+		// 成功：落资产库 + 回写节点 resultAssetId（原 nodeTaskTracker 成功分支搬运至此）
+		const { useLibraryStore } = await import("@/store/libraryStore");
+		const { useProjectStore } = await import("@/store/projectStore");
+		const assetId = `asset-${run.taskId ?? nodeId}`;
+		useLibraryStore.getState().addAsset({
+			id: assetId,
+			kind: plugin.resultKind as "image" | "video" | "audio" | "script",
+			name: `${plugin.type}_output_${Date.now()}`,
+			uri: run.resultUri,
+			thumbnailUri: null,
+			createdAt: new Date().toISOString(),
+			deletedByUser: false,
+			localPath: null,
+		});
+
+		const cs = useCanvasStore.getState();
+		if (cs.nodes[nodeId]) {
+			useCanvasStore.setState({
+				nodes: {
+					...cs.nodes,
+					[nodeId]: {
+						...cs.nodes[nodeId],
+						data: { ...cs.nodes[nodeId].data, resultAssetId: assetId },
+					},
+				},
+			});
+		}
+		setRuntime({ status: "success", progress: 100 });
+		useProjectStore.getState().scheduleAutoSave("history");
 	} catch (err) {
-		console.error(`[Blackbox] Node ${nodeId} submit failed:`, err);
-		const msg = err instanceof Error ? err.message : "请求发送失败";
-		store.setRuntime(nodeId, { status: "failed", progress: 100, error: msg });
+		console.error(`[Node ${nodeId}] execute failed:`, err);
+		setRuntime({
+			status: "failed",
+			progress: 100,
+			error: err instanceof Error ? err.message : "请求发送失败",
+		});
 	}
 }
 
@@ -156,9 +192,6 @@ export function listPlugins(): NodePlugin[] {
 	return Array.from(plugins.values());
 }
 
-// ── 本地加载核心集成 ──
-import { Sparkles, FileUp } from "lucide-react";
-
 export const iconMap: Record<string, LucideIcon> = {
 	Type,
 	ScrollText,
@@ -169,15 +202,24 @@ export const iconMap: Record<string, LucideIcon> = {
 	FileUp,
 };
 
+/**
+ * 注册一个声明式插件（来自内置 JSON / 自定义 .qiji-plugin.json / 管理端 catalog）。
+ *
+ * 纯数据驱动：节点 UI 来自 JSON 字段；若声明了 adapter.modes，则为该节点合成一个
+ * 经管理端网关的 ManagedAdapter（携带这些 modes 作为面板参数表单），不执行任何脚本。
+ */
 export function registerSerializedPlugin(plugin: any) {
+	const type: string = plugin.type || plugin.id;
+	if (!type) return;
+
 	const nodePlugin: NodePlugin = {
-		type: plugin.type || plugin.id,
-		label: plugin.label || plugin.name,
-		code: plugin.code || (plugin.id || plugin.type || "").toUpperCase(),
+		type,
+		label: plugin.label || plugin.name || type,
+		code: plugin.code || type.toUpperCase(),
 		icon: iconMap[plugin.iconName] || Sparkles,
 		accentVar: plugin.accentVar || "var(--node-accent)",
-		resultKind: plugin.resultKind || plugin.type || "text",
-		defaultModel: plugin.defaultModel || (plugin.models && plugin.models[0]?.id) || "",
+		resultKind: plugin.resultKind || type,
+		defaultModel: plugin.defaultModel || plugin.adapter?.key || "",
 		description: plugin.description || "",
 		category: plugin.category || "other",
 		thumbnail: plugin.thumbnail || null,
@@ -185,229 +227,37 @@ export function registerSerializedPlugin(plugin: any) {
 		outputs: plugin.outputs || [],
 		canStack: plugin.canStack,
 		actions: [],
+		execute: defaultNodeExecute,
 		isActive: plugin.isActive !== false,
 		isDeleted: !!plugin.isDeleted,
 	};
+	plugins.set(type, nodePlugin);
 
-	// Compile cost estimation function if provided
-	let estimateCostFn = (modeKey: string, params: Record<string, unknown>) => {
-		if (plugin.estimateCost) {
-			try {
-				return plugin.estimateCost(modeKey, params);
-			} catch (e) {
-				console.error("Error evaluating estimateCost function:", e);
-			}
-		}
-		return plugin.adapter?.baseCost || 10;
-	};
-	if (plugin.scripts?.estimateCost) {
-		try {
-			const compiledCost = new Function("modeKey", "params", "baseCost", plugin.scripts.estimateCost);
-			estimateCostFn = (modeKey, params) => {
-				try {
-					return compiledCost(modeKey, params, plugin.adapter?.baseCost || 10);
-				} catch (e) {
-					console.error("Error evaluating estimateCost script:", e);
-					return plugin.adapter?.baseCost || 10;
-				}
-			};
-		} catch (err) {
-			console.error(`Failed to compile estimateCost for ${plugin.type || plugin.id}:`, err);
-		}
-	}
-
-	// Compile transformInput function if provided
-	let transformInputFn = (params: Record<string, unknown>, _nodeId: string) => {
-		return { prompt: params.prompt || "", ...params };
-	};
-	if (plugin.scripts?.transformInput) {
-		try {
-			const compiledTransform = new Function("params", "nodeId", plugin.scripts.transformInput);
-			transformInputFn = (params, nodeId) => {
-				try {
-					return compiledTransform(params, nodeId);
-				} catch (e) {
-					console.error("Error evaluating transformInput script:", e);
-					return { prompt: params.prompt || "", ...params };
-				}
-			};
-		} catch (err) {
-			console.error(`Failed to compile transformInput for ${plugin.type || plugin.id}:`, err);
-		}
-	}
-
-	const hasJsAdapter = !!(plugin.createTask && plugin.queryTask);
-	const adapterKey = plugin.adapter?.key || plugin.id || plugin.type;
-	const adapterModes = plugin.adapter?.modes || (plugin.models?.map((m: any) => ({
-		key: m.id,
-		label: m.name,
-		inputHint: m.inputHint || "根据提示词生成...",
-		paramsSchema: m.paramsSchema || []
-	}))) || [];
-
-	// If adapter is defined or standard methods are present, register it dynamically
-	if (plugin.adapter || hasJsAdapter) {
-		const dynamicSubmit = async (input: Record<string, unknown>, params: Record<string, unknown>) => {
-			if (plugin.createTask) {
-				const config = {};
-				const taskId = await plugin.createTask(config, { ...input, ...params });
-				return { taskId };
-			}
-			const { getAdapter } = await import("@/services/modelAdapter");
-			const adapter = getAdapter(adapterKey);
-			if (adapter) {
-				return adapter.submit(input, params);
-			}
-			throw new Error(`Adapter ${adapterKey} not registered`);
-		};
-
-		const dynamicPoll = async (taskId: string) => {
-			if (plugin.queryTask) {
-				const config = {};
-				const result = await plugin.queryTask(config, taskId);
-				return {
-					status: result.status,
-					progress: result.progress,
-					resultUri: result.video_url || result.image_url || result.audio_url || result.text || "",
-					error: result.error
-				};
-			}
-			const { getAdapter } = await import("@/services/modelAdapter");
-			const adapter = getAdapter(adapterKey);
-			if (adapter) {
-				return adapter.poll(taskId);
-			}
-			throw new Error(`Adapter ${adapterKey} not registered`);
-		};
-
-		const dynamicAdapter = {
-			key: adapterKey,
-			displayName: plugin.adapter?.displayName || plugin.name || plugin.label,
-			vendor: plugin.adapter?.vendor || "内置",
-			nodeTypes: [nodePlugin.type],
-			modes: adapterModes,
-			baseCost: plugin.adapter?.baseCost || 10,
-			estimateCost: estimateCostFn,
-			submit: dynamicSubmit,
-			poll: dynamicPoll,
-		};
-
-		import("@/services/modelAdapter").then(({ registerAdapter }) => {
-			registerAdapter(dynamicAdapter);
+	// 声明式适配器：把 JSON 里的 modes（纯数据）挂到一个网关适配器上。
+	const modes = plugin.adapter?.modes as unknown[] | undefined;
+	const cap = CAP_BY_TYPE[type];
+	if (modes && modes.length && cap) {
+		const adapterKey: string = plugin.adapter?.key || type;
+		const baseCost: number = plugin.adapter?.baseCost ?? 10;
+		const adapter = buildManagedAdapter({
+			id: adapterKey,
+			label: plugin.adapter?.displayName || nodePlugin.label,
+			capability: cap,
+			params: [],
+			cost: baseCost,
 		});
+		adapter.modes = modes as typeof adapter.modes;
+		adapter.nodeTypes = [type as (typeof adapter.nodeTypes)[number]];
+		adapter.vendor = plugin.adapter?.vendor || "管理端";
+		adapter.estimateCost = (_modeKey, params) => baseCost * (Number(params?.quantity) || 1);
+		registerAdapter(adapter);
 	}
-
-	// Compile execute method or use adapter-based execution
-	let executeFn = defaultNodeExecute;
-
-	if (plugin.adapter || hasJsAdapter) {
-		executeFn = async (nodeId: string) => {
-			const { useCanvasStore } = await import("@/store/canvasStore");
-			const { useLibraryStore } = await import("@/store/libraryStore");
-			const { useProjectStore } = await import("@/store/projectStore");
-			const { getAdapter } = await import("@/services/modelAdapter");
-
-			const store = useCanvasStore.getState();
-			const node = store.nodes[nodeId];
-			if (!node) return;
-
-			const params = node.data.params;
-			const { resolveActiveModelKey } = await import("@/services/adapters/channelAdapter");
-			const modelKey = resolveActiveModelKey(node.type, params.model, nodePlugin.defaultModel);
-			const adapter = getAdapter(modelKey);
-			if (!adapter) {
-				const errorMsg = `未找到模型适配器「${modelKey || "未选择"}」，请在节点面板中选择模型`;
-				store.setRuntime(nodeId, { status: "failed", progress: 100, error: errorMsg });
-				return;
-			}
-
-			try {
-				store.setRuntime(nodeId, { status: "queued", progress: 0 });
-
-				const { resolveMentions } = await import("@/lib/mentionResolver");
-				const resolvedPrompt = resolveMentions(nodeId, String(params.prompt || ""));
-				const inputData = transformInputFn({ prompt: resolvedPrompt, ...params, ...node.data.input || {} }, nodeId);
-				const { taskId } = await adapter.submit(inputData, params, node.type);
-				console.log(`[Blackbox] ${nodeId} → adapter=${adapter.key} model=${modelKey} taskId=${taskId}`);
-
-				store.setRuntime(nodeId, { status: "running", progress: 10 });
-
-				let pollCount = 0;
-				const maxPolls = 120;
-				const runPolling = () => {
-					setTimeout(async () => {
-						try {
-							const pollResult = await adapter.poll(taskId);
-							pollCount++;
-							console.log(`[Blackbox] ${nodeId} poll#${pollCount} status=${pollResult.status} progress=${pollResult.progress}`);
-
-							if (pollResult.status === "success") {
-								const resultUri = pollResult.resultUri || "";
-								const assetId = `asset-${taskId}`;
-								const filename = `${nodePlugin.type}_output_${Date.now()}`;
-
-								useLibraryStore.getState().addAsset({
-									id: assetId,
-									kind: nodePlugin.resultKind as Asset["kind"],
-									name: filename,
-									uri: resultUri,
-									thumbnailUri: null,
-									createdAt: new Date().toISOString(),
-									deletedByUser: false,
-									localPath: null,
-								});
-
-								const updatedNodes = { ...store.nodes };
-								if (updatedNodes[nodeId]) {
-									updatedNodes[nodeId] = {
-										...updatedNodes[nodeId],
-										data: {
-											...updatedNodes[nodeId].data,
-											resultAssetId: assetId,
-										},
-									};
-									useCanvasStore.setState({ nodes: updatedNodes });
-								}
-
-								store.setRuntime(nodeId, { status: "success", progress: 100 });
-								useProjectStore.getState().scheduleAutoSave("history");
-							} else if (pollResult.status === "failed") {
-								store.setRuntime(nodeId, { status: "failed", progress: 100, error: pollResult.error || "生成失败" });
-							} else {
-								store.setRuntime(nodeId, {
-									status: pollResult.status,
-									progress: pollResult.progress || Math.min(pollCount * 10, 95),
-								});
-								if (pollCount < maxPolls) {
-									runPolling();
-								} else {
-									store.setRuntime(nodeId, { status: "failed", progress: 100, error: "生成超时，已取消" });
-								}
-							}
-						} catch (err) {
-							console.error("[Blackbox] Polling error:", err);
-							const msg = err instanceof Error ? err.message : "轮询异常";
-							store.setRuntime(nodeId, { status: "failed", progress: 100, error: msg });
-						}
-					}, 1000);
-				};
-				runPolling();
-			} catch (err) {
-				console.error(`[Blackbox] Node ${nodeId} submit failed:`, err);
-				const msg = err instanceof Error ? err.message : "请求发送失败";
-				store.setRuntime(nodeId, { status: "failed", progress: 100, error: msg });
-			}
-		};
-	}
-
-	nodePlugin.execute = executeFn;
-	plugins.set(nodePlugin.type, nodePlugin);
 }
 
-// ── 加载并注册本地 JS 插件文件 ──
-const localPluginModules = import.meta.glob("./plugins/*.js", { eager: true });
-for (const path in localPluginModules) {
-	const mod = localPluginModules[path];
-	const pluginData = (mod as any).default || mod;
+// ── 加载内置声明式节点（JSON）──
+const builtinPluginModules = import.meta.glob("./plugins/*.json", { eager: true });
+for (const path in builtinPluginModules) {
+	const mod = builtinPluginModules[path] as any;
+	const pluginData = mod.default || mod;
 	registerSerializedPlugin(pluginData);
 }

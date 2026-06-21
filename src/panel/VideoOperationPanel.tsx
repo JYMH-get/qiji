@@ -174,7 +174,8 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 		position: "absolute",
 		left: `${nodeCenterX}px`,
 		top: `${nodeBottomY + 8}px`,
-		transform: "translate(-50%, 0)",
+		transform: "translate(-50%, 0) scale(0.9)",
+		transformOrigin: "top center",
 		zIndex: 10001,
 	};
 
@@ -309,12 +310,13 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 
 				{/* 下列 20%：可选功能区 */}
 				<div className="flex items-center justify-between gap-3 px-5 py-3 shrink-0">
-					<div className="flex items-center gap-2 overflow-x-auto [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: "none" }}>
-						{/* 模型选择 */}
-						<div className="relative">
+					<div className="flex items-center gap-2 min-w-0">
+						{/* 模型选择（置于滚动容器外，避免下拉被 overflow 裁剪） */}
+						<div className="relative shrink-0">
 							<button
 								onClick={(e) => {
 									e.stopPropagation();
+									setParamPanelExpanded(false);
 									setActivePopoverKey(activePopoverKey === "model" ? null : "model");
 								}}
 								className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-white/5 border border-white/5 text-foreground cursor-pointer whitespace-nowrap transition-colors ${
@@ -327,15 +329,15 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 							<AnimatePresence>
 								{activePopoverKey === "model" && (
 									<motion.div
-										initial={{ y: 8, opacity: 0 }}
+										initial={{ y: -8, opacity: 0 }}
 										animate={{ y: 0, opacity: 1 }}
-										exit={{ y: 8, opacity: 0 }}
+										exit={{ y: -8, opacity: 0 }}
 										transition={panelTransition}
 										style={{
 											position: "absolute",
-											bottom: "100%",
+											top: "100%",
 											left: 0,
-											marginBottom: "6px",
+											marginTop: "6px",
 											background: "rgba(22, 27, 38, 0.98)",
 											border: "1px solid rgba(255, 255, 255, 0.12)",
 											backdropFilter: "blur(20px)",
@@ -393,7 +395,7 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 															style={{
 																position: "absolute",
 																left: "100%",
-																bottom: 0,
+																top: 0,
 																marginLeft: "4px",
 																background: "rgba(22, 27, 38, 0.98)",
 																border: "1px solid rgba(255, 255, 255, 0.12)",
@@ -433,23 +435,39 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 							</AnimatePresence>
 						</div>
 
-						{/* 参数汇总胶囊 */}
-						<button
-							onClick={(e) => {
-								e.stopPropagation();
-								setParamPanelExpanded(!paramPanelExpanded);
-							}}
-							className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all cursor-pointer whitespace-nowrap ${
-								paramPanelExpanded
-									? "bg-white/15 border-white/20 text-white"
-									: "bg-white/5 border-white/5 hover:bg-white/8 text-foreground"
-							}`}
-						>
-							{paramsSummary}
-							<ChevronDown className={`h-3 w-3 text-muted-foreground transition-transform ${paramPanelExpanded ? "rotate-180" : ""}`} />
-						</button>
+						{/* 参数汇总胶囊（二级面板对齐其下方展开） */}
+						<div className="relative shrink-0">
+							<button
+								onClick={(e) => {
+									e.stopPropagation();
+									setActivePopoverKey(null);
+									setParamPanelExpanded(!paramPanelExpanded);
+								}}
+								className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all cursor-pointer whitespace-nowrap ${
+									paramPanelExpanded
+										? "bg-white/15 border-white/20 text-white"
+										: "bg-white/5 border-white/5 hover:bg-white/8 text-foreground"
+								}`}
+							>
+								{paramsSummary}
+								<ChevronDown className={`h-3 w-3 text-muted-foreground transition-transform ${paramPanelExpanded ? "rotate-180" : ""}`} />
+							</button>
+							<AnimatePresence>
+								{paramPanelExpanded && (
+									<VideoParamSecondary
+										duration={duration}
+										resolution={resolution}
+										aspectRatio={aspectRatio}
+										resolutionOptions={resolutionOptions}
+										aspectRatioOptions={aspectRatioOptions}
+										setParam={setParam}
+									/>
+								)}
+							</AnimatePresence>
+						</div>
 
-						{/* 功能动作按钮 */}
+						{/* 功能动作按钮（横向滚动，胶囊/下拉不在此容器内） */}
+						<div className="flex items-center gap-2 min-w-0 overflow-x-auto [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: "none" }}>
 						{def.actions?.map((act) => (
 							<button
 								key={act.name}
@@ -459,6 +477,7 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 								{act.label}
 							</button>
 						))}
+						</div>
 					</div>
 
 					{/* 右侧：积分 + 运行按钮 */}
@@ -478,87 +497,106 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 					</div>
 				</div>
 			</motion.div>
-
-			{/* 二级面板 (直接在下方展开) */}
-			<AnimatePresence>
-				{paramPanelExpanded && (
-					<motion.div
-						initial={{ y: -8, opacity: 0 }}
-						animate={{ y: 0, opacity: 1 }}
-						exit={{ y: -8, opacity: 0 }}
-						transition={panelTransition}
-						style={{
-							background: "rgba(22, 27, 38, 0.98)",
-							border: "1px solid rgba(255, 255, 255, 0.1)",
-							backdropFilter: "blur(20px)",
-							boxShadow: "0 12px 32px rgba(0, 0, 0, 0.5)",
-							width: "680px",
-						}}
-						className="rounded-xl p-4 text-foreground flex flex-col gap-4 mt-1.5"
-						onClick={(e) => e.stopPropagation()}
-					>
-						{/* 时长 */}
-						<div>
-							<div className="text-[11px] text-muted-foreground mb-1">时长</div>
-							<div className="text-lg font-bold text-white mb-1">{duration}s</div>
-							<input
-								type="range"
-								min={4}
-								max={15}
-								step={1}
-								value={Number(duration)}
-								onChange={(e) => setParam({ duration: Number(e.target.value) })}
-								className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-white"
-							/>
-							<div className="flex justify-between text-[8px] text-muted-foreground mt-1.5 px-0.5">
-								{[4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map((v) => (
-									<span key={v} className={v === duration ? "text-white font-medium" : ""}>{v}s</span>
-								))}
-							</div>
-						</div>
-
-						{/* 分辨率 */}
-						<div>
-							<div className="text-[11px] text-muted-foreground mb-1.5">分辨率</div>
-							<div className="flex gap-1.5">
-								{resolutionOptions.map((opt) => (
-									<button
-										key={opt}
-										onClick={() => setParam({ resolution: opt })}
-										className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
-											resolution === opt
-												? "bg-white text-black"
-												: "bg-white/5 text-muted-foreground hover:bg-white/8 hover:text-foreground"
-										}`}
-									>
-										{opt}
-									</button>
-								))}
-							</div>
-						</div>
-
-						{/* 宽高比 */}
-						<div>
-							<div className="text-[11px] text-muted-foreground mb-1.5">宽高比</div>
-							<div className="flex flex-wrap gap-1.5">
-								{aspectRatioOptions.map((opt) => (
-									<button
-										key={opt}
-										onClick={() => setParam({ aspect_ratio: opt })}
-										className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
-											aspectRatio === opt
-												? "bg-white text-black"
-												: "bg-white/5 text-muted-foreground hover:bg-white/8 hover:text-foreground"
-										}`}
-									>
-										{opt}
-									</button>
-								))}
-							</div>
-						</div>
-					</motion.div>
-				)}
-			</AnimatePresence>
 		</div>
+	);
+}
+
+/** 视频参数二级面板：绝对定位锚在「参数汇总胶囊」正下方、左对齐其按钮、向下展开 */
+function VideoParamSecondary({
+	duration,
+	resolution,
+	aspectRatio,
+	resolutionOptions,
+	aspectRatioOptions,
+	setParam,
+}: {
+	duration: number;
+	resolution: string;
+	aspectRatio: string;
+	resolutionOptions: string[];
+	aspectRatioOptions: string[];
+	setParam: (patch: Record<string, unknown>) => void;
+}) {
+	return (
+		<motion.div
+			initial={{ y: -8, opacity: 0 }}
+			animate={{ y: 0, opacity: 1 }}
+			exit={{ y: -8, opacity: 0 }}
+			transition={panelTransition}
+			style={{
+				position: "absolute",
+				top: "100%",
+				left: 0,
+				marginTop: "6px",
+				background: "rgba(22, 27, 38, 0.98)",
+				border: "1px solid rgba(255, 255, 255, 0.1)",
+				backdropFilter: "blur(20px)",
+				boxShadow: "0 12px 32px rgba(0, 0, 0, 0.5)",
+				width: "300px",
+				zIndex: 1010,
+			}}
+			className="rounded-xl p-3 text-foreground flex flex-col gap-2.5"
+			onClick={(e) => e.stopPropagation()}
+		>
+			{/* 时长 */}
+			<div>
+				<div className="text-[10px] text-muted-foreground mb-0.5">时长</div>
+				<div className="text-sm font-bold text-white mb-0.5">{duration}s</div>
+				<input
+					type="range"
+					min={4}
+					max={15}
+					step={1}
+					value={Number(duration)}
+					onChange={(e) => setParam({ duration: Number(e.target.value) })}
+					className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-white"
+				/>
+				<div className="flex justify-between text-[8px] text-muted-foreground mt-1 px-0.5">
+					{[4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map((v) => (
+						<span key={v} className={v === duration ? "text-white font-medium" : ""}>{v}</span>
+					))}
+				</div>
+			</div>
+
+			{/* 分辨率 */}
+			<div>
+				<div className="text-[10px] text-muted-foreground mb-1">分辨率</div>
+				<div className="flex flex-wrap gap-1">
+					{resolutionOptions.map((opt) => (
+						<button
+							key={opt}
+							onClick={() => setParam({ resolution: opt })}
+							className={`px-2.5 py-1 rounded-md text-[10px] font-semibold transition-all cursor-pointer ${
+								resolution === opt
+									? "bg-white text-black"
+									: "bg-white/5 text-muted-foreground hover:bg-white/8 hover:text-foreground"
+							}`}
+						>
+							{opt}
+						</button>
+					))}
+				</div>
+			</div>
+
+			{/* 宽高比 */}
+			<div>
+				<div className="text-[10px] text-muted-foreground mb-1">宽高比</div>
+				<div className="flex flex-wrap gap-1">
+					{aspectRatioOptions.map((opt) => (
+						<button
+							key={opt}
+							onClick={() => setParam({ aspect_ratio: opt })}
+							className={`px-2.5 py-1 rounded-md text-[10px] font-semibold transition-all cursor-pointer ${
+								aspectRatio === opt
+									? "bg-white text-black"
+									: "bg-white/5 text-muted-foreground hover:bg-white/8 hover:text-foreground"
+							}`}
+						>
+							{opt}
+						</button>
+					))}
+				</div>
+			</div>
+		</motion.div>
 	);
 }

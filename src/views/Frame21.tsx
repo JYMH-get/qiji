@@ -248,15 +248,23 @@ const Frame21 = () => {
                                             style={{ cursor: "pointer" }}
                                         >
                                             <div className="frame-content-2_125">
-                                                <div id="2_126" className="Pixso-frame-2_126">
-                                                    <div id="2_127" className="Pixso-frame-2_127">
-                                                        <div id="2_128" className="stroke-wrapper-2_128">
-                                                            <div className="Pixso-rectangle-2_128"></div>
-                                                            <div className="stroke-2_128"></div>
+                                                <div id="2_126" className="Pixso-frame-2_126" style={{ overflow: "hidden", borderRadius: "12px 12px 0 0" }}>
+                                                    {proj.cover ? (
+                                                        <img
+                                                            src={proj.cover}
+                                                            alt={proj.name}
+                                                            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
+                                                        />
+                                                    ) : (
+                                                        <div id="2_127" className="Pixso-frame-2_127">
+                                                            <div id="2_128" className="stroke-wrapper-2_128">
+                                                                <div className="Pixso-rectangle-2_128"></div>
+                                                                <div className="stroke-2_128"></div>
+                                                            </div>
+                                                            <div id="2_129" className="Pixso-vector-2_129"></div>
+                                                            <div id="2_130" className="Pixso-vector-2_130"></div>
                                                         </div>
-                                                        <div id="2_129" className="Pixso-vector-2_129"></div>
-                                                        <div id="2_130" className="Pixso-vector-2_130"></div>
-                                                    </div>
+                                                    )}
                                                     <div id="2_131" className="Pixso-frame-2_131">
                                                         <div id="2_132" className="stroke-wrapper-2_132">
                                                             <div className="Pixso-frame-2_132">

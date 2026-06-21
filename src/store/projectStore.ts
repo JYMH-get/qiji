@@ -6,7 +6,7 @@ import { create } from "zustand";
 import { useCanvasStore } from "./canvasStore";
 import { useLibraryStore } from "./libraryStore";
 import { useCommitStore, createInitialCommits } from "./commitStore";
-import type { QijiProject } from "@/services/projectFile";
+import type { QijiProject, ProjectModelConfig, AssetVariantLite, VideoEpisode, StoryboardShot } from "@/services/projectFile";
 import { useSettingsStore } from "./settingsStore";
 import { initDebouncedSave, scheduleSave } from "./debouncedSave";
 
@@ -77,6 +77,8 @@ export interface RecentProject {
   path: string;
   name: string;
   openedAt: string;
+  /** 项目封面缩略图（data URL，已压缩，用于列表卡片展示） */
+  cover?: string;
 }
 
 interface ProjectState {
@@ -89,22 +91,15 @@ interface ProjectState {
   isProjectLoading: boolean;
   scriptText: string;
   visualStyle: string;
-  characters: Array<{ id: string; name: string; features: string; philosophy: string; prompt: string; image?: string }>;
-  scenes: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string }>;
-  items: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string }>;
-  organisms: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string }>;
+  coverImage: string;
+  characters: Array<{ id: string; name: string; features: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
+  scenes: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
+  items: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
+  organisms: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
   isAnalyzed: boolean;
   analysisTime: string;
-  projectModelConfig: {
-    tableText?: string;
-    tableImage?: string;
-    tableVideo?: string;
-    tableAudio?: string;
-    canvasText?: string;
-    canvasImage?: string;
-    canvasVideo?: string;
-    canvasAudio?: string;
-  };
+  episodes: VideoEpisode[];
+  projectModelConfig: ProjectModelConfig;
 
   setName: (name: string) => void;
   setSavePath: (path: string) => void;
@@ -114,18 +109,17 @@ interface ProjectState {
   removeFileRef: (fileId: string) => void;
   setScriptText: (text: string) => void;
   setVisualStyle: (style: string) => void;
+  setCoverImage: (cover: string) => void;
   setAnalysisResult: (data: { characters: any[], scenes: any[], items: any[], organisms: any[], time: string }) => void;
   updateCharacterImage: (charId: string, imageUri: string) => void;
-  setProjectModelConfig: (config: Partial<{
-    tableText?: string;
-    tableImage?: string;
-    tableVideo?: string;
-    tableAudio?: string;
-    canvasText?: string;
-    canvasImage?: string;
-    canvasVideo?: string;
-    canvasAudio?: string;
-  }>) => void;
+  setProjectModelConfig: (config: Partial<ProjectModelConfig>) => void;
+  // ── 视频/分镜 ──
+  setEpisodes: (episodes: VideoEpisode[]) => void;
+  addEpisode: (ep?: Partial<VideoEpisode>) => string;
+  updateEpisode: (id: string, patch: Partial<VideoEpisode>) => void;
+  deleteEpisode: (id: string) => void;
+  setEpisodeShots: (episodeId: string, shots: StoryboardShot[]) => void;
+  updateShot: (episodeId: string, shotId: string, patch: Partial<StoryboardShot>) => void;
 
   save: (isManual?: boolean) => Promise<void>;
   scheduleAutoSave: (tier?: "canvas" | "history" | "viewport") => void;
@@ -160,12 +154,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   fileRefs: {},
   scriptText: "",
   visualStyle: "国漫电影感",
+  coverImage: "",
   characters: [],
   scenes: [],
   items: [],
   organisms: [],
   isAnalyzed: false,
   analysisTime: "",
+  episodes: [],
   projectModelConfig: {},
 
   setName: (name) => set({ name }),
@@ -182,6 +178,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }),
   setScriptText: (scriptText) => { set({ scriptText, isDirty: true }); get().scheduleAutoSave("canvas"); },
   setVisualStyle: (visualStyle) => { set({ visualStyle, isDirty: true }); get().scheduleAutoSave("canvas"); },
+  setCoverImage: (coverImage) => { set({ coverImage, isDirty: true }); get().scheduleAutoSave("canvas"); },
   setAnalysisResult: (data) => {
     set({
       characters: data.characters,
@@ -204,6 +201,56 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   setProjectModelConfig: (config) => {
     set((s) => ({
       projectModelConfig: { ...s.projectModelConfig, ...config },
+      isDirty: true,
+    }));
+    get().scheduleAutoSave("canvas");
+  },
+
+  setEpisodes: (episodes) => {
+    set({ episodes, isDirty: true });
+    get().scheduleAutoSave("canvas");
+  },
+  addEpisode: (ep) => {
+    const id = ep?.id ?? `ep-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    set((s) => {
+      const index = ep?.index ?? s.episodes.length + 1;
+      const episode: VideoEpisode = {
+        id,
+        index,
+        title: ep?.title ?? `${String(index).padStart(3, "0")}-未命名分集`,
+        scriptText: ep?.scriptText ?? "",
+        shots: ep?.shots ?? [],
+      };
+      return { episodes: [...s.episodes, episode], isDirty: true };
+    });
+    get().scheduleAutoSave("canvas");
+    return id;
+  },
+  updateEpisode: (id, patch) => {
+    set((s) => ({
+      episodes: s.episodes.map((e) => (e.id === id ? { ...e, ...patch } : e)),
+      isDirty: true,
+    }));
+    get().scheduleAutoSave("canvas");
+  },
+  deleteEpisode: (id) => {
+    set((s) => ({ episodes: s.episodes.filter((e) => e.id !== id), isDirty: true }));
+    get().scheduleAutoSave("canvas");
+  },
+  setEpisodeShots: (episodeId, shots) => {
+    set((s) => ({
+      episodes: s.episodes.map((e) => (e.id === episodeId ? { ...e, shots } : e)),
+      isDirty: true,
+    }));
+    get().scheduleAutoSave("canvas");
+  },
+  updateShot: (episodeId, shotId, patch) => {
+    set((s) => ({
+      episodes: s.episodes.map((e) =>
+        e.id === episodeId
+          ? { ...e, shots: e.shots.map((sh) => (sh.id === shotId ? { ...sh, ...patch } : sh)) }
+          : e,
+      ),
       isDirty: true,
     }));
     get().scheduleAutoSave("canvas");
@@ -252,12 +299,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           head: targetCommitId,
           scriptText: s.scriptText,
           visualStyle: s.visualStyle,
+          coverImage: s.coverImage,
           characters: s.characters,
           scenes: s.scenes,
           items: s.items,
           organisms: s.organisms,
           isAnalyzed: s.isAnalyzed,
           analysisTime: s.analysisTime,
+          episodes: s.episodes,
           projectModelConfig: s.projectModelConfig,
         };
 
@@ -269,7 +318,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
         const recent = get().recentProjects;
         const existing = recent.findIndex((p) => p.path === savePath);
-        const entry = { path: savePath, name: s.name, openedAt: new Date().toISOString() };
+        const entry = { path: savePath, name: s.name, openedAt: new Date().toISOString(), cover: s.coverImage || undefined };
         const updated = existing >= 0
           ? [entry, ...recent.filter((_, i) => i !== existing)]
           : [entry, ...recent];
@@ -290,12 +339,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           head: targetCommitId,
           scriptText: s.scriptText,
           visualStyle: s.visualStyle,
+          coverImage: s.coverImage,
           characters: s.characters,
           scenes: s.scenes,
           items: s.items,
           organisms: s.organisms,
           isAnalyzed: s.isAnalyzed,
           analysisTime: s.analysisTime,
+          episodes: s.episodes,
           projectModelConfig: s.projectModelConfig,
         };
         const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: "application/json" });
@@ -337,12 +388,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       fileRefs: {},
       scriptText: "",
       visualStyle: "国漫电影感",
+      coverImage: "",
       characters: [],
       scenes: [],
       items: [],
       organisms: [],
       isAnalyzed: false,
       analysisTime: "",
+      episodes: [],
       projectModelConfig: {},
     });
     useCommitStore.setState({ head: "commit-init", commits: createInitialCommits() });
@@ -395,12 +448,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         isDirty: false,
         scriptText: project.scriptText || "",
         visualStyle: project.visualStyle || "国漫电影感",
+        coverImage: project.coverImage || "",
         characters: project.characters || [],
         scenes: project.scenes || [],
         items: project.items || [],
         organisms: project.organisms || [],
         isAnalyzed: project.isAnalyzed || false,
         analysisTime: project.analysisTime || "",
+        episodes: project.episodes || [],
         projectModelConfig: project.projectModelConfig || {},
       });
 
@@ -421,7 +476,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
       const recent = get().recentProjects;
       const existing = recent.findIndex((p) => p.path === path);
-      const entry = { path, name: project.name || "未命名项目", openedAt: new Date().toISOString() };
+      const entry = { path, name: project.name || "未命名项目", openedAt: new Date().toISOString(), cover: project.coverImage || undefined };
       const updated = existing >= 0
         ? [entry, ...recent.filter((_, i) => i !== existing)]
         : [entry, ...recent];
@@ -461,6 +516,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       organisms: s.organisms,
       isAnalyzed: s.isAnalyzed,
       analysisTime: s.analysisTime,
+      episodes: s.episodes,
       projectModelConfig: s.projectModelConfig,
     };
 
@@ -491,12 +547,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             isDirty: true,
             scriptText: project.scriptText || "",
             visualStyle: project.visualStyle || "国漫电影感",
+            coverImage: project.coverImage || "",
             characters: project.characters || [],
             scenes: project.scenes || [],
             items: project.items || [],
             organisms: project.organisms || [],
             isAnalyzed: project.isAnalyzed || false,
             analysisTime: project.analysisTime || "",
+            episodes: project.episodes || [],
             projectModelConfig: project.projectModelConfig || {},
           });
           useCommitStore.setState({

@@ -25,7 +25,7 @@ const EditorSidebar = ({ activeTab }: EditorSidebarProps) => {
                     <div
                         id="16_125"
                         className="Pixso-frame-16_125 cursor-pointer hover:bg-white/5 transition-colors"
-                        onClick={() => useUiStore.getState().setProjectSettingsOpen(true)}
+                        onClick={() => useUiStore.getState().setSettingsOpen(true)}
                         style={{ cursor: "pointer" }}
                     >
                         <div className="frame-content-16_125">

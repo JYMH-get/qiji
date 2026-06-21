@@ -41,13 +41,13 @@ export const presetAnimateType: Record<string, TransitionProps> = {
 export const transitionPropMap: TransitionPropMap = {
   "push": {
     "16:88_2:1_c": "slide-top",
-    "2:58_16:4_c": "slide-bottom",
-    "2:64_16:4_c": "slide-bottom"
+    "2:58_16:4_c": "fade",
+    "2:64_16:4_c": "fade"
   },
   "pop": {
     "16:88_2:1_c": "slide-bottom",
-    "2:58_16:4_c": "slide-top",
-    "2:64_16:4_c": "slide-top"
+    "2:58_16:4_c": "fade",
+    "2:64_16:4_c": "fade"
   }
 };
 

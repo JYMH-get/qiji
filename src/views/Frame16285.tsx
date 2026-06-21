@@ -3,9 +3,7 @@ import { useNavigate } from "react-router";
 import EditorHeader from "@/components/EditorHeader";
 import EditorSidebar from "@/components/EditorSidebar";
 import { useProjectStore } from "@/store/projectStore";
-import { resolveAssetModelKey } from "@/services/adapters/channelAdapter";
-import { getAdapter } from "@/services/adapters/registry";
-import { printLLMRequest, printLLMResponse } from "@/services/adapters/utils";
+import { runPurpose } from "@/services/purposeRunner";
 import "@/styles/Frame16285.css";
 
 const Frame16285 = () => {
@@ -45,52 +43,21 @@ const Frame16285 = () => {
         setIsGenerating((prev) => ({ ...prev, [charId]: true }));
 
         try {
-            const activeImageModel = resolveAssetModelKey("image", "sd-xl");
-            const adapter = getAdapter(activeImageModel);
-
-            let generatedUri = "";
-            if (adapter && activeImageModel !== "sd-xl") {
-                const submitRes = await adapter.submit(
-                    { prompt: char.prompt, _nodeId: `gen-char-${charId}-${Date.now()}` },
-                    { size: "1024x1024", quality: "standard" },
-                    "image"
-                );
-
-                let attempts = 0;
-                while (attempts < 30) {
-                    await new Promise((r) => setTimeout(r, 1000));
-                    const pollRes = await adapter.poll(submitRes.taskId);
-                    if (pollRes.status === "success") {
-                        generatedUri = pollRes.resultUri || "";
-                        break;
-                    } else if (pollRes.status === "failed") {
-                        throw new Error(pollRes.error || "生成失败");
-                    }
-                    attempts++;
-                }
-            }
-
-            if (!generatedUri) {
-                printLLMRequest(`MockImageGen:${activeImageModel}`, "SIMULATED_LOCAL_MOCK_URL", "POST", { "Content-Type": "application/json" }, { prompt: char.prompt });
-                // Fallback to high-quality Unsplash portraits
-                await new Promise((r) => setTimeout(r, 1200));
-                const mockPortraits = [
-                    "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=600",
-                    "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=600",
-                    "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=600",
-                    "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=600"
-                ];
-                const index = Math.floor(Math.random() * mockPortraits.length);
-                generatedUri = mockPortraits[index];
-                printLLMResponse(`MockImageGen:${activeImageModel}`, 200, 1200, { image: generatedUri });
-            }
+            const run = await runPurpose("asset.character.image", {
+                prompt: char.prompt,
+                params: { size: "1024x1024", quality: "standard" },
+            });
+            if (run.status === "no_model") throw new Error("未配置可用的图像模型，请先在「设置 → 模型」中选择后重试。");
+            if (run.status === "failed") throw new Error(run.error || "生成失败");
+            const generatedUri = run.resultUri;
+            if (!generatedUri) throw new Error("模型返回为空，未生成图片。");
 
             // Update image state
             useProjectStore.getState().updateCharacterImage(charId, generatedUri);
             await useProjectStore.getState().save(true);
         } catch (err) {
             console.error("Failed to generate character image:", err);
-            alert("生成形象失败，请检查网络或配置");
+            alert(`生成形象失败：${err instanceof Error ? err.message : "未知错误"}`);
         } finally {
             setIsGenerating((prev) => ({ ...prev, [charId]: false }));
         }
@@ -473,196 +440,65 @@ const Frame16285 = () => {
                                 <div style={{ display: "flex", flexDirection: "column", gap: "10px", flex: 1, overflowY: "auto", paddingRight: "4px", marginTop: "10px", width: "100%" }}>
                                     <div id="16_502" className="Pixso-frame-16_502" style={{ height: "auto", width: "100%" }}>
                                         <div className="frame-content-16_502" style={{ display: "flex", flexDirection: "row", flexWrap: "wrap", gap: "16px", height: "auto", width: "100%" }}>
-                                            {/* Preset 1 */}
-                                            <div id="16_503" className="stroke-wrapper-16_503">
-                                                <div className="Pixso-frame-16_503">
-                                                    <div className="frame-content-16_503">
-                                                        <div
-                                                            id="16_504"
-                                                            className="Pixso-frame-16_504"
-                                                            style={{
-                                                                backgroundImage: activeChar?.image ? `url(${activeChar.image})` : "none",
-                                                                backgroundSize: "cover",
-                                                                backgroundPosition: "center",
-                                                                backgroundRepeat: "no-repeat"
-                                                            }}
-                                                        >
-                                                            {!activeChar?.image && (
-                                                                <div id="16_505" className="Pixso-frame-16_505">
-                                                                    <div id="16_506" className="stroke-wrapper-16_506">
-                                                                        <div className="Pixso-rectangle-16_506"></div>
-                                                                        <div className="stroke-16_506"></div>
-                                                                    </div>
-                                                                    <div id="16_507" className="Pixso-vector-16_507"></div>
-                                                                    <div id="16_508" className="Pixso-vector-16_508"></div>
-                                                                </div>
-                                                            )}
-                                                            <div id="16_509" className="Pixso-frame-16_509">
-                                                                <div className="frame-content-16_509">
-                                                                    <p id="16_510" className="Pixso-paragraph-16_510">
-                                                                        {"默认"}
-                                                                    </p>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                        <div id="16_511" className="Pixso-frame-16_511">
-                                                            <div className="frame-content-16_511">
-                                                                <p id="16_512" className="Pixso-paragraph-16_512">
-                                                                    {activeChar ? `${activeChar.name}的形象1` : "角色形象1"}
-                                                                </p>
-                                                                <p id="16_513" className="Pixso-paragraph-16_513">
-                                                                    {activeChar 
-                                                                        ? `主要提取的长相，配以${getAttributeValue(activeChar.features, "服装", "经典服饰")}`
-                                                                        : "经典造型三视图形象..."}
-                                                                </p>
-                                                            </div>
-                                                        </div>
-                                                        
-                                                        {/* Generate Preset Image */}
-                                                        <div id="16_514" className="stroke-wrapper-16_514" style={{ cursor: "pointer" }} onClick={() => activeChar && handleGenerateImage(activeChar.id)}>
-                                                            <div className="Pixso-frame-16_514">
-                                                                <div className="frame-content-16_514">
-                                                                    <div id="16_516" className="Pixso-frame-16_516">
-                                                                        <div className="frame-content-16_516">
-                                                                            <p id="16_517" className="Pixso-paragraph-16_517">
-                                                                                {"生成"}
-                                                                            </p>
+                                            {/* 造型预设 = 真实变体；无变体则不渲染占位卡片 */}
+                                            {(activeChar?.variants ?? []).length === 0 ? (
+                                                <div style={{ width: "100%", padding: "32px 16px", textAlign: "center", color: "var(--muted-foreground)", fontSize: "12px" }}>
+                                                    {activeChar ? "暂无造型预设（变体）" : "请选择左侧角色"}
+                                                </div>
+                                            ) : (
+                                                (activeChar?.variants ?? []).map((v) => (
+                                                    <div key={v.id} className="stroke-wrapper-16_503">
+                                                        <div className="Pixso-frame-16_503">
+                                                            <div className="frame-content-16_503">
+                                                                <div
+                                                                    className="Pixso-frame-16_504"
+                                                                    style={{
+                                                                        backgroundImage: v.image ? `url(${v.image})` : "none",
+                                                                        backgroundSize: "cover",
+                                                                        backgroundPosition: "center",
+                                                                        backgroundRepeat: "no-repeat"
+                                                                    }}
+                                                                >
+                                                                    {!v.image && (
+                                                                        <div className="Pixso-frame-16_505">
+                                                                            <div className="stroke-wrapper-16_506">
+                                                                                <div className="Pixso-rectangle-16_506"></div>
+                                                                                <div className="stroke-16_506"></div>
+                                                                            </div>
+                                                                            <div className="Pixso-vector-16_507"></div>
+                                                                            <div className="Pixso-vector-16_508"></div>
+                                                                        </div>
+                                                                    )}
+                                                                    <div className="Pixso-frame-16_509">
+                                                                        <div className="frame-content-16_509">
+                                                                            <p className="Pixso-paragraph-16_510">{v.label}</p>
                                                                         </div>
                                                                     </div>
                                                                 </div>
-                                                            </div>
-                                                            <div className="stroke-16_514"></div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div className="stroke-16_503"></div>
-                                            </div>
-
-                                            {/* Preset 2 */}
-                                            <div id="16_519" className="stroke-wrapper-16_519">
-                                                <div className="Pixso-frame-16_519">
-                                                    <div className="frame-content-16_519">
-                                                        <div
-                                                            id="16_520"
-                                                            className="Pixso-frame-16_520"
-                                                            style={{
-                                                                backgroundImage: activeChar?.image ? `url(${activeChar.image})` : "none",
-                                                                backgroundSize: "cover",
-                                                                backgroundPosition: "center",
-                                                                backgroundRepeat: "no-repeat"
-                                                            }}
-                                                        >
-                                                            {!activeChar?.image && (
-                                                                <div id="16_521" className="Pixso-frame-16_521">
-                                                                    <div id="16_522" className="stroke-wrapper-16_522">
-                                                                        <div className="Pixso-rectangle-16_522"></div>
-                                                                        <div className="stroke-16_522"></div>
+                                                                <div className="Pixso-frame-16_511">
+                                                                    <div className="frame-content-16_511">
+                                                                        <p className="Pixso-paragraph-16_512">{v.name}</p>
+                                                                        <p className="Pixso-paragraph-16_513">{v.description}</p>
                                                                     </div>
-                                                                    <div id="16_523" className="Pixso-vector-16_523"></div>
-                                                                    <div id="16_524" className="Pixso-vector-16_524"></div>
                                                                 </div>
-                                                            )}
-                                                            <div id="16_525" className="Pixso-frame-16_525">
-                                                                <div className="frame-content-16_525">
-                                                                    <p id="16_526" className="Pixso-paragraph-16_526">
-                                                                        {"战斗"}
-                                                                    </p>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                        <div id="16_527" className="Pixso-frame-16_527">
-                                                            <div className="frame-content-16_527">
-                                                                <p id="16_528" className="Pixso-paragraph-16_528">
-                                                                    {activeChar ? `${activeChar.name}的形象2` : "角色形象2"}
-                                                                </p>
-                                                                <p id="16_529" className="Pixso-paragraph-16_529">
-                                                                    {activeChar 
-                                                                        ? `${activeChar.name}的备用战斗/动作防装造型描述`
-                                                                        : "备用战斗/动作防装造型描述..."}
-                                                                </p>
-                                                            </div>
-                                                        </div>
-                                                        <div id="16_530" className="stroke-wrapper-16_530" style={{ cursor: "pointer" }} onClick={() => activeChar && handleGenerateImage(activeChar.id)}>
-                                                            <div className="Pixso-frame-16_530">
-                                                                <div className="frame-content-16_530">
-                                                                    <div id="16_532" className="Pixso-frame-16_532">
-                                                                        <div className="frame-content-16_532">
-                                                                            <p id="16_533" className="Pixso-paragraph-16_533">
-                                                                                {"生成"}
-                                                                            </p>
+                                                                <div className="stroke-wrapper-16_514" style={{ cursor: "pointer" }} onClick={() => activeChar && handleGenerateImage(activeChar.id)}>
+                                                                    <div className="Pixso-frame-16_514">
+                                                                        <div className="frame-content-16_514">
+                                                                            <div className="Pixso-frame-16_516">
+                                                                                <div className="frame-content-16_516">
+                                                                                    <p className="Pixso-paragraph-16_517">{"生成"}</p>
+                                                                                </div>
+                                                                            </div>
                                                                         </div>
                                                                     </div>
+                                                                    <div className="stroke-16_514"></div>
                                                                 </div>
                                                             </div>
-                                                            <div className="stroke-16_530"></div>
                                                         </div>
+                                                        <div className="stroke-16_503"></div>
                                                     </div>
-                                                </div>
-                                                <div className="stroke-16_519"></div>
-                                            </div>
-
-                                            {/* Preset 3 */}
-                                            <div id="16_535" className="stroke-wrapper-16_535">
-                                                <div className="Pixso-frame-16_535">
-                                                    <div className="frame-content-16_535">
-                                                        <div
-                                                            id="16_536"
-                                                            className="Pixso-frame-16_536"
-                                                            style={{
-                                                                backgroundImage: activeChar?.image ? `url(${activeChar.image})` : "none",
-                                                                backgroundSize: "cover",
-                                                                backgroundPosition: "center",
-                                                                backgroundRepeat: "no-repeat"
-                                                            }}
-                                                        >
-                                                            {!activeChar?.image && (
-                                                                <div id="16_537" className="Pixso-frame-16_537">
-                                                                    <div id="16_538" className="stroke-wrapper-16_538">
-                                                                        <div className="Pixso-rectangle-16_538"></div>
-                                                                        <div className="stroke-16_538"></div>
-                                                                    </div>
-                                                                    <div id="16_539" className="Pixso-vector-16_539"></div>
-                                                                    <div id="16_540" className="Pixso-vector-16_540"></div>
-                                                                </div>
-                                                            )}
-                                                            <div id="16_541" className="Pixso-frame-16_541">
-                                                                <div className="frame-content-16_541">
-                                                                    <p id="16_542" className="Pixso-paragraph-16_542">
-                                                                        {"日常"}
-                                                                    </p>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                        <div id="16_543" className="Pixso-frame-16_543">
-                                                            <div className="frame-content-16_543">
-                                                                <p id="16_544" className="Pixso-paragraph-16_544">
-                                                                    {activeChar ? `${activeChar.name}的形象3` : "角色形象3"}
-                                                                </p>
-                                                                <p id="16_545" className="Pixso-paragraph-16_545">
-                                                                    {activeChar
-                                                                        ? `${activeChar.name}的便服日常/备用场景造型描述`
-                                                                        : "便服日常/备用场景造型描述..."}
-                                                                </p>
-                                                            </div>
-                                                        </div>
-                                                        <div id="16_546" className="stroke-wrapper-16_546" style={{ cursor: "pointer" }} onClick={() => activeChar && handleGenerateImage(activeChar.id)}>
-                                                            <div className="Pixso-frame-16_546">
-                                                                <div className="frame-content-16_546">
-                                                                    <div id="16_547" className="Pixso-frame-16_547">
-                                                                        <div className="frame-content-16_547">
-                                                                            <p id="16_548" className="Pixso-paragraph-16_548">
-                                                                                {"生成"}
-                                                                            </p>
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-                                                            </div>
-                                                            <div className="stroke-16_546"></div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div className="stroke-16_535"></div>
-                                            </div>
+                                                ))
+                                            )}
                                         </div>
                                     </div>
                                 </div>

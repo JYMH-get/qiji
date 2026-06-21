@@ -93,6 +93,8 @@ interface SettingsState {
 
   /** 切换某类节点下某个模型的选中状态 */
   toggleSelectedModel: (nodeType: string, modelId: string) => void;
+  /** 按 catalog 现存模型清理已选列表中失效的旧 id（目录更新后调用） */
+  pruneSelectedModels: (validIdsByCat: Record<string, string[]>) => void;
 
   setModelRequestConfig: (modelId: string, config: ModelRequestConfig) => void;
   addRequestTemplate: (template: RequestTemplate) => void;
@@ -184,6 +186,25 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       return { selectedModels: { ...s.selectedModels, [nodeType]: next } };
     });
     get().save();
+  },
+
+  pruneSelectedModels: (validIdsByCat) => {
+    let changed = false;
+    set((s) => {
+      const nextSelected: SelectedModels = { ...s.selectedModels };
+      for (const [cat, ids] of Object.entries(s.selectedModels)) {
+        const valid = validIdsByCat[cat];
+        if (!valid) continue; // 该类无 catalog 数据时不动（避免离线/304 误删）
+        const allow = new Set(valid);
+        const filtered = ids.filter((id) => allow.has(id));
+        if (filtered.length !== ids.length) {
+          nextSelected[cat] = filtered;
+          changed = true;
+        }
+      }
+      return changed ? { selectedModels: nextSelected } : {};
+    });
+    if (changed) get().save();
   },
 
   setModelRequestConfig: (modelId, config) => {

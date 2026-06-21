@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import type { CSSProperties } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Play, Sparkles, ChevronDown, AtSign, ChevronRight } from "lucide-react";
+import { Play, Sparkles, ChevronDown, AtSign, ChevronRight, FileText } from "lucide-react";
 import { useCanvasStore } from "@/store/canvasStore";
 import { ParamControl } from "./ParamControls";
 import { PromptComposer } from "./PromptComposer";
@@ -11,6 +11,7 @@ import { dispatchCommand } from "@/command/dispatch";
 import { getMentionSuggestions } from "@/lib/mentionResolver";
 import { getChannelModelsForNodeType, resolveActiveModelKey } from "@/services/adapters/channelAdapter";
 import { useLibraryStore } from "@/store/libraryStore";
+import { useCatalogStore } from "@/store/catalogStore";
 
 const panelTransition = { duration: 0.18 };
 
@@ -44,6 +45,13 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 	}, []);
 
 	const channelModelOptions = useMemo(() => getChannelModelsForNodeType(node?.type ?? "text"), [node]);
+
+	// 该节点类型可用的提示词模板（管理端下发，按 nodeTypes 白名单筛）
+	const catalogVersion = useCatalogStore((s) => s.catalog?.version);
+	const templateOptions = useMemo(
+		() => useCatalogStore.getState().templatesByNode(node?.type ?? "text"),
+		[node?.type, catalogVersion],
+	);
 
 	const view = useMemo(() => {
 		if (!node) return null;
@@ -105,6 +113,10 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 	if (!node || !view) return null;
 	const { def, params, adapter, modeKey, mode, cost } = view;
 	const running = runtime?.status === "running" || runtime?.status === "queued";
+
+	const selectedTemplateId = typeof params.templateId === "string" ? params.templateId : "";
+	const selectedTemplate = templateOptions.find((t) => t.id === selectedTemplateId);
+	const templateLabel = selectedTemplate?.name ?? "默认提示词";
 
 	const setParam = (patch: Record<string, unknown>) =>
 		dispatchCommand({ type: "updateNodeParams", id: nodeId, params: patch });
@@ -194,7 +206,8 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 		position: "absolute",
 		left: `${nodeCenterX}px`,
 		top: `${nodeBottomY + 8}px`,
-		transform: "translate(-50%, 0)",
+		transform: "translate(-50%, 0) scale(0.9)",
+		transformOrigin: "top center",
 		zIndex: 10001,
 	};
 
@@ -326,12 +339,13 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 
 				{/* 下列 20%：可选功能区 */}
 				<div className="flex items-center justify-between gap-3 px-5 py-3 shrink-0">
-					<div className="flex items-center gap-2 overflow-x-auto [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: "none" }}>
-						{/* 模型选择 */}
-						<div className="relative">
+					<div className="flex items-center gap-2 min-w-0">
+						{/* 模型选择（置于滚动容器外，避免上弹下拉被 overflow 裁剪） */}
+						<div className="relative shrink-0">
 							<button
 								onClick={(e) => {
 									e.stopPropagation();
+									setParamPanelExpanded(false);
 									setActivePopoverKey(activePopoverKey === "model" ? null : "model");
 								}}
 								className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-white/5 border border-white/5 text-foreground cursor-pointer whitespace-nowrap transition-colors ${
@@ -344,15 +358,15 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 							<AnimatePresence>
 								{activePopoverKey === "model" && (
 									<motion.div
-										initial={{ y: 8, opacity: 0 }}
+										initial={{ y: -8, opacity: 0 }}
 										animate={{ y: 0, opacity: 1 }}
-										exit={{ y: 8, opacity: 0 }}
+										exit={{ y: -8, opacity: 0 }}
 										transition={panelTransition}
 										style={{
 											position: "absolute",
-											bottom: "100%",
+											top: "100%",
 											left: 0,
-											marginBottom: "6px",
+											marginTop: "6px",
 											background: "rgba(22, 27, 38, 0.98)",
 											border: "1px solid rgba(255, 255, 255, 0.12)",
 											backdropFilter: "blur(20px)",
@@ -410,7 +424,7 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 															style={{
 																position: "absolute",
 																left: "100%",
-																bottom: 0,
+																top: 0,
 																marginLeft: "4px",
 																background: "rgba(22, 27, 38, 0.98)",
 																border: "1px solid rgba(255, 255, 255, 0.12)",
@@ -450,25 +464,114 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 							</AnimatePresence>
 						</div>
 
-						{/* 参数汇总胶囊 */}
-						{mode.paramsSchema.length > 0 && (
-							<button
-								onClick={(e) => {
-									e.stopPropagation();
-									setParamPanelExpanded(!paramPanelExpanded);
-								}}
-								className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all cursor-pointer whitespace-nowrap ${
-									paramPanelExpanded
-										? "bg-white/15 border-white/20 text-white"
-										: "bg-white/5 border-white/5 hover:bg-white/8 text-foreground"
-								}`}
-							>
-								{paramsSummary}
-								<ChevronDown className={`h-3 w-3 text-muted-foreground transition-transform ${paramPanelExpanded ? "rotate-180" : ""}`} />
-							</button>
+						{/* 提示词模板选择（管理端下发，按节点类型白名单筛） */}
+						{templateOptions.length > 0 && (
+							<div className="relative shrink-0">
+								<button
+									onClick={(e) => {
+										e.stopPropagation();
+										setParamPanelExpanded(false);
+										setActivePopoverKey(activePopoverKey === "template" ? null : "template");
+									}}
+									title="提示词模板"
+									className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-white/5 border border-white/5 text-foreground cursor-pointer whitespace-nowrap transition-colors ${
+										activePopoverKey === "template" ? "bg-white/10 border-white/10" : "hover:bg-white/8"
+									}`}
+								>
+									<FileText className="h-3 w-3 text-muted-foreground" />
+									{templateLabel}
+									<ChevronDown className="h-3 w-3 text-muted-foreground" />
+								</button>
+								<AnimatePresence>
+									{activePopoverKey === "template" && (
+										<motion.div
+											initial={{ y: -8, opacity: 0 }}
+											animate={{ y: 0, opacity: 1 }}
+											exit={{ y: -8, opacity: 0 }}
+											transition={panelTransition}
+											style={{
+												position: "absolute",
+												top: "100%",
+												left: 0,
+												marginTop: "6px",
+												background: "rgba(22, 27, 38, 0.98)",
+												border: "1px solid rgba(255, 255, 255, 0.12)",
+												backdropFilter: "blur(20px)",
+												boxShadow: "0 8px 32px rgba(0, 0, 0, 0.6)",
+												zIndex: 1010,
+											}}
+											className="rounded-xl overflow-visible min-w-[200px] py-1"
+											onClick={(e) => e.stopPropagation()}
+										>
+											<button
+												onClick={() => {
+													setParam({ templateId: "", purpose: "" });
+													setActivePopoverKey(null);
+												}}
+												className={`flex items-center justify-between w-full px-3.5 py-2.5 text-xs transition-colors cursor-pointer text-left ${
+													!selectedTemplateId
+														? "bg-white/10 text-white font-medium"
+														: "text-muted-foreground hover:bg-white/5 hover:text-foreground"
+												}`}
+											>
+												<span className="flex-1 pr-2">跟随默认（不指定模板）</span>
+												{!selectedTemplateId && <span className="text-green-400 text-[10px] ml-2">✓</span>}
+											</button>
+											<div className="h-[1px] bg-white/5 my-0.5" />
+											{templateOptions.map((t) => (
+												<button
+													key={t.id}
+													onClick={() => {
+														setParam({ templateId: t.id, purpose: t.purpose });
+														setActivePopoverKey(null);
+													}}
+													title={t.bodyPreview ?? ""}
+													className={`flex items-center justify-between w-full px-3.5 py-2.5 text-xs transition-colors cursor-pointer text-left ${
+														t.id === selectedTemplateId
+															? "bg-white/10 text-white"
+															: "text-muted-foreground hover:bg-white/5 hover:text-foreground"
+													}`}
+												>
+													<span className="flex-1 pr-2">
+														{t.name} <span className="text-muted-foreground text-[10px]">({t.purpose})</span>
+													</span>
+													{t.id === selectedTemplateId && <span className="text-green-400 text-[10px] ml-2">✓</span>}
+												</button>
+											))}
+										</motion.div>
+									)}
+								</AnimatePresence>
+							</div>
 						)}
 
-						{/* 功能动作按钮 */}
+						{/* 参数汇总胶囊（二级面板对齐其下方展开） */}
+						{mode.paramsSchema.length > 0 && (
+							<div className="relative shrink-0">
+								<button
+									onClick={(e) => {
+										e.stopPropagation();
+										setActivePopoverKey(null);
+										setParamPanelExpanded(!paramPanelExpanded);
+									}}
+									className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all cursor-pointer whitespace-nowrap ${
+										paramPanelExpanded
+											? "bg-white/15 border-white/20 text-white"
+											: "bg-white/5 border-white/5 hover:bg-white/8 text-foreground"
+									}`}
+								>
+									{paramsSummary}
+									<ChevronDown className={`h-3 w-3 text-muted-foreground transition-transform ${paramPanelExpanded ? "rotate-180" : ""}`} />
+								</button>
+								<AnimatePresence>
+									{paramPanelExpanded && (
+										<ParamSecondary mode={mode} params={params} setParam={setParam} />
+									)}
+								</AnimatePresence>
+							</div>
+						)}
+
+						{/* 功能动作按钮（横向滚动，胶囊/下拉不在此容器内） */}
+						<div className="flex items-center gap-2 min-w-0 overflow-x-auto [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: "none" }}>
 						{def.actions?.map((act) => (
 							<button
 								key={act.name}
@@ -478,6 +581,7 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 								{act.label}
 							</button>
 						))}
+						</div>
 					</div>
 
 					{/* 右侧：积分 + 运行按钮 */}
@@ -497,75 +601,88 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 					</div>
 				</div>
 			</motion.div>
-
-			{/* 二级面板 (直接在下方展开) */}
-			<AnimatePresence>
-				{paramPanelExpanded && mode.paramsSchema.length > 0 && (
-					<motion.div
-						initial={{ y: -8, opacity: 0 }}
-						animate={{ y: 0, opacity: 1 }}
-						exit={{ y: -8, opacity: 0 }}
-						transition={panelTransition}
-						style={{
-							background: "rgba(22, 27, 38, 0.98)",
-							border: "1px solid rgba(255, 255, 255, 0.1)",
-							backdropFilter: "blur(20px)",
-							boxShadow: "0 12px 32px rgba(0, 0, 0, 0.5)",
-							width: "680px",
-						}}
-						className="rounded-xl p-4 text-foreground flex flex-col gap-4 mt-1.5"
-						onClick={(e) => e.stopPropagation()}
-					>
-						{mode.paramsSchema.map((field) => {
-							const val = params[field.key] ?? field.default;
-							const displayVal = String(val) + (field.unit || "");
-							return (
-								<div key={field.key} className="flex flex-col gap-1.5">
-									<div className="text-[11px] text-muted-foreground font-semibold">{field.label}</div>
-									{field.type === "enum" ? (
-										<div className="flex flex-wrap gap-1.5">
-											{field.options?.map((opt) => (
-												<button
-													key={opt}
-													onClick={() => setParam({ [field.key]: opt })}
-													className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
-														val === opt
-															? "bg-white text-black font-semibold"
-															: "bg-white/5 text-muted-foreground hover:bg-white/8 hover:text-foreground"
-													}`}
-												>
-													{opt}
-												</button>
-											))}
-										</div>
-									) : field.type === "number" ? (
-										<div>
-											<div className="text-lg font-bold text-white mb-1">{displayVal}</div>
-											<input
-												type="range"
-												min={field.min ?? 0}
-												max={field.max ?? 100}
-												step={field.step ?? 1}
-												value={Number(val)}
-												onChange={(e) => setParam({ [field.key]: Number(e.target.value) })}
-												className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-white"
-											/>
-										</div>
-									) : (
-										<div className="p-1 min-w-[150px]">
-											<ParamControl
-												field={field}
-												value={val}
-												onChange={(next) => setParam({ [field.key]: next })}
-											/>
-										</div>
-									)}
-								</div>
-							);
-						})}
-					</motion.div>
-				)}
-			</AnimatePresence>
 		</div>
+	);
+}
+
+/** 参数二级面板：绝对定位锚在「参数汇总胶囊」正下方、左对齐其按钮、向下展开 */
+function ParamSecondary({
+	mode,
+	params,
+	setParam,
+}: {
+	mode: { paramsSchema: any[] };
+	params: Record<string, any>;
+	setParam: (patch: Record<string, unknown>) => void;
+}) {
+	return (
+		<motion.div
+			initial={{ y: -8, opacity: 0 }}
+			animate={{ y: 0, opacity: 1 }}
+			exit={{ y: -8, opacity: 0 }}
+			transition={panelTransition}
+			style={{
+				position: "absolute",
+				top: "100%",
+				left: 0,
+				marginTop: "6px",
+				background: "rgba(22, 27, 38, 0.98)",
+				border: "1px solid rgba(255, 255, 255, 0.1)",
+				backdropFilter: "blur(20px)",
+				boxShadow: "0 12px 32px rgba(0, 0, 0, 0.5)",
+				width: "300px",
+				zIndex: 1010,
+			}}
+			className="rounded-xl p-3 text-foreground flex flex-col gap-2.5"
+			onClick={(e) => e.stopPropagation()}
+		>
+			{mode.paramsSchema.map((field) => {
+				const val = params[field.key] ?? field.default;
+				const displayVal = String(val) + (field.unit || "");
+				return (
+					<div key={field.key} className="flex flex-col gap-1">
+						<div className="text-[10px] text-muted-foreground font-semibold">{field.label}</div>
+						{field.type === "enum" ? (
+							<div className="flex flex-wrap gap-1">
+								{field.options?.map((opt: string) => (
+									<button
+										key={opt}
+										onClick={() => setParam({ [field.key]: opt })}
+										className={`px-2.5 py-1 rounded-md text-[10px] font-semibold transition-all cursor-pointer ${
+											val === opt
+												? "bg-white text-black font-semibold"
+												: "bg-white/5 text-muted-foreground hover:bg-white/8 hover:text-foreground"
+										}`}
+									>
+										{opt}
+									</button>
+								))}
+							</div>
+						) : field.type === "number" ? (
+							<div>
+								<div className="text-sm font-bold text-white mb-0.5">{displayVal}</div>
+								<input
+									type="range"
+									min={field.min ?? 0}
+									max={field.max ?? 100}
+									step={field.step ?? 1}
+									value={Number(val)}
+									onChange={(e) => setParam({ [field.key]: Number(e.target.value) })}
+									className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-white"
+								/>
+							</div>
+						) : (
+							<div className="p-0.5 min-w-[150px]">
+								<ParamControl
+									field={field}
+									value={val}
+									onChange={(next) => setParam({ [field.key]: next })}
+								/>
+							</div>
+						)}
+					</div>
+				);
+			})}
+		</motion.div>
 	);
 }

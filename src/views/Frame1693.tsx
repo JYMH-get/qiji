@@ -2,9 +2,7 @@ import { useState, useEffect } from "react";
 import EditorHeader from "@/components/EditorHeader";
 import EditorSidebar from "@/components/EditorSidebar";
 import { useProjectStore } from "@/store/projectStore";
-import { getAdapter } from "@/services/adapters/registry";
-import { resolveAssetModelKey } from "@/services/adapters/channelAdapter";
-import { printLLMRequest, printLLMResponse } from "@/services/adapters/utils";
+import { runPurpose } from "@/services/purposeRunner";
 import "@/styles/Frame1693.css";
 
 // @ts-ignore
@@ -151,51 +149,25 @@ function parseExtractedCharacters(text: string) {
     return characters;
 }
 
-// Fallback high-fidelity character generator
-function generateMockCharacters(scriptText: string, visualStyle: string) {
-    const names = ["白起", "苏晴", "林枫", "阎王", "镇国将军", "姬如雪", "黑衣人"];
-    const foundNames: string[] = [];
-    for (const name of names) {
-        if (scriptText.includes(name)) {
-            foundNames.push(name);
-        }
+// 解析「自动分集」LLM 输出（JSON 优先）；解析不到返回空，不编造
+function parseEpisodes(text: string): Array<{ title: string; scriptText: string }> {
+    const t = text.trim();
+    const jsonStr = t.startsWith("[") || t.startsWith("{")
+        ? t
+        : (() => { const a = t.indexOf("["); const b = t.lastIndexOf("]"); return a >= 0 && b > a ? t.slice(a, b + 1) : ""; })();
+    if (!jsonStr) return [];
+    try {
+        const parsed = JSON.parse(jsonStr);
+        const list = Array.isArray(parsed) ? parsed : (parsed.episodes || []);
+        return (list as any[])
+            .map((e) => ({
+                title: String(e.title || e.name || "").trim(),
+                scriptText: String(e.scriptText || e.script || e.content || e.summary || "").trim(),
+            }))
+            .filter((e) => e.title || e.scriptText);
+    } catch {
+        return [];
     }
-    if (foundNames.length === 0) {
-        foundNames.push("白起", "林枫", "苏晴");
-    }
-    
-    return foundNames.map((name, index) => {
-        let age = "20岁";
-        let role = "主角";
-        let body = "身形笔挺，高大瘦削";
-        let clothing = "黑色长袍与斗篷";
-        let color = "玄黑色与暗红";
-        let tone = "冷峻孤傲，眼神如电";
-        
-        if (name === "苏晴" || name === "姬如雪") {
-            age = "18岁";
-            role = "女主";
-            body = "体态轻盈优雅，身高一米六八";
-            clothing = "白色仙裙，水袖飘逸";
-            color = "淡月白与青莲色";
-            tone = "清冷出尘，温婉坚毅";
-        } else if (name === "阎王" || name === "黑衣人" || name === "镇国将军") {
-            age = "35岁";
-            role = "反派配角";
-            body = "铁塔般的雄伟身躯，威武霸气";
-            clothing = "重装暗金盔甲，兽面护心镜";
-            color = "墨黑与暗金";
-            tone = "狂放暴戾，霸气侧漏";
-        }
-        
-        return {
-            id: `char-${Date.now()}-${index}`,
-            name,
-            features: `性别：${role === "女主" ? "女" : "男"}\n年龄：${age}\n气质：${tone}\n身份：${role}\n服装：${clothing}\n色彩体系：${color}\n身材特征：${body}`,
-            philosophy: `结合小说中${name}作为${role}的身份定位，设计强烈的视觉标签。${clothing}能够凸显其性格与身世，色彩搭配满足AI视频生成的稳定性。`,
-            prompt: `16:9横版构图，纯白背景，影视级AI漫剧人物设定三视图，画面左侧为该角色的正面脸部特写，右侧为该角色的全身三视图，依次展示正面、侧面、背面。人物为${name}，年龄约${age}，身形${body}，整体气质${tone}。面部轮廓分明，眼神冷冽，发型利落，发色漆黑。服装为${clothing}，主色调为${color}，服装结构清晰，轮廓稳定，适合AI视频生成。正面、侧面、背面的人物发型、脸型、服装、身材比例完全一致。整体风格为${visualStyle}，角色辨识度高，造型简洁但有记忆点，电影级角色设定图，高清细节，4K画质，干净构图。不要手持任何道具，不要文字标注，不要网格线，不要分镜边框，不要水印，不要多余人物。`
-        };
-    });
 }
 
 const Frame1693 = () => {
@@ -286,67 +258,79 @@ const Frame1693 = () => {
 
             setAnalysisProgress(50);
 
-            // Resolve LLM model key & submit
-            const textModelKey = resolveAssetModelKey("text", "gpt-5.5");
-            const adapter = getAdapter(textModelKey);
-
-            let resultText = "";
-            if (adapter && textModelKey !== "gpt-5.5") {
-                // Real LLM call
-                const submitRes = await adapter.submit(
-                    { prompt: compiledPrompt, _nodeId: `analyze-script-${Date.now()}` },
-                    { temperature: 0.7, maxTokens: 4096 },
-                    "text"
-                );
-                
-                // Poll results
-                let attempts = 0;
-                while (attempts < 30) {
-                    await new Promise(r => setTimeout(r, 1000));
-                    const pollRes = await adapter.poll(submitRes.taskId);
-                    if (pollRes.status === "success") {
-                        resultText = pollRes.resultUri || "";
-                        break;
-                    } else if (pollRes.status === "failed") {
-                        throw new Error(pollRes.error || "LLM 提取失败");
+            // 经统一 purpose 管线提交 + 集中轮询（替代各 Frame 自建的 30×1s 轮询）
+            const run = await runPurpose("script.analyze", {
+                prompt: compiledPrompt,
+                params: { temperature: 0.7, maxTokens: 4096 },
+                onProgress: (progress, status) => {
+                    if (status === "running" || status === "queued") {
+                        setAnalysisProgress(Math.min(95, 50 + Math.round(progress * 0.4)));
                     }
-                    attempts++;
-                    setAnalysisProgress(Math.min(95, 50 + attempts * 2));
-                }
+                },
+            });
+
+            // 无兜底：没有可用模型 / 失败 → 直接报错，绝不给假数据
+            if (run.status === "no_model") {
+                throw new Error("未配置可用的文本模型，请先在「设置 → 模型」中选择文本模型后重试。");
+            }
+            if (run.status === "failed") {
+                throw new Error(run.error || "LLM 提取失败");
             }
 
+            const resultText = run.resultUri || "";
             setAnalysisProgress(85);
 
-            let charactersList: any[] = [];
-            if (resultText && resultText.trim()) {
-                charactersList = parseExtractedCharacters(resultText);
+            if (!resultText.trim()) {
+                throw new Error("模型返回为空，未提取到任何资产。");
             }
 
-            // Fallback or if list is empty
-            if (charactersList.length === 0) {
-                printLLMRequest(`MockInference:${textModelKey}`, "SIMULATED_LOCAL_MOCK_URL", "POST", { "Content-Type": "application/json" }, { prompt: compiledPrompt });
-                // Simulate call / generate mock characters
-                await new Promise(r => setTimeout(r, 1200));
-                charactersList = generateMockCharacters(scriptText, visualStyle);
-                printLLMResponse(`MockInference:${textModelKey}`, 200, 1200, { characters: charactersList });
-            }
+            // 仅解析模型真实输出；解析不到就为空，不编造（"没提取出来就没出来"）
+            const charactersList = parseExtractedCharacters(resultText);
 
             const now = new Date();
             const timeString = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, "0")}/${String(now.getDate()).padStart(2, "0")}   ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
-            // Save results to projectStore
+            // 落库：场景/物品/生物当前提取提示词不产出 → 留空（待结构化提取接入再填），不注入硬编码
             useProjectStore.getState().setAnalysisResult({
                 characters: charactersList,
-                scenes: [
-                    { id: "scene-1", name: "阎王殿废墟大厅", description: "狂风掠过空旷荒凉的阎王殿废墟大厅，枯叶卷起，空气中充满冷峻沉寂的质感。", philosophy: "契合小说中的阎王殿场景。", prompt: "阎王殿废墟大厅，狂风卷起枯叶" },
-                    { id: "scene-2", name: "阎王关隘", description: "中青衣壮汉立于荒凉关隘，狂风吹起斗篷，谷风萧瑟。", philosophy: "复现剧情对立感。", prompt: "荒凉的关隘，山谷风啸，微弱天光" }
-                ],
-                items: [
-                    { id: "item-1", name: "青铜古剑", description: "白起腰间佩戴的古老青铜长剑，剑柄刻有斑驳纹路，显现岁月厚重。", philosophy: "角色的重要贴身物件。", prompt: "斑驳青铜古剑，剑柄雕花纹理，古拙质感" }
-                ],
+                scenes: [],
+                items: [],
                 organisms: [],
-                time: timeString
+                time: timeString,
             });
+
+            // 自动分集（文本模型）：把剧本按剧情拆成分集，写入 episodes 供「视频」界面使用。
+            // best-effort：失败不影响已提取的角色（视频界面仍可手动「新建分集」）。
+            try {
+                const epPrompt = [
+                    "把下面的剧本按剧情节奏拆分成若干集（剧集）。",
+                    '严格只输出 JSON 数组，每个元素为 {"title":"剧集标题","scriptText":"本集完整剧本内容"}，不要输出任何额外文字。',
+                    "",
+                    "剧本：",
+                    scriptText,
+                ].join("\n");
+                const epRun = await runPurpose("script.analyze", {
+                    prompt: epPrompt,
+                    params: { temperature: 0.5, maxTokens: 4096 },
+                });
+                if (epRun.status === "success" && epRun.resultUri) {
+                    const eps = parseEpisodes(epRun.resultUri);
+                    if (eps.length > 0) {
+                        const baseTs = Date.now();
+                        useProjectStore.getState().setEpisodes(
+                            eps.map((e, i) => ({
+                                id: `ep-${baseTs}-${i}`,
+                                index: i + 1,
+                                title: `${String(i + 1).padStart(3, "0")}-${e.title || `第${i + 1}集`}`,
+                                scriptText: e.scriptText,
+                                shots: [],
+                            })),
+                        );
+                    }
+                }
+            } catch (epErr) {
+                console.warn("自动分集失败（可在视频界面手动新建分集）:", epErr);
+            }
 
             // Auto-save project file
             await useProjectStore.getState().save(true);
@@ -357,8 +341,9 @@ const Frame1693 = () => {
 
         } catch (err) {
             console.error("Script analysis failed:", err);
-            alert("剧本分析提取失败，请检查网络或配置");
+            alert(`剧本分析失败：${err instanceof Error ? err.message : "未知错误"}`);
             setIsAnalyzing(false);
+            setAnalysisProgress(0);
         }
     };
 
@@ -1098,7 +1083,7 @@ const Frame1693 = () => {
                                                                     id="16_282"
                                                                     className="Pixso-paragraph-16_282"
                                                                 >
-                                                                    {isAnalyzed ? "3" : "0"}
+                                                                    {"0"}
                                                                 </p>
                                                                 <p
                                                                     id="16_283"

@@ -6000,3 +6000,24 @@ flex-grow: 0;
 mix-blend-mode: normal;
       }
 
+
+/* 分镜提示词内的资产 @胶囊（匹配素材后富文本展示） */
+.sb-mention {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px 1px 3px;
+  margin: 0 2px;
+  border-radius: 999px;
+  background: rgba(139, 92, 246, 0.18);
+  border: 1px solid rgba(139, 92, 246, 0.45);
+  color: #c9b8ff;
+  font-size: 11px;
+  vertical-align: middle;
+}
+.sb-mention img {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  object-fit: cover;
+}

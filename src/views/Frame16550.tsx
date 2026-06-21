@@ -3,9 +3,7 @@ import { useNavigate } from "react-router";
 import EditorHeader from "@/components/EditorHeader";
 import EditorSidebar from "@/components/EditorSidebar";
 import { useProjectStore } from "@/store/projectStore";
-import { resolveAssetModelKey } from "@/services/adapters/channelAdapter";
-import { getAdapter } from "@/services/adapters/registry";
-import { printLLMRequest, printLLMResponse } from "@/services/adapters/utils";
+import { runPurpose } from "@/services/purposeRunner";
 import "@/styles/Frame16285.css"; // Reuse character configuration styles for identical layout
 
 const Frame16550 = () => {
@@ -90,45 +88,14 @@ const Frame16550 = () => {
         setIsGenerating((prev) => ({ ...prev, [sceneId]: true }));
 
         try {
-            const activeImageModel = resolveAssetModelKey("image", "sd-xl");
-            const adapter = getAdapter(activeImageModel);
-
-            let generatedUri = "";
-            if (adapter && activeImageModel !== "sd-xl") {
-                const submitRes = await adapter.submit(
-                    { prompt: scene.prompt, _nodeId: `gen-scene-${sceneId}-${Date.now()}` },
-                    { size: "1024x1024", quality: "standard" },
-                    "image"
-                );
-
-                let attempts = 0;
-                while (attempts < 30) {
-                    await new Promise((r) => setTimeout(r, 1000));
-                    const pollRes = await adapter.poll(submitRes.taskId);
-                    if (pollRes.status === "success") {
-                        generatedUri = pollRes.resultUri || "";
-                        break;
-                    } else if (pollRes.status === "failed") {
-                        throw new Error(pollRes.error || "生成失败");
-                    }
-                    attempts++;
-                }
-            }
-
-            if (!generatedUri) {
-                printLLMRequest(`MockImageGen:${activeImageModel}`, "SIMULATED_LOCAL_MOCK_URL", "POST", { "Content-Type": "application/json" }, { prompt: scene.prompt });
-                // Fallback to high-quality Unsplash scenery images
-                await new Promise((r) => setTimeout(r, 1200));
-                const mockScenes = [
-                    "https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=600", // landscape Yosemite
-                    "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?w=600", // misty forest
-                    "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=600", // sun rays forest
-                    "https://images.unsplash.com/photo-1447752875215-b2761acb3c5d?w=600"  // landscape forest
-                ];
-                const index = Math.floor(Math.random() * mockScenes.length);
-                generatedUri = mockScenes[index];
-                printLLMResponse(`MockImageGen:${activeImageModel}`, 200, 1200, { image: generatedUri });
-            }
+            const run = await runPurpose("asset.scene.image", {
+                prompt: scene.prompt,
+                params: { size: "1024x1024", quality: "standard" },
+            });
+            if (run.status === "no_model") throw new Error("未配置可用的图像模型，请先在「设置 → 模型」中选择后重试。");
+            if (run.status === "failed") throw new Error(run.error || "生成失败");
+            const generatedUri = run.resultUri;
+            if (!generatedUri) throw new Error("模型返回为空，未生成图片。");
 
             // Update image state
             useProjectStore.setState((s) => ({
@@ -138,80 +105,9 @@ const Frame16550 = () => {
             await useProjectStore.getState().save(true);
         } catch (err) {
             console.error("Failed to generate scene image:", err);
-            alert("生成形象失败，请检查网络或配置");
+            alert(`生成形象失败：${err instanceof Error ? err.message : "未知错误"}`);
         } finally {
             setIsGenerating((prev) => ({ ...prev, [sceneId]: false }));
-        }
-    };
-
-    const handleGeneratePresetImage = async (sceneId: string, stage: 'wide' | 'detail' | 'mood') => {
-        const scene = scenes.find((s) => s.id === sceneId);
-        if (!scene) return;
-
-        const key = `gen-${sceneId}-${stage}`;
-        setIsGenerating((prev) => ({ ...prev, [key]: true }));
-
-        try {
-            const activeImageModel = resolveAssetModelKey("image", "sd-xl");
-            const adapter = getAdapter(activeImageModel);
-
-            let generatedUri = "";
-            const stagePrompt = `${scene.prompt}, view: ${stage}`;
-            if (adapter && activeImageModel !== "sd-xl") {
-                const submitRes = await adapter.submit(
-                    { prompt: stagePrompt, _nodeId: `gen-scene-${sceneId}-${stage}-${Date.now()}` },
-                    { size: "1024x1024", quality: "standard" },
-                    "image"
-                );
-
-                let attempts = 0;
-                while (attempts < 30) {
-                    await new Promise((r) => setTimeout(r, 1000));
-                    const pollRes = await adapter.poll(submitRes.taskId);
-                    if (pollRes.status === "success") {
-                        generatedUri = pollRes.resultUri || "";
-                        break;
-                    } else if (pollRes.status === "failed") {
-                        throw new Error(pollRes.error || "生成失败");
-                    }
-                    attempts++;
-                }
-            }
-
-            if (!generatedUri) {
-                printLLMRequest(`MockImageGenPreset:${activeImageModel}`, "SIMULATED_LOCAL_MOCK_URL", "POST", { "Content-Type": "application/json" }, { prompt: stagePrompt });
-                await new Promise((r) => setTimeout(r, 1200));
-                const mockScenes = {
-                    wide: [
-                        "https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=600", // wide valley
-                        "https://images.unsplash.com/photo-1513836279014-a89f7a76ae86?w=600"
-                    ],
-                    detail: [
-                        "https://images.unsplash.com/photo-1501854140801-50d01698950b?w=600", // rock/grass detail
-                        "https://images.unsplash.com/photo-1447752875215-b2761acb3c5d?w=600"
-                    ],
-                    mood: [
-                        "https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?w=600", // dramatic forest fog
-                        "https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=600"
-                    ]
-                };
-                const pool = mockScenes[stage];
-                generatedUri = pool[Math.floor(Math.random() * pool.length)];
-                printLLMResponse(`MockImageGenPreset:${activeImageModel}`, 200, 1200, { image: generatedUri });
-            }
-
-            // Update preset image state dynamically
-            const imageProp = `image_${stage}`;
-            useProjectStore.setState((s) => ({
-                scenes: s.scenes.map((sc) => sc.id === sceneId ? { ...sc, [imageProp]: generatedUri } : sc),
-                isDirty: true
-            }));
-            await useProjectStore.getState().save(true);
-        } catch (err) {
-            console.error(`Failed to generate preset ${stage} image:`, err);
-            alert("生成预设形象失败");
-        } finally {
-            setIsGenerating((prev) => ({ ...prev, [key]: false }));
         }
     };
 
@@ -655,190 +551,65 @@ const Frame16550 = () => {
                                 <div style={{ display: "flex", flexDirection: "column", gap: "10px", flex: 1, overflowY: "auto", paddingRight: "4px", marginTop: "10px", width: "100%" }}>
                                     <div id="16_502" className="Pixso-frame-16_502" style={{ height: "auto", width: "100%" }}>
                                         <div className="frame-content-16_502" style={{ display: "flex", flexDirection: "row", flexWrap: "wrap", gap: "16px", height: "auto", width: "100%" }}>
-                                            
-                                            {/* Preset 1: Wide Panorama */}
-                                            <div id="16_503" className="stroke-wrapper-16_503">
-                                                <div className="Pixso-frame-16_503">
-                                                    <div className="frame-content-16_503">
-                                                        <div
-                                                            id="16_504"
-                                                            className="Pixso-frame-16_504"
-                                                            style={{
-                                                                backgroundImage: activeScene && (activeScene as any).image_wide ? `url(${(activeScene as any).image_wide})` : "none",
-                                                                backgroundSize: "cover",
-                                                                backgroundPosition: "center",
-                                                                backgroundRepeat: "no-repeat"
-                                                            }}
-                                                        >
-                                                            {!activeScene || !(activeScene as any).image_wide ? (
-                                                                <div id="16_505" className="Pixso-frame-16_505">
-                                                                    <div id="16_506" className="stroke-wrapper-16_506">
-                                                                        <div className="Pixso-rectangle-16_506"></div>
-                                                                        <div className="stroke-16_506"></div>
-                                                                    </div>
-                                                                    <div id="16_507" className="Pixso-vector-16_507"></div>
-                                                                    <div id="16_508" className="Pixso-vector-16_508"></div>
-                                                                </div>
-                                                            ) : null}
-                                                            <div id="16_509" className="Pixso-frame-16_509">
-                                                                <div className="frame-content-16_509">
-                                                                    <p id="16_510" className="Pixso-paragraph-16_510">
-                                                                        {"全景"}
-                                                                    </p>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                        <div id="16_511" className="Pixso-frame-16_511">
-                                                            <div className="frame-content-16_511">
-                                                                <p id="16_512" className="Pixso-paragraph-16_512">
-                                                                    {activeScene ? `${activeScene.name}全景` : "场景全景"}
-                                                                </p>
-                                                                <p id="16_513" className="Pixso-paragraph-16_513">
-                                                                    {"全景鸟瞰/远景宏大场面描述"}
-                                                                </p>
-                                                            </div>
-                                                        </div>
-                                                        <div id="16_514" className="stroke-wrapper-16_514" style={{ cursor: "pointer" }} onClick={() => activeScene && handleGeneratePresetImage(activeScene.id, 'wide')}>
-                                                            <div className="Pixso-frame-16_514">
-                                                                <div className="frame-content-16_514">
-                                                                    <div id="16_516" className="Pixso-frame-16_516">
-                                                                        <div className="frame-content-16_516">
-                                                                            <p id="16_517" className="Pixso-paragraph-16_517">
-                                                                                {isGenerating[`gen-${activeScene?.id}-wide`] ? "生成中" : "生成"}
-                                                                            </p>
+                                            {/* 造型预设 = 真实变体；无变体则不渲染占位卡片 */}
+                                            {(activeScene?.variants ?? []).length === 0 ? (
+                                                <div style={{ width: "100%", padding: "32px 16px", textAlign: "center", color: "var(--muted-foreground)", fontSize: "12px" }}>
+                                                    {activeScene ? "暂无造型预设（变体）" : "请选择左侧场景"}
+                                                </div>
+                                            ) : (
+                                                (activeScene?.variants ?? []).map((v) => (
+                                                    <div key={v.id} className="stroke-wrapper-16_503">
+                                                        <div className="Pixso-frame-16_503">
+                                                            <div className="frame-content-16_503">
+                                                                <div
+                                                                    className="Pixso-frame-16_504"
+                                                                    style={{
+                                                                        backgroundImage: v.image ? `url(${v.image})` : "none",
+                                                                        backgroundSize: "cover",
+                                                                        backgroundPosition: "center",
+                                                                        backgroundRepeat: "no-repeat"
+                                                                    }}
+                                                                >
+                                                                    {!v.image && (
+                                                                        <div className="Pixso-frame-16_505">
+                                                                            <div className="stroke-wrapper-16_506">
+                                                                                <div className="Pixso-rectangle-16_506"></div>
+                                                                                <div className="stroke-16_506"></div>
+                                                                            </div>
+                                                                            <div className="Pixso-vector-16_507"></div>
+                                                                            <div className="Pixso-vector-16_508"></div>
+                                                                        </div>
+                                                                    )}
+                                                                    <div className="Pixso-frame-16_509">
+                                                                        <div className="frame-content-16_509">
+                                                                            <p className="Pixso-paragraph-16_510">{v.label}</p>
                                                                         </div>
                                                                     </div>
                                                                 </div>
-                                                            </div>
-                                                            <div className="stroke-16_514"></div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div className="stroke-16_503"></div>
-                                            </div>
-
-                                            {/* Preset 2: Close-up Detail */}
-                                            <div id="16_519" className="stroke-wrapper-16_519">
-                                                <div className="Pixso-frame-16_519">
-                                                    <div className="frame-content-16_519">
-                                                        <div
-                                                            id="16_520"
-                                                            className="Pixso-frame-16_520"
-                                                            style={{
-                                                                backgroundImage: activeScene && (activeScene as any).image_detail ? `url(${(activeScene as any).image_detail})` : "none",
-                                                                backgroundSize: "cover",
-                                                                backgroundPosition: "center",
-                                                                backgroundRepeat: "no-repeat"
-                                                            }}
-                                                        >
-                                                            {!activeScene || !(activeScene as any).image_detail ? (
-                                                                <div id="16_521" className="Pixso-frame-16_521">
-                                                                    <div id="16_522" className="stroke-wrapper-16_522">
-                                                                        <div className="Pixso-rectangle-16_522"></div>
-                                                                        <div className="stroke-16_522"></div>
+                                                                <div className="Pixso-frame-16_511">
+                                                                    <div className="frame-content-16_511">
+                                                                        <p className="Pixso-paragraph-16_512">{v.name}</p>
+                                                                        <p className="Pixso-paragraph-16_513">{v.description}</p>
                                                                     </div>
-                                                                    <div id="16_523" className="Pixso-vector-16_523"></div>
-                                                                    <div id="16_524" className="Pixso-vector-16_524"></div>
                                                                 </div>
-                                                            ) : null}
-                                                            <div id="16_525" className="Pixso-frame-16_525">
-                                                                <div className="frame-content-16_525">
-                                                                    <p id="16_526" className="Pixso-paragraph-16_526">
-                                                                        {"特写"}
-                                                                    </p>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                        <div id="16_527" className="Pixso-frame-16_527">
-                                                            <div className="frame-content-16_527">
-                                                                <p id="16_528" className="Pixso-paragraph-16_528">
-                                                                    {activeScene ? `${activeScene.name}特写` : "场景特写"}
-                                                                </p>
-                                                                <p id="16_529" className="Pixso-paragraph-16_529">
-                                                                    {"细节材质/关键物件近景描述"}
-                                                                </p>
-                                                            </div>
-                                                        </div>
-                                                        <div id="16_530" className="stroke-wrapper-16_530" style={{ cursor: "pointer" }} onClick={() => activeScene && handleGeneratePresetImage(activeScene.id, 'detail')}>
-                                                            <div className="Pixso-frame-16_530">
-                                                                <div className="frame-content-16_530">
-                                                                    <div id="16_532" className="Pixso-frame-16_532">
-                                                                        <div className="frame-content-16_532">
-                                                                            <p id="16_533" className="Pixso-paragraph-16_533">
-                                                                                {isGenerating[`gen-${activeScene?.id}-detail`] ? "生成中" : "生成"}
-                                                                            </p>
+                                                                <div className="stroke-wrapper-16_514" style={{ cursor: "pointer" }} onClick={() => activeScene && handleGenerateImage(activeScene.id)}>
+                                                                    <div className="Pixso-frame-16_514">
+                                                                        <div className="frame-content-16_514">
+                                                                            <div className="Pixso-frame-16_516">
+                                                                                <div className="frame-content-16_516">
+                                                                                    <p className="Pixso-paragraph-16_517">{"生成"}</p>
+                                                                                </div>
+                                                                            </div>
                                                                         </div>
                                                                     </div>
+                                                                    <div className="stroke-16_514"></div>
                                                                 </div>
                                                             </div>
-                                                            <div className="stroke-16_530"></div>
                                                         </div>
+                                                        <div className="stroke-16_503"></div>
                                                     </div>
-                                                </div>
-                                                <div className="stroke-16_519"></div>
-                                            </div>
-
-                                            {/* Preset 3: Mood / Atmosphere */}
-                                            <div id="16_535" className="stroke-wrapper-16_535">
-                                                <div className="Pixso-frame-16_535">
-                                                    <div className="frame-content-16_535">
-                                                        <div
-                                                            id="16_536"
-                                                            className="Pixso-frame-16_536"
-                                                            style={{
-                                                                backgroundImage: activeScene && (activeScene as any).image_mood ? `url(${(activeScene as any).image_mood})` : "none",
-                                                                backgroundSize: "cover",
-                                                                backgroundPosition: "center",
-                                                                backgroundRepeat: "no-repeat"
-                                                            }}
-                                                        >
-                                                            {!activeScene || !(activeScene as any).image_mood ? (
-                                                                <div id="16_537" className="Pixso-frame-16_537">
-                                                                    <div id="16_538" className="stroke-wrapper-16_538">
-                                                                        <div className="Pixso-rectangle-16_538"></div>
-                                                                        <div className="stroke-16_538"></div>
-                                                                    </div>
-                                                                    <div id="16_539" className="Pixso-vector-16_539"></div>
-                                                                    <div id="16_540" className="Pixso-vector-16_540"></div>
-                                                                </div>
-                                                            ) : null}
-                                                            <div id="16_541" className="Pixso-frame-16_541">
-                                                                <div className="frame-content-16_541">
-                                                                    <p id="16_542" className="Pixso-paragraph-16_542">
-                                                                        {"氛围"}
-                                                                    </p>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                        <div id="16_543" className="Pixso-frame-16_543">
-                                                            <div className="frame-content-16_543">
-                                                                <p id="16_544" className="Pixso-paragraph-16_544">
-                                                                    {activeScene ? `${activeScene.name}氛围` : "场景氛围"}
-                                                                </p>
-                                                                <p id="16_545" className="Pixso-paragraph-16_545">
-                                                                    {"特定光照/雾气/天气氛围渲染描述"}
-                                                                </p>
-                                                            </div>
-                                                        </div>
-                                                        <div id="16_546" className="stroke-wrapper-16_546" style={{ cursor: "pointer" }} onClick={() => activeScene && handleGeneratePresetImage(activeScene.id, 'mood')}>
-                                                            <div className="Pixso-frame-16_546">
-                                                                <div className="frame-content-16_546">
-                                                                    <div id="16_547" className="Pixso-frame-16_547">
-                                                                        <div className="frame-content-16_547">
-                                                                            <p id="16_548" className="Pixso-paragraph-16_548">
-                                                                                {isGenerating[`gen-${activeScene?.id}-mood`] ? "生成中" : "生成"}
-                                                                            </p>
-                                                                        </div>
-                                                                    </div>
-                                                                </div>
-                                                            </div>
-                                                            <div className="stroke-16_546"></div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div className="stroke-16_535"></div>
-                                            </div>
-
+                                                ))
+                                            )}
                                         </div>
                                     </div>
                                 </div>

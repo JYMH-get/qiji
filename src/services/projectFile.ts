@@ -32,6 +32,65 @@ export interface MigrationLogEntry {
   description: string;
 }
 
+/**
+ * 项目级模型配置（表格/画布单数据源双视图，模型配置同源共用一套）。
+ * 统一字段：text/image/video/audio。`table*`/`canvas*` 为旧版双套字段，仅作旧项目读取兼容。
+ */
+export interface ProjectModelConfig {
+  text?: string;
+  image?: string;
+  video?: string;
+  audio?: string;
+  /** @deprecated 旧版表格模式专用，已并入统一字段；仅兼容读取 */
+  tableText?: string;
+  /** @deprecated */ tableImage?: string;
+  /** @deprecated */ tableVideo?: string;
+  /** @deprecated */ tableAudio?: string;
+  /** @deprecated 旧版画布模式专用，已并入统一字段；仅兼容读取 */
+  canvasText?: string;
+  /** @deprecated */ canvasImage?: string;
+  /** @deprecated */ canvasVideo?: string;
+  /** @deprecated */ canvasAudio?: string;
+}
+
+/** 资产造型预设/变体（UI 友好的轻量版；无变体时界面不显示占位卡片） */
+export interface AssetVariantLite {
+  id: string;
+  label: string;       // 徽标，如 默认/战斗/日常、全景/特写/氛围
+  name: string;        // 标题
+  description: string;
+  image?: string;
+}
+
+/** 分镜的垫素材（来自资产库或本地上传） */
+export interface ShotMaterial {
+  id: string;
+  assetId?: string;                                       // 资产库 id（本地上传则空）
+  kind: "character" | "scene" | "creature" | "prop" | "local";
+  name: string;
+  uri: string;                                            // 缩略图/图片
+}
+
+/** 单个分镜 */
+export interface StoryboardShot {
+  id: string;
+  index: number;
+  title: string;            // 分镜1
+  prompt: string;           // 画面/动态视频提示词
+  materials: ShotMaterial[];
+  storyboardUri?: string;   // 故事板图片（图像模型产出）
+  videoUri?: string;        // 视频结果（视频模型产出）
+}
+
+/** 分集（视频界面左侧列表项），含本集剧本与其分镜 */
+export interface VideoEpisode {
+  id: string;
+  index: number;
+  title: string;            // 001-剧集标题
+  scriptText: string;       // 本集剧本内容
+  shots: StoryboardShot[];
+}
+
 export interface QijiProject {
   version: string;
   name: string;
@@ -43,22 +102,17 @@ export interface QijiProject {
   migrationLog?: MigrationLogEntry[];
   scriptText?: string;
   visualStyle?: string;
-  characters?: Array<{ id: string; name: string; features: string; philosophy: string; prompt: string; image?: string }>;
-  scenes?: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string }>;
-  items?: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string }>;
-  organisms?: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string }>;
+  /** 项目封面缩略图（data URL，新建时上传，已压缩） */
+  coverImage?: string;
+  characters?: Array<{ id: string; name: string; features: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
+  scenes?: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
+  items?: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
+  organisms?: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
   isAnalyzed?: boolean;
   analysisTime?: string;
-  projectModelConfig?: {
-    tableText?: string;
-    tableImage?: string;
-    tableVideo?: string;
-    tableAudio?: string;
-    canvasText?: string;
-    canvasImage?: string;
-    canvasVideo?: string;
-    canvasAudio?: string;
-  };
+  /** 视频/分镜：分集列表（每集含本集剧本 + 分镜 + 垫素材 + 故事板/视频产物） */
+  episodes?: VideoEpisode[];
+  projectModelConfig?: ProjectModelConfig;
   /** Legacy v1.x 顶层字段（兼容旧格式读取） */
   nodes?: Record<string, CanvasNode>;
   edges?: Record<string, CanvasEdge>;
