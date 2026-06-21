@@ -8,6 +8,7 @@
  * 素材引用：image_url（整体参考）+ extra_images/videos/audios（需在 prompt 用 @tag 引用才生效），均须公网 HTTPS。
  */
 import { buildPrompt } from "./prompt.ts";
+import { maskToken } from "../store/logs.ts";
 import type { Upstream } from "./upstream.ts";
 import type { OnUpstream } from "./openai.ts";
 import type { GenerateRequest, AssetRef } from "../contract.ts";
@@ -46,7 +47,7 @@ export async function submitJianmengVideo(req: GenerateRequest, up: Upstream, on
 	if (vids.length) body.extra_videos = vids.slice(0, 3);
 	if (auds.length) body.extra_audios = auds.slice(0, 3);
 
-	onUpstream?.({ request: { url: `${up.baseUrl}/v1/videos`, body } });
+	onUpstream?.({ request: { url: `${up.baseUrl}/v1/videos`, method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${maskToken(up.apiKey)}` }, body } });
 
 	let resp: Response;
 	try {

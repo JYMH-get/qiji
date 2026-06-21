@@ -29,6 +29,23 @@ export const PURPOSE_LABELS: Record<string, string> = {
 };
 const purposeLabel = (p?: string) => (p ? PURPOSE_LABELS[p] || p : "");
 
+/** 把敏感令牌脱敏为 "Bearer ****1234"（保留协议与末 4 位） */
+export function maskToken(s: string): string {
+	const m = String(s).match(/^(Bearer|Basic)\s+(.*)$/i);
+	const tok = m ? m[2] : String(s);
+	const tail = tok.length > 4 ? tok.slice(-4) : "";
+	return (m ? m[1] + " " : "") + "****" + tail;
+}
+const SENSITIVE_HEADERS = new Set(["authorization", "x-api-key", "x-goog-api-key", "api-key", "cookie"]);
+function maskHeaders(h: unknown): Record<string, unknown> | undefined {
+	if (!h || typeof h !== "object") return undefined;
+	const out: Record<string, unknown> = {};
+	for (const [k, v] of Object.entries(h as Record<string, unknown>)) {
+		out[k] = SENSITIVE_HEADERS.has(k.toLowerCase()) ? maskToken(String(v)) : v;
+	}
+	return out;
+}
+
 export interface LogEntry {
 	id: string;
 	clientTaskId?: string;
@@ -42,7 +59,8 @@ export interface LogEntry {
 	startedAt: string;
 	finishedAt?: string;
 	durationMs?: number;
-	request: unknown; // ① 用户 → 管理端 的完整请求（截断 base64）
+	requestHeaders?: unknown; // ① 用户 → 管理端 的请求头（敏感值已脱敏）
+	request: unknown; // ① 用户 → 管理端 的完整请求体（截断 base64）
 	response?: unknown; // ② 管理端 → 用户 的完整响应 / 结果（截断 base64）
 	upstreamRequest?: unknown; // ③ 管理端 → 上游(网关/第三方) 的请求体
 	upstreamResponse?: unknown; // ④ 上游 → 管理端 的原始响应
@@ -57,6 +75,7 @@ export function startLog(input: {
 	userId?: string;
 	userName?: string;
 	cost?: number;
+	headers?: unknown;
 }): LogEntry {
 	const entry: LogEntry = {
 		id: genId("log"),
@@ -68,6 +87,7 @@ export function startLog(input: {
 		cost: input.cost,
 		status: "running",
 		startedAt: new Date().toISOString(),
+		requestHeaders: maskHeaders(input.headers),
 		request: truncateBase64(input.req),
 	};
 	logs.push(entry);

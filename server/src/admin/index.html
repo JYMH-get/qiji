@@ -36,9 +36,13 @@
   label.f { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: #9aa0ad; }
   .muted { color: #6b7280; }
   dialog { background: #14161c; color: #e6e6ea; border: 1px solid #2c2f3a; border-radius: 12px; max-width: 880px; width: 92vw; padding: 0; }
+  dialog.wide { max-width: 1440px; }
   dialog header { position: static; border-radius: 12px 12px 0 0; }
-  dialog .body { padding: 16px; max-height: 70vh; overflow: auto; }
+  dialog .body { padding: 16px; max-height: 78vh; overflow: auto; }
   pre { background: #0c0d11; border: 1px solid #1f2129; border-radius: 8px; padding: 10px; overflow: auto; font-size: 11.5px; }
+  /* 请求记录详情：两行两列（①③ 请求 / ②④ 响应） */
+  .loggrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .logcell pre { margin: 4px 0 0; max-height: 34vh; white-space: pre-wrap; word-break: break-all; }
   .hide { display: none !important; }
   #login { max-width: 360px; margin: 80px auto; }
 </style>
@@ -251,6 +255,7 @@ function editBody(id){
   $("#dlgBody").innerHTML = `<div class="muted" style="margin-bottom:6px">支持 {{变量}} 占位；变量(逗号分隔)：<input id="eb_vars" value="${esc((t.variables||[]).join(','))}" style="width:55%"/></div>
     <textarea id="eb_body" style="width:100%;height:300px;font-family:monospace;box-sizing:border-box">${esc(t.body||'')}</textarea>
     <div class="row" style="margin-top:8px"><button class="primary" onclick="saveBody('${id}')">保存正文</button><span class="muted">链式注入变量名：</span><input id="eb_pipe" value="${esc(t.chainPipeVar||'')}" placeholder="上一步" style="width:120px"/></div>`;
+  dlg.classList.remove("wide");
   dlg.showModal();
 }
 async function saveBody(id){
@@ -297,6 +302,7 @@ function renderImageDlg(id){
 function editImages(id){
   $("#dlgTitle").textContent = "参考图 · " + id;
   renderImageDlg(id);
+  dlg.classList.remove("wide");
   dlg.showModal();
 }
 async function removeImage(id, idx){
@@ -420,10 +426,13 @@ async function showLog(id){
       <div><div class="muted">taskId</div><span class="mono">${esc(l.taskId||"—")}</span></div>
     </div>
     ${l.error?`<div class="bad" style="margin-bottom:8px">错误：${esc(l.error)}</div>`:""}
-    <div class="muted">① 用户 → 管理端 请求</div><pre>${esc(JSON.stringify(l.request,null,2))}</pre>
-    <div class="muted">② 管理端 → 用户 响应 / 结果</div><pre>${esc(JSON.stringify(l.response,null,2))}</pre>
-    <div class="muted">③ 管理端 → 上游(网关/第三方) 请求</div><pre>${l.upstreamRequest!==undefined?esc(JSON.stringify(l.upstreamRequest,null,2)):"（无：echo/stub 或上游未发起）"}</pre>
-    <div class="muted">④ 上游 → 管理端 原始响应</div><pre>${l.upstreamResponse!==undefined?esc(JSON.stringify(l.upstreamResponse,null,2)):"（无）"}</pre>`;
+    <div class="loggrid">
+      <div class="logcell"><div class="muted">① 用户 → 管理端 请求（含请求头）</div><pre>${esc(JSON.stringify({ headers: l.requestHeaders, body: l.request }, null, 2))}</pre></div>
+      <div class="logcell"><div class="muted">③ 管理端 → 上游(网关/第三方) 请求（含请求头）</div><pre>${l.upstreamRequest!==undefined?esc(JSON.stringify(l.upstreamRequest,null,2)):"（无：echo/stub 或上游未发起）"}</pre></div>
+      <div class="logcell"><div class="muted">② 管理端 → 用户 响应 / 结果</div><pre>${esc(JSON.stringify(l.response,null,2))}</pre></div>
+      <div class="logcell"><div class="muted">④ 上游 → 管理端 原始响应</div><pre>${l.upstreamResponse!==undefined?esc(JSON.stringify(l.upstreamResponse,null,2)):"（无）"}</pre></div>
+    </div>`;
+  $("#dlg").classList.add("wide");
   $("#dlg").showModal();
 }
 

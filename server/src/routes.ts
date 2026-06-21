@@ -92,7 +92,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 				});
 			}
 
-			const log = startLog({ req: body, userId: req.user?.id, userName: req.user?.name, cost });
+			const log = startLog({ req: body, userId: req.user?.id, userName: req.user?.name, cost, headers: req.headers });
 			const r = await dispatchGenerate(body, log.id);
 
 			// 扣费：异步已受理 / 同步成功才扣；同步失败不扣
@@ -129,7 +129,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 					);
 					continue;
 				}
-				const log = startLog({ req: t, userId: req.user?.id, userName: req.user?.name, cost });
+				const log = startLog({ req: t, userId: req.user?.id, userName: req.user?.name, cost, headers: req.headers });
 				const r = await dispatchGenerate(t, log.id);
 				if (cost > 0 && !(r.kind === "sync" && r.status === "failed")) chargeCredits(user.id, cost);
 				if (r.kind === "async") taskIds.push(r.taskId);

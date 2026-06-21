@@ -5,6 +5,7 @@
  * 并在 output.format==="json" 时启用结构化输出（json_schema）+ 解析校验。
  */
 import { getSchema } from "../catalog.ts";
+import { maskToken } from "../store/logs.ts";
 import { buildPrompt } from "./prompt.ts";
 import type { Upstream } from "./upstream.ts";
 import type { GenerateRequest, TaskState } from "../contract.ts";
@@ -57,7 +58,7 @@ export async function translateOpenAIText(req: GenerateRequest, up: Upstream, on
 		}
 	}
 
-	onUpstream?.({ request: { url: `${up.baseUrl}/v1/chat/completions`, body } });
+	onUpstream?.({ request: { url: `${up.baseUrl}/v1/chat/completions`, method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${maskToken(up.apiKey)}` }, body } });
 
 	// 空闲超时控制器：每收到一个 chunk 就重置计时；只有长时间无数据才中断
 	const ctrl = new AbortController();
@@ -154,7 +155,7 @@ export async function translateOpenAIImage(req: GenerateRequest, up: Upstream, o
 	// 图生图：参考图作为 images[].image_url（平台会中转到海外对象存储再发上游）
 	if (inputImages.length) body.images = inputImages.map((u) => ({ image_url: u }));
 
-	onUpstream?.({ request: { url: `${up.baseUrl}/v1/images/generations`, body } });
+	onUpstream?.({ request: { url: `${up.baseUrl}/v1/images/generations`, method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${maskToken(up.apiKey)}` }, body } });
 
 	let resp: Response;
 	try {

@@ -10,6 +10,7 @@
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { getSchema } from "../catalog.ts";
+import { maskToken } from "../store/logs.ts";
 import { buildPrompt } from "./prompt.ts";
 import type { SyncResult, OnDelta, OnUpstream } from "./openai.ts";
 import type { Upstream } from "./upstream.ts";
@@ -34,7 +35,7 @@ export async function translateAnthropicText(req: GenerateRequest, up: Upstream,
 	const model = up.upstreamModel;
 	const prompt = buildPrompt(req);
 	const wantJson = req.output?.format === "json";
-	onUpstream?.({ request: { baseUrl: up.baseUrl, model, wantJson, schemaId: req.output?.schemaId, messages: [{ role: "user", content: prompt }] } });
+	onUpstream?.({ request: { baseUrl: up.baseUrl, method: "POST(SDK messages.stream)", headers: { Authorization: `Bearer ${maskToken(up.apiKey)}`, "anthropic-version": "(SDK 默认)" }, model, wantJson, schemaId: req.output?.schemaId, messages: [{ role: "user", content: prompt }] } });
 
 	try {
 		// 结构化输出：tool-use 强制（流式累积后取 finalMessage 的 tool_use）

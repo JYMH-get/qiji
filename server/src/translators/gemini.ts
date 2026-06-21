@@ -5,6 +5,7 @@
  * 响应从 candidates[].content.parts[].inlineData 取 base64 图像字节。
  */
 import { buildPrompt } from "./prompt.ts";
+import { maskToken } from "../store/logs.ts";
 import type { ImageResult, OnUpstream } from "./openai.ts";
 import type { Upstream } from "./upstream.ts";
 import type { GenerateRequest } from "../contract.ts";
@@ -47,7 +48,7 @@ export async function translateGeminiImage(req: GenerateRequest, up: Upstream, o
 		},
 	};
 
-	onUpstream?.({ request: { url, hasBaseImage: !!baseImg, prompt, generationConfig: body.generationConfig } });
+	onUpstream?.({ request: { url, method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${maskToken(up.apiKey)}` }, hasBaseImage: !!baseImg, prompt, generationConfig: body.generationConfig } });
 
 	let resp: Response;
 	try {
