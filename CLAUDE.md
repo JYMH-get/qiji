@@ -303,8 +303,43 @@ POST /v1/assets  (multipart 或 base64)  → { id, url }
 - **休眠字段**：`settingsStore.channels/apiKeys`、`projectFile.ts` 的 `table*/canvas*` 旧模型配置键（仅向后兼容读）。
 - **未实现**：`registry.unregister()`（下架模型 adapter 不主动注销）；server 日志无过滤查询；链式仅两段（B 不再链）。
 
+## 12. 用户数据结构 v3（多项目 + OSS）✅锁定 2026-06-21 第36轮
+
+> 决策：①项目+素材接 OSS 云备份(管理端持有素材 id)；②文件/资产按**类型拆分**保存、id 按类型前缀；③id 一律**管理端分配**，用户上传也走「直传 OSS→回执管理端关联」；④快照分离；⑤仅一次性迁移现有用户数据(无新用户，不做通用转接器)。**外部依赖**：OSS 选型与凭据待用户提供（见 12.6）。
+
+### 12.1 层级与布局（本地镜像 + OSS 权威备份，同构）
+```
+<userDataDir>/user.json                         # 用户档案+偏好+连接
+<userDataDir>/projects.json                     # 项目清单（轻元数据，仪表盘只读它）
+<userDataDir>/projects/<projectId>/
+  project.json                                  # 项目内容(meta+content+资产实体，存 id 引用)
+  assets.json                                   # 二进制资产台账 AssetRecord[]
+  assets/{character,scene,creature,prop,crowd,video,audio}/<assetId>.<ext>
+  history/<commitId>.json                       # 分离快照(project.json 只留 head + commit 指针)
+OSS: qiji/<userId>/<projectId>/...              # 与本地同构，权威云备份
+```
+
+### 12.2 资产 id / 命名（管理端分配；按类型前缀 + 8 位；分前缀单调、永不复用）
+- 前缀↔桶：`C` 核心人物 / `A` 配角反派神明 →**character** 桶；`G` 群像→**crowd**；`M` 怪物异兽→**creature**；`S` 场景→**scene**；`P` 道具→**prop**；`video`→**video**；`audio`→**audio**。
+- 文件名 = id：`C00000123.png` / `S00000123.png` / `video00000123.mp4` / `audio00000123.mp3`。
+- 区分两个 id：实体编号 `code`(C01/C01A，**项目内**人读编号，来自资产拆分) ┃ 二进制资产 `assetId`(C00000123，**全局**)。实体的 `mainImageId`/`imageIds`/垫素材/视频 一律存 **assetId**（不存裸 URL）。
+
+### 12.3 关键实体（字段细分见对话 2.x 提案，引用一律 assetId）
+`UserProfile`(user.json) · `ProjectIndexEntry`(projects.json) · `Project`(project.json：visualBible/scriptText/modelConfig/assets{characters/crowds/scenes/creatures/props/custom}/episodes/canvas/ledger/head) · `AssetEntity`+`AssetVariant`(code/name/prompt/mainImageId/imageIds) · `AssetRecord`(assets.json：id/kind/mime/file/origin{source,serverTaskId,upstreamModel,remoteUrl,remoteExpiresAt}/sha256/deletedByUser) · `Episode`→`Shot`(materialIds/storyboardImageId/videoId)。
+
+### 12.4 流程
+- **生成**：管理端跑上游→按目标前缀分配 `{prefix}{seq}`→上传 OSS→记账→回 `{id,url}`；客户端下载本地副本。
+- **上传**：客户端向管理端要「预签名 PUT URL + 预分配 id」→**直传 OSS**→回执管理端关联（省一层中转）。
+- **解析** `resolve(assetId)`：本地文件(convertFileSrc) → OSS/远程 url(未过期) → 凭 id 向管理端重解析后落本地。
+
+### 12.5 迁移：仅一次性转换**现有用户本人**的数据（旧 `.Qiji` → v3：下载图字节、建 AssetRecord、把 `xxx.image(URL)` 改 `mainImageId`），不写通用转接器。
+
+### 12.6 待办 / 需用户提供的 OSS 信息
+provider(阿里 OSS/腾讯 COS/AWS S3/R2/MinIO/七牛…) · endpoint/region · bucket · accessKeyId/Secret(或 STS) · 读权限(公有读 or 私有+预签名 GET) · 可选 CDN/自定义域名。配置进 server env，不入库不入前端。
+
 ## 8. 变更记录
 
+- 2026-06-21 第36轮（锁定用户数据结构 v3）：见 §12。多项目(projects.json 清单 + projects/<projectId>/ 自包含) + 资产按类型拆分(7 桶) + 类型前缀 id(C/A/G/M/S/P/video/audio，管理端分配、分前缀单调永不复用) + 引用全改 assetId(不存裸 URL) + 快照分离 history/ + 项目与素材 OSS 云备份 + 用户上传直传 OSS 后回执关联。迁移仅针对现有本人数据。落地待 OSS 凭据。
 - 2026-06-21 第35轮（请求记录详情加宽 + 1324 两行两列 + 请求头）：详情弹窗 `dialog.wide`(max-width 1440px，仅日志用，模板/图弹窗 `classList.remove('wide')` 复原)；四段改 `.loggrid` 2×2 网格按 **①③/②④** 排列（上行=请求、下行=响应；左列=用户↔管理端、右列=管理端↔上游），`pre` 自动换行。请求含**请求头**：`LogEntry` 加 `requestHeaders`(① 入站头，`startLog` 收 `req.headers`)；③ 上游请求体加 `headers`(各 translator onUpstream 补 Content-Type+Authorization)。敏感头脱敏：`logs.maskToken`(Bearer ****末4) + `maskHeaders`(authorization/x-api-key/cookie 等)。两端 tsc 过。
 - 2026-06-21 第34轮（请求记录筛选改文本框+应用、补列、删分镜界面）：① 时间快捷筛选逻辑实测正确(今日27/昨日34/近三天61，对真实 logs.jsonl)——之前"未筛选"是**运行中的 server 进程未热重载**新 listLogs（重启即生效），非数据/逻辑问题。② 蓝框筛选(用户/步骤/模型)由下拉改**文本框 contains 模糊匹配 + 应用按钮**(回车亦可，带 datalist 建议)；server `listLogs` 三字段改大小写不敏感包含，步骤同时匹配中文代称与原 purpose（server 加 `PURPOSE_LABELS`）。③ 列表补全：请求时间/开始时间/结束时间/用时(秒)/用户/步骤/模型/**消耗**/状态/详情——`LogEntry` 加 `cost`，`startLog` 收 cost，routes /generate+/batch 传 model.cost（注：当前后端「请求时间」与「开始时间」同源=startedAt，无独立排队起点）。④ **物理删除分镜界面** `FrameStoryboard.tsx`(10帧 Unsplash mock) + 路由 `/frame-storyboard` + EditorSidebar「分镜」tab + TitleBar `isStoryboard` + purposeRegistry `VIEW_ROUTE.storyboard` 重指 `/frame161195`。两端 tsc + client build 过、无悬挂引用。
 - 2026-06-21 第33轮（请求记录筛选 + 步骤中文代称）：管理端请求记录加筛选——快捷时间(今日/昨日/近三天/近一周/全部，**默认今日**)+用户+步骤+模型下拉。`listLogs` 加 `from/to/userName/purpose/model` 过滤，新增 `logFacets()`(去重下拉值) + `GET /admin-api/logs/facets`(注册在 `/:id` 前)。admin 页加筛选栏(快捷按钮高亮+三下拉，改任一即重查)、空结果提示、刷新清缓存。步骤列与详情改用**中文代称**(`PURPOSE_LABELS`：剧本分析/剧本分镜/角色出图/…，原 purpose 存 title 悬浮)。server tsc 过。
