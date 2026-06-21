@@ -27,14 +27,18 @@ const GEN_COUNTS = [1, 2, 3, 4];
 const QUALITIES = ["auto", "low", "medium", "high"];
 // 比例 / 分辨率（与提示词一起进入生成请求）
 const SIZES: Array<{ v: string; label: string }> = [
-    { v: "1024x1024", label: "1024×1024 正方形" },
-    { v: "1536x1024", label: "1536×1024 横版" },
-    { v: "1024x1536", label: "1024×1536 竖版" },
-    { v: "2048x2048", label: "2048×2048 · 2K 正方形" },
-    { v: "2048x1152", label: "2048×1152 · 2K 横版" },
-    { v: "3840x2160", label: "3840×2160 · 4K 横版" },
-    { v: "2160x3840", label: "2160×3840 · 4K 竖版" },
+    { v: "1024x1024", label: "1024×1024 1：1" },
+    { v: "1536x1024", label: "1536×1024 3：2" },
+    { v: "1024x1536", label: "1024×1536 2：3" },
+    { v: "2048x2048", label: "2048×2048 1：1" },
+    { v: "2048x1152", label: "2048×1152 16：9" },
+    { v: "1152x2048", label: "1152×2048 9：16" },
+    { v: "3840x2160", label: "3840×2160 16：9" },
+    { v: "2160x3840", label: "2160×3840 9：16" },
 ];
+
+// 资产 id 类型前缀（管理端据此分配 C00000123 等）：角色 C / 群像 G / 场景 S / 生物 M / 物品 P
+const CAT_PREFIX: Record<AssetCat, string> = { characters: "C", crowds: "G", scenes: "S", organisms: "M", items: "P" };
 
 const panel: React.CSSProperties = { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8 };
 const accent = "#8b5cf6";
@@ -99,7 +103,7 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
         setBusy((p) => ({ ...p, [busyKey]: true }));
         try {
             for (let i = 0; i < count; i++) {
-                const run = await runPurpose(imagePurpose, { prompt: form.prompt, params: { size, quality } });
+                const run = await runPurpose(imagePurpose, { prompt: form.prompt, params: { size, quality, idPrefix: CAT_PREFIX[cat], assetName: form.title } });
                 if (run.status === "no_model") throw new Error("未配置可用的图像模型，请先在「设置 → 模型」中选择后重试。");
                 if (run.status === "failed") throw new Error(run.error || "生成失败");
                 if (!run.resultUri) throw new Error("模型返回为空，未生成图片。");
@@ -120,7 +124,7 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
         try {
             for (const a of assets) {
                 if (!a.prompt?.trim()) continue;
-                const run = await runPurpose(imagePurpose, { prompt: a.prompt, params: { size, quality } });
+                const run = await runPurpose(imagePurpose, { prompt: a.prompt, params: { size, quality, idPrefix: CAT_PREFIX[cat], assetName: a.name } });
                 if (run.status === "success" && run.resultUri) addAssetImage(cat, a.id, null, run.resultUri, true);
             }
             await useProjectStore.getState().save(true);

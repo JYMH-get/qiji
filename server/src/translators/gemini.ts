@@ -9,15 +9,26 @@ import { maskToken } from "../store/logs.ts";
 import type { ImageResult, OnUpstream } from "./openai.ts";
 import type { Upstream } from "./upstream.ts";
 import type { GenerateRequest } from "../contract.ts";
-import { getAsset } from "../store/assets.ts";
+import { getAsset, getAssetBytes } from "../store/assets.ts";
 
 /** 取底图(image-edit/变体图生图)：从 req.inputs.images 第一张取字节作 inlineData */
 async function baseImagePart(req: GenerateRequest): Promise<{ inlineData: { mimeType: string; data: string } } | null> {
 	const ref = req.inputs?.images?.[0];
 	if (!ref) return null;
+	// 优先按 id：内存字节(未配 OSS) → 否则取该资产的 OSS 直链
 	if (ref.id) {
+		const bytes = getAssetBytes(ref.id);
 		const rec = getAsset(ref.id);
-		if (rec) return { inlineData: { mimeType: rec.contentType, data: rec.data.toString("base64") } };
+		if (bytes) return { inlineData: { mimeType: rec?.contentType || "image/png", data: bytes.toString("base64") } };
+		if (rec?.url) {
+			try {
+				const r = await fetch(rec.url, { signal: AbortSignal.timeout(60000) });
+				if (r.ok) {
+					const buf = Buffer.from(await r.arrayBuffer());
+					return { inlineData: { mimeType: r.headers.get("content-type") || rec.contentType || "image/png", data: buf.toString("base64") } };
+				}
+			} catch { /* 取不到则退化为纯文生图 */ }
+		}
 	}
 	if (ref.url) {
 		try {

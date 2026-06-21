@@ -20,6 +20,21 @@ import { submitJianmengVideo, pollJianmengVideo } from "./jianmeng.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** 资产 id 类型前缀：客户端可用 params.idPrefix 覆盖（如群像 G / 配角 A），否则按 purpose 推导 */
+function assetPrefixFor(req: GenerateRequest): string {
+	const override = (req.params?.idPrefix as string) || "";
+	if (override) return override;
+	const p = req.purpose || "";
+	if (p.startsWith("asset.scene")) return "S";
+	if (p.startsWith("asset.creature")) return "M";
+	if (p.startsWith("asset.prop")) return "P";
+	if (p.startsWith("asset.character")) return "C";
+	if (p === "video.generate") return "video";
+	if (p === "audio.tts") return "audio";
+	return "a";
+}
+const assetNameOf = (req: GenerateRequest): string | undefined => (req.params?.assetName as string) || undefined;
+
 export type DispatchResult =
 	| { kind: "sync"; status: "success" | "failed"; result?: TaskState["result"]; error?: string }
 	| { kind: "async"; taskId: string };
@@ -35,10 +50,10 @@ function placeholder(capability: Capability): { data: Buffer; contentType: strin
 	return { data: Buffer.from(`Qiji ${capability} 占位产物`, "utf8"), contentType: "text/plain; charset=utf-8" };
 }
 
-function createStubTask(req: GenerateRequest, capability: Capability, logId?: string): DispatchResult {
+async function createStubTask(req: GenerateRequest, capability: Capability, logId?: string): Promise<DispatchResult> {
 	const ph = placeholder(capability);
-	const asset = createAsset(ph.data, ph.contentType, capability);
-	const stubAsset: AssetOut = { id: asset.id, type: capability, url: "", meta: { stub: true, model: req.model } };
+	const asset = await createAsset(ph.data, ph.contentType, capability, { prefix: assetPrefixFor(req), name: assetNameOf(req) });
+	const stubAsset: AssetOut = { id: asset.id, type: capability, url: asset.url, meta: { stub: true, model: req.model } };
 	const rec = createTask({ clientTaskId: req.clientTaskId, capability, stubAsset });
 	if (logId) finishLog(logId, { status: "success", response: { taskId: rec.taskId, stub: true, assetId: asset.id }, taskId: rec.taskId });
 	return { kind: "async", taskId: rec.taskId };
@@ -91,14 +106,14 @@ function createVideoPollingTask(req: GenerateRequest, up: Upstream, logId?: stri
 function createImageTask(req: GenerateRequest, run: () => Promise<ImageResult>, logId?: string): DispatchResult {
 	const rec = createRunningTask("image", req.clientTaskId);
 	run()
-		.then((r) => {
+		.then(async (r) => {
 			if (!r.ok) {
 				failTask(rec.taskId, r.error);
 				if (logId) finishLog(logId, { status: "failed", error: r.error, taskId: rec.taskId });
 				return;
 			}
-			const asset = createAsset(r.data, r.contentType, "image");
-			const result = { assets: [{ id: asset.id, type: "image" as Capability, url: "", meta: { model: req.model } }] };
+			const asset = await createAsset(r.data, r.contentType, "image", { prefix: assetPrefixFor(req), name: assetNameOf(req) });
+			const result = { assets: [{ id: asset.id, type: "image" as Capability, url: asset.url, meta: { model: req.model } }] };
 			completeTask(rec.taskId, result);
 			if (logId) finishLog(logId, { status: "success", response: result, taskId: rec.taskId });
 		})
@@ -218,6 +233,6 @@ export async function dispatchGenerate(
 			return createVideoPollingTask(req, up, logId, onUpstream);
 		case "stub":
 		default:
-			return createStubTask(req, model.capability, logId);
+			return await createStubTask(req, model.capability, logId);
 	}
 }

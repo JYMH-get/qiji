@@ -34,6 +34,22 @@ loadDotEnv();
 
 const strip = (u: string) => u.replace(/\/+$/, "");
 
+/** OSS（S3 兼容）配置；publicBase 默认 https://<bucket>.<host>，可用 OSS_PUBLIC_BASE 覆盖（CDN） */
+function ossConfig() {
+	const endpoint = strip(process.env.OSS_ENDPOINT ?? "");
+	const bucket = process.env.OSS_BUCKET ?? "";
+	const host = endpoint.replace(/^https?:\/\//, "");
+	const publicBase = strip(process.env.OSS_PUBLIC_BASE ?? (endpoint && bucket ? `https://${bucket}.${host}` : ""));
+	return {
+		endpoint,
+		bucket,
+		accessKeyId: process.env.OSS_ACCESS_KEY_ID ?? "",
+		secretAccessKey: process.env.OSS_SECRET_ACCESS_KEY ?? "",
+		region: process.env.OSS_REGION ?? "auto",
+		publicBase,
+	};
+}
+
 const gatewayBaseUrl = strip(process.env.GATEWAY_BASE_URL ?? "https://sub.g-aisc.com");
 const gatewayApiKey = process.env.GATEWAY_API_KEY ?? "";
 
@@ -62,6 +78,8 @@ export const config = {
 		baseUrl: strip(process.env.JIANMENG_BASE_URL ?? "https://api.jian1.vip"),
 		apiKey: process.env.JIANMENG_API_KEY ?? "",
 	},
+	// OSS 对象存储（S3 兼容；资产/项目云备份，公有读直链）
+	oss: ossConfig(),
 };
 
 export const hasOpenAI = () => !!config.openai.apiKey;

@@ -8,7 +8,7 @@ import { requireAccessKey } from "./auth.ts";
 import { buildCatalog } from "./catalog.ts";
 import { dispatchGenerate } from "./translators/index.ts";
 import { getTaskState, createCompletedTask } from "./store/tasks.ts";
-import { createAsset, getAsset, assetUrl } from "./store/assets.ts";
+import { createAsset, getAsset, getAssetBytes, assetUrl } from "./store/assets.ts";
 import { getUserByAccessKey, chargeCredits } from "./store/users.ts";
 import { getModelDef } from "./store/models.ts";
 import { startLog } from "./store/logs.ts";
@@ -57,7 +57,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 		const { id } = req.params as { id: string };
 		const rec = getAsset(id);
 		if (!rec) return reply.code(404).send({ error: { message: "资产不存在" } });
-		return reply.header("Content-Type", rec.contentType).send(rec.data);
+		if (rec.url) return reply.redirect(rec.url); // OSS 公网直链
+		const bytes = getAssetBytes(id);
+		if (!bytes) return reply.code(404).send({ error: { message: "资产字节不可用（未配 OSS 且内存已失）" } });
+		return reply.header("Content-Type", rec.contentType).send(bytes);
 	});
 
 	// ── 以下需要 accessKey ──
@@ -171,7 +174,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			if (!file) return reply.code(400).send({ error: { message: "缺少文件字段 file" } });
 			const buf = await file.toBuffer();
 			const cap = inferCapability(file.mimetype ?? "");
-			const rec = createAsset(buf, file.mimetype ?? "application/octet-stream", cap);
+			const q = req.query as { prefix?: string; name?: string };
+			const rec = await createAsset(buf, file.mimetype ?? "application/octet-stream", cap, { prefix: q.prefix, name: q.name ?? file.filename });
 			return { id: rec.id, url: assetUrl(baseUrlOf(req), rec.id) };
 		});
 
