@@ -81,6 +81,9 @@ export interface RecentProject {
   cover?: string;
 }
 
+/** 五类资产在 store 中的数组字段名（角色/场景/物品/生物/群像） */
+export type AssetCat = "characters" | "scenes" | "items" | "organisms" | "crowds";
+
 interface ProjectState {
   name: string;
   savePath: string | null;
@@ -92,12 +95,12 @@ interface ProjectState {
   scriptText: string;
   visualStyle: string;
   coverImage: string;
-  characters: Array<{ id: string; name: string; features: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
-  scenes: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
-  items: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
-  organisms: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
+  characters: Array<{ id: string; name: string; features: string; philosophy: string; prompt: string; image?: string; images?: string[]; variants?: AssetVariantLite[] }>;
+  scenes: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; images?: string[]; variants?: AssetVariantLite[] }>;
+  items: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; images?: string[]; variants?: AssetVariantLite[] }>;
+  organisms: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; images?: string[]; variants?: AssetVariantLite[] }>;
   // 群像/阵营（G 编号）；与画布节点分组 groups 无关
-  crowds: Array<{ id: string; name: string; features: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
+  crowds: Array<{ id: string; name: string; features: string; philosophy: string; prompt: string; image?: string; images?: string[]; variants?: AssetVariantLite[] }>;
   isAnalyzed: boolean;
   analysisTime: string;
   episodes: VideoEpisode[];
@@ -115,6 +118,12 @@ interface ProjectState {
   setAnalysisResult: (data: { characters: any[], scenes: any[], items: any[], organisms: any[], crowds?: any[], time: string }) => void;
   updateCharacterImage: (charId: string, imageUri: string) => void;
   updateCrowdImage: (crowdId: string, imageUri: string) => void;
+  // 通用资产/变体操作（5 类共用，供资产工作台 AssetWorkbench 使用）
+  updateAsset: (cat: AssetCat, id: string, patch: Record<string, any>) => void;
+  addAssetVariant: (cat: AssetCat, id: string, variant: AssetVariantLite) => void;
+  updateAssetVariant: (cat: AssetCat, id: string, variantId: string, patch: Partial<AssetVariantLite>) => void;
+  addAssetImage: (cat: AssetCat, id: string, variantId: string | null, uri: string, makeMain?: boolean) => void;
+  setAssetMainImage: (cat: AssetCat, id: string, variantId: string | null, uri: string) => void;
   setProjectModelConfig: (config: Partial<ProjectModelConfig>) => void;
   // ── 视频/分镜 ──
   setEpisodes: (episodes: VideoEpisode[]) => void;
@@ -208,6 +217,36 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       crowds: s.crowds.map((c) => c.id === crowdId ? { ...c, image: imageUri } : c),
       isDirty: true,
     }));
+    get().scheduleAutoSave("canvas");
+  },
+  updateAsset: (cat, id, patch) => {
+    set((s) => ({ [cat]: (s[cat] as any[]).map((a) => a.id === id ? { ...a, ...patch } : a), isDirty: true } as any));
+    get().scheduleAutoSave("canvas");
+  },
+  addAssetVariant: (cat, id, variant) => {
+    set((s) => ({ [cat]: (s[cat] as any[]).map((a) => a.id === id ? { ...a, variants: [...(a.variants || []), variant] } : a), isDirty: true } as any));
+    get().scheduleAutoSave("canvas");
+  },
+  updateAssetVariant: (cat, id, variantId, patch) => {
+    set((s) => ({ [cat]: (s[cat] as any[]).map((a) => a.id === id ? { ...a, variants: (a.variants || []).map((v: any) => v.id === variantId ? { ...v, ...patch } : v) } : a), isDirty: true } as any));
+    get().scheduleAutoSave("canvas");
+  },
+  addAssetImage: (cat, id, variantId, uri, makeMain = true) => {
+    set((s) => ({ [cat]: (s[cat] as any[]).map((a) => {
+      if (a.id !== id) return a;
+      if (variantId) {
+        return { ...a, variants: (a.variants || []).map((v: any) => v.id === variantId ? { ...v, images: [...(v.images || []), uri], image: makeMain ? uri : (v.image || uri) } : v) };
+      }
+      return { ...a, images: [...(a.images || []), uri], image: makeMain ? uri : (a.image || uri) };
+    }), isDirty: true } as any));
+    get().scheduleAutoSave("canvas");
+  },
+  setAssetMainImage: (cat, id, variantId, uri) => {
+    set((s) => ({ [cat]: (s[cat] as any[]).map((a) => {
+      if (a.id !== id) return a;
+      if (variantId) return { ...a, variants: (a.variants || []).map((v: any) => v.id === variantId ? { ...v, image: uri } : v) };
+      return { ...a, image: uri };
+    }), isDirty: true } as any));
     get().scheduleAutoSave("canvas");
   },
   setProjectModelConfig: (config) => {

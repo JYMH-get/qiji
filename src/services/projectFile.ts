@@ -59,7 +59,9 @@ export interface AssetVariantLite {
   label: string;       // 徽标，如 默认/战斗/日常、全景/特写/氛围
   name: string;        // 标题
   description: string;
-  image?: string;
+  prompt?: string;     // 该变体的整段出图提示词（图生图/重绘用）
+  image?: string;      // 选定主图
+  images?: string[];   // 历史生成图
 }
 
 /** 分镜的垫素材（来自资产库或本地上传） */
@@ -104,11 +106,11 @@ export interface QijiProject {
   visualStyle?: string;
   /** 项目封面缩略图（data URL，新建时上传，已压缩） */
   coverImage?: string;
-  characters?: Array<{ id: string; name: string; features: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
-  scenes?: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
-  items?: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
-  organisms?: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
-  crowds?: Array<{ id: string; name: string; features: string; philosophy: string; prompt: string; image?: string; variants?: AssetVariantLite[] }>;
+  characters?: Array<{ id: string; name: string; features: string; philosophy: string; prompt: string; image?: string; images?: string[]; variants?: AssetVariantLite[] }>;
+  scenes?: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; images?: string[]; variants?: AssetVariantLite[] }>;
+  items?: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; images?: string[]; variants?: AssetVariantLite[] }>;
+  organisms?: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; images?: string[]; variants?: AssetVariantLite[] }>;
+  crowds?: Array<{ id: string; name: string; features: string; philosophy: string; prompt: string; image?: string; images?: string[]; variants?: AssetVariantLite[] }>;
   isAnalyzed?: boolean;
   analysisTime?: string;
   /** 视频/分镜：分集列表（每集含本集剧本 + 分镜 + 垫素材 + 故事板/视频产物） */
