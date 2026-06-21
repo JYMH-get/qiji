@@ -71,82 +71,118 @@ function compileTemplate(template: string, data: {
         .replace(/{{时间}}/g, () => currentTimeStr);
 }
 
-// Robust parsing scanner for extracting character templates from LLM output markdown
-function parseExtractedCharacters(text: string) {
-    const characters: Array<{ id: string; name: string; features: string; philosophy: string; prompt: string; image?: string }> = [];
-    const lines = text.split("\n");
-    let currentCharacter: any = null;
-    let currentField = "";
-    let idCounter = 0;
-    
-    for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        
-        // Match "人物X：名称" or "人物：名称"
-        const charMatch = trimmed.match(/^人物\d*[：:]\s*(.*)$/);
-        if (charMatch) {
-            if (currentCharacter && currentCharacter.name) {
-                characters.push(currentCharacter);
-            }
-            idCounter++;
-            currentCharacter = { 
-                id: `char-${Date.now()}-${idCounter}`, 
-                name: charMatch[1].trim(), 
-                features: "", 
-                philosophy: "", 
-                prompt: "",
-                image: undefined
-            };
-            currentField = "name";
-            continue;
-        }
-        
-        if (trimmed.startsWith("核心特征：") || trimmed.startsWith("核心特征:")) {
-            currentField = "features";
-            if (currentCharacter) {
-                currentCharacter.features = trimmed.replace(/^核心特征[：:]\s*/, "") + "\n";
-            }
-            continue;
-        }
-        if (trimmed.startsWith("设计理念：") || trimmed.startsWith("设计理念:")) {
-            currentField = "philosophy";
-            if (currentCharacter) {
-                currentCharacter.philosophy = trimmed.replace(/^设计理念[：:]\s*/, "") + "\n";
-            }
-            continue;
-        }
-        if (trimmed.startsWith("三视图提示词：") || trimmed.startsWith("三视图提示词:")) {
-            currentField = "prompt";
-            if (currentCharacter) {
-                currentCharacter.prompt = trimmed.replace(/^三视图提示词[：:]\s*/, "") + "\n";
-            }
-            continue;
-        }
-        
-        if (currentCharacter && currentField) {
-            if (currentField === "features") {
-                currentCharacter.features += trimmed + "\n";
-            } else if (currentField === "philosophy") {
-                currentCharacter.philosophy += trimmed + "\n";
-            } else if (currentField === "prompt") {
-                currentCharacter.prompt += trimmed + "\n";
-            }
+// 从可能夹带散文的 LLM 文本里抠出第一个完整 JSON 对象（按花括号配平），失败返回 null
+function extractJsonObject(text: string): any | null {
+    const t = (text || "").trim();
+    // 优先 ```json 代码块
+    const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const candidates: string[] = [];
+    if (fence) candidates.push(fence[1].trim());
+    // 花括号配平扫描（容忍字符串内的括号与转义）
+    const start = t.indexOf("{");
+    if (start >= 0) {
+        let depth = 0, inStr = false, esc = false;
+        for (let i = start; i < t.length; i++) {
+            const ch = t[i];
+            if (inStr) {
+                if (esc) esc = false;
+                else if (ch === "\\") esc = true;
+                else if (ch === '"') inStr = false;
+            } else if (ch === '"') inStr = true;
+            else if (ch === "{") depth++;
+            else if (ch === "}") { depth--; if (depth === 0) { candidates.push(t.slice(start, i + 1)); break; } }
         }
     }
-    
-    if (currentCharacter && currentCharacter.name) {
-        characters.push(currentCharacter);
+    for (const c of candidates) {
+        try { return JSON.parse(c); } catch { /* 试下一个候选 */ }
     }
-    
-    // Clean up whitespace
-    for (const c of characters) {
-        c.features = c.features.trim();
-        c.philosophy = c.philosophy.trim();
-        c.prompt = c.prompt.trim();
+    return null;
+}
+
+type ParsedAsset = { id: string; name: string; features: string; philosophy: string; prompt: string; image?: string; variants: any[] };
+
+// 解析资产提取 LLM 输出（asset.extract.v1）：按 C/A/G/M/S/P 编号前缀分流到 角色/场景/生物/物品，变体折叠进父资产。
+// 兼容两种结构：扁平 assets[]（带 id/type/prompt）与嵌套 characters[]/scenes[]/creatures[]/props[]。
+function parseAssetExtraction(text: string): {
+    characters: ParsedAsset[]; scenes: ParsedAsset[]; items: ParsedAsset[]; organisms: ParsedAsset[];
+} {
+    const empty = { characters: [] as ParsedAsset[], scenes: [] as ParsedAsset[], items: [] as ParsedAsset[], organisms: [] as ParsedAsset[] };
+    const root = extractJsonObject(text);
+    if (!root) return empty;
+
+    // 统一成一个扁平 assets 列表
+    const flat: any[] = [];
+    if (Array.isArray(root.assets)) {
+        flat.push(...root.assets);
+    } else {
+        const push = (arr: any, cat: string) => Array.isArray(arr) && arr.forEach((a) => {
+            flat.push({ ...a, category: a.category || cat });
+            (a.variants || []).forEach((v: any) => flat.push({ ...v, category: a.category || cat, inheritsFrom: v.inheritsFrom || v.inherits_from || a.code || a.id }));
+        });
+        push(root.characters, "character"); push(root.scenes, "scene");
+        push(root.creatures, "creature"); push(root.props, "prop");
     }
-    
-    return characters;
+    if (flat.length === 0) return empty;
+
+    const ts = Date.now();
+    let n = 0;
+    const codeOf = (a: any) => String(a.id || a.code || "").trim();
+    const parentCode = (code: string) => (code.match(/^([A-Za-z]+\d+)/) || [])[1] || code;
+    const isVariant = (a: any) => {
+        const c = codeOf(a);
+        return !!(a.inheritsFrom || a.inherits_from) || /^[A-Za-z]+\d+[A-Za-z]+$/.test(c) || /variant/i.test(String(a.type || ""));
+    };
+    // 编号前缀 / type / category → 四大类
+    const bucketOf = (a: any): keyof typeof buckets => {
+        const c = codeOf(a).toUpperCase();
+        const head = c[0];
+        if (head === "S") return "scenes";
+        if (head === "M") return "organisms";
+        if (head === "P") return "items";
+        if (head === "C" || head === "A" || head === "G") return "characters";
+        const cat = String(a.category || a.type || "").toLowerCase();
+        if (cat.includes("scene") || cat.includes("environment")) return "scenes";
+        if (cat.includes("creature") || cat.includes("monster") || cat.includes("beast")) return "organisms";
+        if (cat.includes("prop") || cat.includes("item") || cat.includes("weapon")) return "items";
+        return "characters";
+    };
+    const buckets = { characters: [] as ParsedAsset[], scenes: [] as ParsedAsset[], items: [] as ParsedAsset[], organisms: [] as ParsedAsset[] };
+    const byCode: Record<string, ParsedAsset> = {};
+
+    // 先建基础资产
+    for (const a of flat) {
+        if (isVariant(a)) continue;
+        const code = codeOf(a);
+        const asset: ParsedAsset = {
+            id: `${code || "asset"}-${ts}-${++n}`,
+            name: String(a.name || a.title || code || "未命名资产").trim(),
+            features: String(a.reason || a.status || "").trim(),
+            philosophy: "",
+            prompt: String(a.prompt || a.imagePrompt || a.image_prompt || "").trim(),
+            image: undefined,
+            variants: [],
+        };
+        buckets[bucketOf(a)].push(asset);
+        if (code) byCode[parentCode(code).toUpperCase()] = asset;
+    }
+    // 再把变体折叠进父资产（找不到父则当独立基础资产兜底，避免丢数据）
+    for (const a of flat) {
+        if (!isVariant(a)) continue;
+        const code = codeOf(a);
+        const pcode = parentCode(code).toUpperCase();
+        const variant = {
+            id: `${code || "var"}-${ts}-${++n}`,
+            label: String(a.status || a.label || "变体").trim(),
+            name: String(a.name || a.title || "").trim(),
+            description: String(a.reason || "").trim(),
+            prompt: String(a.prompt || a.imagePrompt || a.image_prompt || "").trim(),
+            image: undefined,
+        };
+        const parent = byCode[pcode];
+        if (parent) parent.variants.push(variant);
+        else buckets[bucketOf(a)].push({ id: variant.id, name: variant.name || code, features: variant.description, philosophy: "", prompt: variant.prompt, image: undefined, variants: [] });
+    }
+    return buckets;
 }
 
 // 解析「自动分集」LLM 输出（JSON 优先）；解析不到返回空，不编造
@@ -284,18 +320,21 @@ const Frame1693 = () => {
                 throw new Error("模型返回为空，未提取到任何资产。");
             }
 
-            // 仅解析模型真实输出；解析不到就为空，不编造（"没提取出来就没出来"）
-            const charactersList = parseExtractedCharacters(resultText);
+            // 解析 asset.extract.v1：按编号前缀分流到 角色/场景/生物/物品（变体折叠进父资产）。
+            // 解析不到就为空，不编造（"没提取出来就没出来"）。
+            const extracted = parseAssetExtraction(resultText);
+            if (extracted.characters.length + extracted.scenes.length + extracted.items.length + extracted.organisms.length === 0) {
+                throw new Error("已拿到模型返回，但未能从中解析出资产 JSON（asset.extract.v1）。请检查提示词是否要求输出该结构，或换用支持结构化输出的模型。");
+            }
 
             const now = new Date();
             const timeString = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, "0")}/${String(now.getDate()).padStart(2, "0")}   ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
-            // 落库：场景/物品/生物当前提取提示词不产出 → 留空（待结构化提取接入再填），不注入硬编码
             useProjectStore.getState().setAnalysisResult({
-                characters: charactersList,
-                scenes: [],
-                items: [],
-                organisms: [],
+                characters: extracted.characters,
+                scenes: extracted.scenes,
+                items: extracted.items,
+                organisms: extracted.organisms,
                 time: timeString,
             });
 
