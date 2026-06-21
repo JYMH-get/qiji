@@ -69,8 +69,8 @@ export async function submitJianmengVideo(req: GenerateRequest, up: Upstream, on
 	return { ok: true, taskId: String(taskId) };
 }
 
-/** ② 轮询上游任务状态 */
-export async function pollJianmengVideo(up: Upstream, taskId: string): Promise<JianmengPoll> {
+/** ② 轮询上游任务状态（终态时把上游原始响应并入日志 ④） */
+export async function pollJianmengVideo(up: Upstream, taskId: string, onUpstream?: OnUpstream): Promise<JianmengPoll> {
 	let resp: Response;
 	try {
 		resp = await fetch(`${up.baseUrl}/v1/videos/${encodeURIComponent(taskId)}`, {
@@ -83,14 +83,17 @@ export async function pollJianmengVideo(up: Upstream, taskId: string): Promise<J
 	}
 	const data: any = await resp.json().catch(() => ({}));
 	if (!resp.ok) {
+		onUpstream?.({ response: { phase: "poll", httpStatus: resp.status, body: data } });
 		return { status: "failed", error: data?.error?.message || `简梦轮询 HTTP ${resp.status}` };
 	}
 	const st = String(data?.status || "");
 	if (st === "completed") {
+		onUpstream?.({ response: { phase: "completed", httpStatus: resp.status, body: data } });
 		if (!data?.video_url) return { status: "failed", error: "简梦完成但未返回 video_url" };
 		return { status: "completed", videoUrl: String(data.video_url), coverUrl: data?.cover_url };
 	}
 	if (st === "failed") {
+		onUpstream?.({ response: { phase: "failed", httpStatus: resp.status, body: data } });
 		return { status: "failed", error: data?.error?.message || data?.message || "简梦生成失败" };
 	}
 	const p = Number(data?.progress);

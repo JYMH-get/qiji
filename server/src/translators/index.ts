@@ -60,7 +60,7 @@ function createVideoPollingTask(req: GenerateRequest, up: Upstream, logId?: stri
 		const deadline = Date.now() + 20 * 60 * 1000;
 		while (Date.now() < deadline) {
 			await sleep(8000);
-			const st = await pollJianmengVideo(up, sub.taskId);
+			const st = await pollJianmengVideo(up, sub.taskId, onUpstream);
 			if (st.status === "completed") {
 				const result = {
 					assets: [{ id: `jm-${sub.taskId}`, type: "video" as Capability, url: st.videoUrl, meta: { cover: st.coverUrl, model: req.model } }],
