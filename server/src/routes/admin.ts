@@ -1,0 +1,112 @@
+/**
+ * 管理端控制台 API + 静态页面。
+ *  GET /admin           → 控制台页面（公开，页面内再用 admin token 调 API）
+ *  /admin-api/*         → 需要 ADMIN_TOKEN（Bearer）
+ *    users / models / logs 的增删改查
+ */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import type { FastifyInstance } from "fastify";
+import { requireAdmin } from "../auth.ts";
+import {
+	listUsers, getUser, createUser, updateUser, deleteUser, genAccessKey,
+} from "../store/users.ts";
+import {
+	listModels, createModel, updateModel, deleteModel,
+	type ModelDef,
+} from "../store/models.ts";
+import {
+	listTemplates, createTemplate, updateTemplate, deleteTemplate,
+	type TemplateDef,
+} from "../store/templates.ts";
+import { listLogs, getLog } from "../store/logs.ts";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const ADMIN_HTML = join(here, "..", "admin", "index.html");
+
+export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
+	// 控制台页面（公开加载，页面内提示输入 admin token）
+	app.get("/admin", async (_req, reply) => {
+		const html = readFileSync(ADMIN_HTML, "utf8");
+		return reply.header("Content-Type", "text/html; charset=utf-8").send(html);
+	});
+
+	await app.register(async (api) => {
+		api.addHook("preHandler", requireAdmin);
+
+		// ── 用户 ──
+		api.get("/admin-api/users", async () => ({ items: listUsers() }));
+		api.post("/admin-api/users", async (req) => createUser((req.body ?? {}) as any));
+		api.put("/admin-api/users/:id", async (req, reply) => {
+			const { id } = req.params as { id: string };
+			const u = updateUser(id, (req.body ?? {}) as any);
+			if (!u) return reply.code(404).send({ error: { message: "用户不存在" } });
+			return u;
+		});
+		api.delete("/admin-api/users/:id", async (req, reply) => {
+			const { id } = req.params as { id: string };
+			if (!deleteUser(id)) return reply.code(404).send({ error: { message: "用户不存在" } });
+			return { ok: true };
+		});
+		api.post("/admin-api/users/:id/regenerate-key", async (req, reply) => {
+			const { id } = req.params as { id: string };
+			if (!getUser(id)) return reply.code(404).send({ error: { message: "用户不存在" } });
+			return updateUser(id, { accessKey: genAccessKey() })!;
+		});
+
+		// ── 模型（含翻译格式：protocol / upstreamModel / baseUrl / apiKey）──
+		api.get("/admin-api/models", async () => ({ items: listModels() }));
+		api.post("/admin-api/models", async (req, reply) => {
+			const b = (req.body ?? {}) as Partial<ModelDef>;
+			if (!b.id || !b.label || !b.capability || !b.protocol) {
+				return reply.code(400).send({ error: { message: "缺少 id/label/capability/protocol" } });
+			}
+			return createModel(b as any);
+		});
+		api.put("/admin-api/models/:id", async (req, reply) => {
+			const { id } = req.params as { id: string };
+			const m = updateModel(id, (req.body ?? {}) as any);
+			if (!m) return reply.code(404).send({ error: { message: "模型不存在" } });
+			return m;
+		});
+		api.delete("/admin-api/models/:id", async (req, reply) => {
+			const { id } = req.params as { id: string };
+			if (!deleteModel(id)) return reply.code(404).send({ error: { message: "模型不存在" } });
+			return { ok: true };
+		});
+
+		// ── 提示词模板（正文 + 节点类型白名单 + 链式复合）──
+		api.get("/admin-api/templates", async () => ({ items: listTemplates() }));
+		api.post("/admin-api/templates", async (req, reply) => {
+			const b = (req.body ?? {}) as Partial<TemplateDef>;
+			if (!b.id || !b.name || !b.capability) {
+				return reply.code(400).send({ error: { message: "缺少 id/name/capability" } });
+			}
+			return createTemplate(b as any);
+		});
+		api.put("/admin-api/templates/:id", async (req, reply) => {
+			const { id } = req.params as { id: string };
+			const t = updateTemplate(id, (req.body ?? {}) as any);
+			if (!t) return reply.code(404).send({ error: { message: "模板不存在" } });
+			return t;
+		});
+		api.delete("/admin-api/templates/:id", async (req, reply) => {
+			const { id } = req.params as { id: string };
+			if (!deleteTemplate(id)) return reply.code(404).send({ error: { message: "模板不存在" } });
+			return { ok: true };
+		});
+
+		// ── 请求记录 ──
+		api.get("/admin-api/logs", async (req) => {
+			const q = req.query as { limit?: string; offset?: string };
+			return listLogs({ limit: Number(q.limit ?? 50), offset: Number(q.offset ?? 0) });
+		});
+		api.get("/admin-api/logs/:id", async (req, reply) => {
+			const { id } = req.params as { id: string };
+			const log = getLog(id);
+			if (!log) return reply.code(404).send({ error: { message: "记录不存在" } });
+			return log;
+		});
+	});
+}

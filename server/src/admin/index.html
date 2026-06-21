@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Qiji 管理端控制台</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.5 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; background: #0e0f13; color: #e6e6ea; }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-bottom: 1px solid #23252e; background: #14161c; position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .sp { flex: 1; }
+  input, select, textarea, button { font: inherit; color: inherit; background: #1b1d25; border: 1px solid #2c2f3a; border-radius: 7px; padding: 6px 9px; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: #6f5bd6; }
+  button { cursor: pointer; background: #2a2d39; }
+  button:hover { background: #343847; }
+  button.primary { background: #6f5bd6; border-color: #6f5bd6; }
+  button.primary:hover { background: #7e6ce0; }
+  button.danger { background: #3a2330; border-color: #6a2a44; color: #ff9bbd; }
+  button.sm { padding: 3px 8px; font-size: 12px; }
+  .tabs { display: flex; gap: 4px; padding: 10px 18px 0; }
+  .tabs button { border: none; border-bottom: 2px solid transparent; background: none; border-radius: 0; padding: 8px 14px; color: #9aa0ad; }
+  .tabs button.active { color: #fff; border-bottom-color: #6f5bd6; }
+  main { padding: 16px 18px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #1f2129; vertical-align: top; }
+  th { color: #9aa0ad; font-weight: 500; position: sticky; top: 48px; background: #0e0f13; }
+  tr:hover td { background: #14161c; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; border: 1px solid #2c2f3a; }
+  .ok { color: #6ee7a8; border-color: #2c5a42; } .bad { color: #ff9bbd; border-color: #6a2a44; } .run { color: #ffd479; border-color: #6a5a24; }
+  .mono { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; word-break: break-all; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .card { background: #14161c; border: 1px solid #23252e; border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+  label.f { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: #9aa0ad; }
+  .muted { color: #6b7280; }
+  dialog { background: #14161c; color: #e6e6ea; border: 1px solid #2c2f3a; border-radius: 12px; max-width: 880px; width: 92vw; padding: 0; }
+  dialog header { position: static; border-radius: 12px 12px 0 0; }
+  dialog .body { padding: 16px; max-height: 70vh; overflow: auto; }
+  pre { background: #0c0d11; border: 1px solid #1f2129; border-radius: 8px; padding: 10px; overflow: auto; font-size: 11.5px; }
+  .hide { display: none !important; }
+  #login { max-width: 360px; margin: 80px auto; }
+</style>
+</head>
+<body>
+<div id="login" class="card hide">
+  <h2 style="margin-top:0;font-size:15px">管理端登录</h2>
+  <p class="muted">输入 ADMIN_TOKEN（见 server/.env，默认 admin-dev）。</p>
+  <div class="row"><input id="tok" type="password" placeholder="ADMIN_TOKEN" style="flex:1" /><button class="primary" onclick="doLogin()">进入</button></div>
+  <p id="loginErr" class="bad hide"></p>
+</div>
+
+<div id="app" class="hide">
+  <header>
+    <h1>Qiji 管理端控制台</h1>
+    <span class="sp"></span>
+    <span id="who" class="muted"></span>
+    <button class="sm" onclick="logout()">退出</button>
+  </header>
+  <div class="tabs">
+    <button data-tab="users" class="active" onclick="switchTab('users')">用户管理</button>
+    <button data-tab="models" onclick="switchTab('models')">模型加载</button>
+    <button data-tab="templates" onclick="switchTab('templates')">提示词</button>
+    <button data-tab="logs" onclick="switchTab('logs')">请求记录</button>
+  </div>
+  <main>
+    <section id="tab-users"></section>
+    <section id="tab-models" class="hide"></section>
+    <section id="tab-templates" class="hide"></section>
+    <section id="tab-logs" class="hide"></section>
+  </main>
+</div>
+
+<dialog id="dlg"><header><strong id="dlgTitle"></strong><span class="sp" style="flex:1"></span><button class="sm" onclick="dlg.close()">关闭</button></header><div class="body" id="dlgBody"></div></dialog>
+
+<script>
+const $ = (s, r=document) => r.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let TOKEN = localStorage.getItem("qiji_admin_token") || "";
+
+async function api(path, opts={}) {
+  const r = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", Authorization: "Bearer " + TOKEN, ...(opts.headers||{}) } });
+  if (r.status === 401) { logout(); throw new Error("令牌无效"); }
+  if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e?.error?.message || ("HTTP " + r.status)); }
+  return r.status === 204 ? null : r.json();
+}
+
+function showLogin(){ $("#login").classList.remove("hide"); $("#app").classList.add("hide"); }
+function showApp(){ $("#login").classList.add("hide"); $("#app").classList.remove("hide"); switchTab("users"); }
+async function doLogin(){
+  TOKEN = $("#tok").value.trim();
+  try { await api("/admin-api/users"); localStorage.setItem("qiji_admin_token", TOKEN); showApp(); }
+  catch(e){ $("#loginErr").textContent = e.message; $("#loginErr").classList.remove("hide"); }
+}
+function logout(){ localStorage.removeItem("qiji_admin_token"); TOKEN=""; showLogin(); }
+
+function switchTab(t){
+  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab===t));
+  ["users","models","templates","logs"].forEach(x => $("#tab-"+x).classList.toggle("hide", x!==t));
+  if (t==="users") loadUsers();
+  if (t==="models") loadModels();
+  if (t==="templates") loadTemplates();
+  if (t==="logs") loadLogs();
+}
+
+// ── 用户管理 ──
+async function loadUsers(){
+  const el = $("#tab-users");
+  el.innerHTML = `<div class="card"><div class="row">
+    <input id="nu_name" placeholder="用户名" />
+    <input id="nu_credits" type="number" placeholder="额度" value="10000" style="width:110px" />
+    <input id="nu_note" placeholder="备注" style="flex:1" />
+    <button class="primary" onclick="addUser()">+ 新建用户</button></div>
+    <div class="muted" id="u_err"></div></div>
+    <table><thead><tr><th>用户名</th><th>accessKey</th><th>启用</th><th>额度</th><th>备注</th><th>最近活跃</th><th></th></tr></thead><tbody id="u_body"></tbody></table>`;
+  try {
+    const { items } = await api("/admin-api/users");
+    $("#u_body").innerHTML = items.map(u => `<tr>
+      <td><input value="${esc(u.name)}" onchange="updUser('${u.id}','name',this.value)" style="width:120px"/></td>
+      <td><span class="mono">${esc(u.accessKey)}</span> <button class="sm" onclick="navigator.clipboard.writeText('${esc(u.accessKey)}')">复制</button> <button class="sm" onclick="regen('${u.id}')">重置</button></td>
+      <td><input type="checkbox" ${u.enabled?"checked":""} onchange="updUser('${u.id}','enabled',this.checked)"/></td>
+      <td><input type="number" value="${u.credits}" onchange="updUser('${u.id}','credits',Number(this.value))" style="width:90px"/></td>
+      <td><input value="${esc(u.note)}" onchange="updUser('${u.id}','note',this.value)" style="width:140px"/></td>
+      <td class="muted">${u.lastSeenAt ? new Date(u.lastSeenAt).toLocaleString() : "—"}</td>
+      <td><button class="sm danger" onclick="delUser('${u.id}','${esc(u.name)}')">删除</button></td></tr>`).join("");
+  } catch(e){ $("#u_err").textContent = e.message; }
+}
+async function addUser(){ try { await api("/admin-api/users",{method:"POST",body:JSON.stringify({name:$("#nu_name").value,credits:Number($("#nu_credits").value)||0,note:$("#nu_note").value})}); loadUsers(); } catch(e){ $("#u_err").textContent=e.message; } }
+async function updUser(id,k,v){ try { await api("/admin-api/users/"+id,{method:"PUT",body:JSON.stringify({[k]:v})}); } catch(e){ alert(e.message); } }
+async function regen(id){ if(!confirm("重置该用户 accessKey？旧的将失效。"))return; await api("/admin-api/users/"+id+"/regenerate-key",{method:"POST"}); loadUsers(); }
+async function delUser(id,name){ if(!confirm("删除用户「"+name+"」？"))return; await api("/admin-api/users/"+id,{method:"DELETE"}); loadUsers(); }
+
+// ── 模型加载 ──
+const PROTOCOLS = ["echo","openai-chat","anthropic-messages","openai-image","gemini-image","jianmeng-video","stub"];
+const CAPS = ["text","image","video","audio"];
+async function loadModels(){
+  const el = $("#tab-models");
+  el.innerHTML = `<div class="card"><div class="muted" style="margin-bottom:8px">新建/自定义第三方模型（翻译格式 = protocol + 上游模型名 + 可选地址/密钥覆盖；留空走网关默认）</div>
+    <div class="grid">
+      <label class="f">逻辑 id<input id="nm_id" placeholder="如 gpt-5.5 / my-model"/></label>
+      <label class="f">显示名<input id="nm_label" placeholder="显示名"/></label>
+      <label class="f">能力<select id="nm_cap">${CAPS.map(c=>`<option>${c}</option>`).join("")}</select></label>
+      <label class="f">协议<select id="nm_proto">${PROTOCOLS.map(p=>`<option>${p}</option>`).join("")}</select></label>
+      <label class="f">上游模型名<input id="nm_up" placeholder="默认=id"/></label>
+      <label class="f">baseUrl 覆盖<input id="nm_base" placeholder="默认网关"/></label>
+      <label class="f">apiKey 覆盖<input id="nm_key" placeholder="默认网关 key"/></label>
+      <label class="f">积分<input id="nm_cost" type="number" value="10"/></label>
+    </div>
+    <div class="row" style="margin-top:10px"><button class="primary" onclick="addModel()">+ 保存模型</button><span class="muted" id="m_err"></span></div></div>
+    <table><thead><tr><th>id</th><th>显示名</th><th>能力</th><th>协议</th><th>上游模型</th><th>baseUrl</th><th>apiKey</th><th>积分</th><th>启用</th><th></th></tr></thead><tbody id="m_body"></tbody></table>`;
+  try {
+    const { items } = await api("/admin-api/models");
+    $("#m_body").innerHTML = items.map(m => `<tr>
+      <td class="mono">${esc(m.id)}</td>
+      <td><input value="${esc(m.label)}" onchange="updModel('${m.id}','label',this.value)" style="width:130px"/></td>
+      <td><select onchange="updModel('${m.id}','capability',this.value)">${CAPS.map(c=>`<option ${c===m.capability?"selected":""}>${c}</option>`).join("")}</select></td>
+      <td><select onchange="updModel('${m.id}','protocol',this.value)">${PROTOCOLS.map(p=>`<option ${p===m.protocol?"selected":""}>${p}</option>`).join("")}</select></td>
+      <td><input value="${esc(m.upstreamModel||"")}" placeholder="${esc(m.id)}" onchange="updModel('${m.id}','upstreamModel',this.value)" style="width:120px"/></td>
+      <td><input value="${esc(m.baseUrl||"")}" placeholder="网关" onchange="updModel('${m.id}','baseUrl',this.value)" style="width:150px"/></td>
+      <td><input value="${esc(m.apiKey||"")}" placeholder="网关 key" onchange="updModel('${m.id}','apiKey',this.value)" style="width:120px" type="password"/></td>
+      <td><input type="number" value="${m.cost}" onchange="updModel('${m.id}','cost',Number(this.value))" style="width:70px"/></td>
+      <td><input type="checkbox" ${m.enabled?"checked":""} onchange="updModel('${m.id}','enabled',this.checked)"/></td>
+      <td><button class="sm danger" onclick="delModel('${m.id}')">删除</button></td></tr>`).join("");
+  } catch(e){ $("#m_err").textContent = e.message; }
+}
+async function addModel(){
+  try {
+    await api("/admin-api/models",{method:"POST",body:JSON.stringify({
+      id:$("#nm_id").value.trim(), label:$("#nm_label").value.trim()||$("#nm_id").value.trim(),
+      capability:$("#nm_cap").value, protocol:$("#nm_proto").value,
+      upstreamModel:$("#nm_up").value.trim()||undefined, baseUrl:$("#nm_base").value.trim()||undefined,
+      apiKey:$("#nm_key").value.trim()||undefined, cost:Number($("#nm_cost").value)||10 })});
+    loadModels();
+  } catch(e){ $("#m_err").textContent=e.message; }
+}
+async function updModel(id,k,v){ try { await api("/admin-api/models/"+id,{method:"PUT",body:JSON.stringify({[k]: v===""?null:v})}); } catch(e){ alert(e.message); } }
+async function delModel(id){ if(!confirm("删除模型「"+id+"」？"))return; await api("/admin-api/models/"+id,{method:"DELETE"}); loadModels(); }
+
+// ── 提示词模板 ──
+const PURPOSES = ["script.toScenes","script.analyze","storyboard.split","asset.character.image","asset.character.variant","asset.scene.image","asset.scene.variant","asset.creature.image","asset.creature.variant","asset.prop.image","asset.prop.variant","video.generate","audio.tts"];
+// 常用分类（datalist 提示，仍可自由输入）；画风为预设类，可不填 purpose
+const CATEGORIES = ["画风","剧本结构化","资产提取","变体融图","分镜生图","视频生成","其他"];
+let tplCatFilter = "";
+function parseList(s){ return String(s||"").split(/[,，\s]+/).map(x=>x.trim()).filter(Boolean); }
+function purposeSelect(id, cur){
+  return `<select onchange="updTpl('${id}','purpose',this.value)" style="width:150px"><option value="" ${!cur?"selected":""}>—（预设/无）</option>${PURPOSES.map(p=>`<option ${p===cur?"selected":""}>${p}</option>`).join("")}</select>`;
+}
+async function loadTemplates(){
+  const el = $("#tab-templates");
+  el.innerHTML = `<div class="card"><div class="muted" style="margin-bottom:8px">新建提示词模板（正文权威留管理端、下发用户端；分类便于查找；画风等预设可不填 purpose；节点白名单控制"用在哪个节点"；链式→ 填下一段模板 id）</div>
+    <datalist id="cat_list">${CATEGORIES.map(c=>`<option value="${esc(c)}">`).join("")}</datalist>
+    <div class="grid">
+      <label class="f">模板 id<input id="nt_id" placeholder="如 asset.extract.basic"/></label>
+      <label class="f">显示名<input id="nt_name" placeholder="显示名"/></label>
+      <label class="f">分类<input id="nt_cat" list="cat_list" placeholder="如 画风"/></label>
+      <label class="f">能力<select id="nt_cap">${CAPS.map(c=>`<option>${c}</option>`).join("")}</select></label>
+      <label class="f">用途 purpose<select id="nt_purpose"><option value="">—（预设/无）</option>${PURPOSES.map(p=>`<option>${p}</option>`).join("")}</select></label>
+      <label class="f">节点白名单(逗号)<input id="nt_nodes" placeholder="text,script"/></label>
+      <label class="f">schemaId<input id="nt_schema" placeholder="可选"/></label>
+    </div>
+    <div class="row" style="margin-top:10px"><button class="primary" onclick="addTemplate()">+ 保存模板</button><span class="muted" id="t_err"></span></div></div>
+    <div class="row"><span class="muted">分类筛选</span><select id="tf_cat" onchange="tplCatFilter=this.value;renderTemplates()"></select></div>
+    <table><thead><tr><th>id</th><th>显示名</th><th>分类</th><th>能力</th><th>用途</th><th>节点白名单</th><th>schemaId</th><th>默认</th><th>启用</th><th>正文</th><th>图片</th><th>链式→</th><th>序</th><th></th></tr></thead><tbody id="t_body"></tbody></table>`;
+  try {
+    const { items } = await api("/admin-api/templates");
+    window.__tpls = items;
+    renderTemplates();
+  } catch(e){ $("#t_err").textContent = e.message; }
+}
+function renderTemplates(){
+  const items = window.__tpls || [];
+  const cats = Array.from(new Set(items.map(t=>t.category||"").filter(Boolean))).sort();
+  const sel = $("#tf_cat");
+  if (sel) sel.innerHTML = `<option value="">全部 (${items.length})</option>` + cats.map(c=>`<option value="${esc(c)}" ${c===tplCatFilter?"selected":""}>${esc(c)} (${items.filter(t=>(t.category||"")===c).length})</option>`).join("");
+  const shown = tplCatFilter ? items.filter(t=>(t.category||"")===tplCatFilter) : items;
+  $("#t_body").innerHTML = shown.map(t => `<tr>
+    <td class="mono">${esc(t.id)}</td>
+    <td><input value="${esc(t.name)}" onchange="updTpl('${t.id}','name',this.value)" style="width:120px"/></td>
+    <td><input list="cat_list" value="${esc(t.category||'')}" onchange="updTpl('${t.id}','category',this.value)" style="width:90px"/></td>
+    <td><select onchange="updTpl('${t.id}','capability',this.value)">${CAPS.map(c=>`<option ${c===t.capability?"selected":""}>${c}</option>`).join("")}</select></td>
+    <td>${purposeSelect(t.id, t.purpose)}</td>
+    <td><input value="${esc((t.nodeTypes||[]).join(','))}" onchange="updTpl('${t.id}','nodeTypes',parseList(this.value))" style="width:100px"/></td>
+    <td><input value="${esc(t.schemaId||'')}" onchange="updTpl('${t.id}','schemaId',this.value)" style="width:100px"/></td>
+    <td><input type="checkbox" ${t.isDefault?"checked":""} onchange="updTpl('${t.id}','isDefault',this.checked)"/></td>
+    <td><input type="checkbox" ${t.enabled?"checked":""} onchange="updTpl('${t.id}','enabled',this.checked)"/></td>
+    <td><button class="sm" onclick="editBody('${t.id}')">编辑正文</button></td>
+    <td><button class="sm" onclick="editImages('${t.id}')">图片(${(t.images||[]).length})</button></td>
+    <td><input value="${esc(t.chainNextId||'')}" placeholder="无" onchange="updTpl('${t.id}','chainNextId',this.value)" style="width:100px"/></td>
+    <td><input type="number" value="${t.order||0}" onchange="updTpl('${t.id}','order',Number(this.value))" style="width:55px"/></td>
+    <td><button class="sm danger" onclick="delTpl('${t.id}')">删除</button></td></tr>`).join("");
+}
+async function addTemplate(){
+  try {
+    await api("/admin-api/templates",{method:"POST",body:JSON.stringify({
+      id:$("#nt_id").value.trim(), name:$("#nt_name").value.trim()||$("#nt_id").value.trim(),
+      capability:$("#nt_cap").value, purpose:$("#nt_purpose").value||undefined,
+      category:$("#nt_cat").value.trim()||undefined,
+      nodeTypes:parseList($("#nt_nodes").value), schemaId:$("#nt_schema").value.trim()||undefined })});
+    loadTemplates();
+  } catch(e){ $("#t_err").textContent=e.message; }
+}
+async function updTpl(id,k,v){
+  try { await api("/admin-api/templates/"+id,{method:"PUT",body:JSON.stringify({[k]: v===""?null:v})}); const t=(window.__tpls||[]).find(x=>x.id===id); if(t) t[k]=v; }
+  catch(e){ alert(e.message); }
+}
+async function delTpl(id){ if(!confirm("删除模板「"+id+"」？"))return; await api("/admin-api/templates/"+id,{method:"DELETE"}); loadTemplates(); }
+function editBody(id){
+  const t = (window.__tpls||[]).find(x=>x.id===id); if(!t) return;
+  $("#dlgTitle").textContent = "编辑正文 · " + id;
+  $("#dlgBody").innerHTML = `<div class="muted" style="margin-bottom:6px">支持 {{变量}} 占位；变量(逗号分隔)：<input id="eb_vars" value="${esc((t.variables||[]).join(','))}" style="width:55%"/></div>
+    <textarea id="eb_body" style="width:100%;height:300px;font-family:monospace;box-sizing:border-box">${esc(t.body||'')}</textarea>
+    <div class="row" style="margin-top:8px"><button class="primary" onclick="saveBody('${id}')">保存正文</button><span class="muted">链式注入变量名：</span><input id="eb_pipe" value="${esc(t.chainPipeVar||'')}" placeholder="上一步" style="width:120px"/></div>`;
+  dlg.showModal();
+}
+async function saveBody(id){
+  try {
+    await api("/admin-api/templates/"+id,{method:"PUT",body:JSON.stringify({ body:$("#eb_body").value, variables:parseList($("#eb_vars").value), chainPipeVar:$("#eb_pipe").value.trim()||undefined })});
+    dlg.close(); loadTemplates();
+  } catch(e){ alert(e.message); }
+}
+
+// ── 模板参考图（画风等附图）──
+function compressImage(file, maxSize=512){
+  return new Promise((resolve,reject)=>{
+    const r = new FileReader();
+    r.onload = ()=>{ const img=new Image(); img.onload=()=>{
+      let w=img.width,h=img.height;
+      if(w>=h&&w>maxSize){h=Math.round(h*maxSize/w);w=maxSize;}
+      else if(h>w&&h>maxSize){w=Math.round(w*maxSize/h);h=maxSize;}
+      const c=document.createElement("canvas");c.width=w;c.height=h;
+      c.getContext("2d").drawImage(img,0,0,w,h);
+      resolve(c.toDataURL("image/webp",0.85));
+    }; img.onerror=reject; img.src=r.result; };
+    r.onerror=reject; r.readAsDataURL(file);
+  });
+}
+function renderImageDlg(id){
+  const t = (window.__tpls||[]).find(x=>x.id===id); if(!t) return;
+  const imgs = t.images||[];
+  $("#dlgBody").innerHTML = `<div class="muted" style="margin-bottom:8px">参考图（如画风参考；自动压缩为缩略图随 catalog 下发）</div>
+    <div class="row"><input type="file" id="ei_file" accept="image/*" multiple /><span class="muted">选择后自动上传</span></div>
+    <div id="ei_grid" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">${
+      imgs.map((src,i)=>`<div style="position:relative"><img src="${src}" style="width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid #2c2f3a"/><button class="sm danger" style="position:absolute;top:2px;right:2px" onclick="removeImage('${id}',${i})">×</button></div>`).join("") || '<span class="muted">暂无图片</span>'
+    }</div>`;
+  $("#ei_file").onchange = async (e)=>{
+    const files = Array.from(e.target.files||[]);
+    if(!files.length) return;
+    try {
+      const added = await Promise.all(files.map(f=>compressImage(f)));
+      const next = [...(t.images||[]), ...added];
+      await api("/admin-api/templates/"+id,{method:"PUT",body:JSON.stringify({ images: next })});
+      t.images = next; renderImageDlg(id); renderTemplates();
+    } catch(err){ alert(err.message||err); }
+  };
+}
+function editImages(id){
+  $("#dlgTitle").textContent = "参考图 · " + id;
+  renderImageDlg(id);
+  dlg.showModal();
+}
+async function removeImage(id, idx){
+  const t = (window.__tpls||[]).find(x=>x.id===id); if(!t) return;
+  const next = (t.images||[]).filter((_,i)=>i!==idx);
+  try { await api("/admin-api/templates/"+id,{method:"PUT",body:JSON.stringify({ images: next })}); t.images=next; renderImageDlg(id); renderTemplates(); }
+  catch(e){ alert(e.message); }
+}
+
+// ── 请求记录 ──
+let logOffset = 0;
+async function loadLogs(reset=true){
+  if (reset) logOffset = 0;
+  const el = $("#tab-logs");
+  if (reset) el.innerHTML = `<div class="row"><button class="sm" onclick="loadLogs(true)">刷新</button><span class="muted" id="l_meta"></span></div>
+    <table><thead><tr><th>开始</th><th>用户</th><th>步骤(purpose)</th><th>模型</th><th>状态</th><th>耗时</th><th></th></tr></thead><tbody id="l_body"></tbody></table>
+    <div class="row" style="margin-top:10px"><button class="sm" onclick="moreLogs()">加载更多</button></div>`;
+  try {
+    const { total, items } = await api("/admin-api/logs?limit=50&offset="+logOffset);
+    $("#l_meta").textContent = "共 " + total + " 条";
+    const rows = items.map(l => `<tr>
+      <td class="muted">${new Date(l.startedAt).toLocaleString()}</td>
+      <td>${esc(l.userName||"—")}</td>
+      <td class="mono">${esc(l.purpose||"—")}</td>
+      <td class="mono">${esc(l.model||"—")}</td>
+      <td><span class="pill ${l.status==='success'?'ok':l.status==='failed'?'bad':'run'}">${l.status}</span></td>
+      <td class="muted">${l.durationMs!=null? l.durationMs+"ms":"—"}</td>
+      <td><button class="sm" onclick="showLog('${l.id}')">详情</button></td></tr>`).join("");
+    if (reset) $("#l_body").innerHTML = rows; else $("#l_body").insertAdjacentHTML("beforeend", rows);
+  } catch(e){ $("#l_body").innerHTML = `<tr><td colspan="7" class="bad">${esc(e.message)}</td></tr>`; }
+}
+function moreLogs(){ logOffset += 50; loadLogs(false); }
+async function showLog(id){
+  const l = await api("/admin-api/logs/"+id);
+  $("#dlgTitle").textContent = "请求记录 " + id;
+  $("#dlgBody").innerHTML = `
+    <div class="grid" style="margin-bottom:12px">
+      <div><div class="muted">用户</div>${esc(l.userName||"—")}</div>
+      <div><div class="muted">步骤 purpose</div><span class="mono">${esc(l.purpose||"—")}</span></div>
+      <div><div class="muted">模型</div><span class="mono">${esc(l.model||"—")}</span></div>
+      <div><div class="muted">状态</div>${esc(l.status)}</div>
+      <div><div class="muted">请求时间</div>${new Date(l.startedAt).toLocaleString()}</div>
+      <div><div class="muted">完成时间</div>${l.finishedAt? new Date(l.finishedAt).toLocaleString():"—"}</div>
+      <div><div class="muted">耗时</div>${l.durationMs!=null?l.durationMs+"ms":"—"}</div>
+      <div><div class="muted">taskId</div><span class="mono">${esc(l.taskId||"—")}</span></div>
+    </div>
+    ${l.error?`<div class="bad" style="margin-bottom:8px">错误：${esc(l.error)}</div>`:""}
+    <div class="muted">完整请求</div><pre>${esc(JSON.stringify(l.request,null,2))}</pre>
+    <div class="muted">完整响应 / 结果</div><pre>${esc(JSON.stringify(l.response,null,2))}</pre>`;
+  $("#dlg").showModal();
+}
+
+// 启动
+if (TOKEN) { api("/admin-api/users").then(showApp).catch(showLogin); } else { showLogin(); }
+</script>
+</body>
+</html>
