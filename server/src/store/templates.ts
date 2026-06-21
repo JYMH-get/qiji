@@ -113,6 +113,32 @@ const DEFAULT_TEMPLATES: TemplateDef[] = [
 			"{{原文}}",
 		].join("\n"),
 	}),
+	// 分镜 → 视频提示词（第26轮新增；权威全文见 skills/分镜2视频/视频分镜提示词.md，待粘贴入下方 body）
+	tpl({
+		id: "storyboard.tovideo.basic",
+		name: "视频分镜提示词（基础）",
+		capability: "text",
+		purpose: "storyboard.toVideoPrompt",
+		category: "分镜生图",
+		nodeTypes: ["script"],
+		variables: ["分镜内容", "所需资产", "前文上下文"],
+		schemaId: "videoPrompt.v1",
+		isDefault: true,
+		order: 3,
+		body: [
+			"你是 AI 漫剧超创导演。把下方分镜重构为可直接驱动视频大模型的提示词，",
+			"每 15 秒卡拆 5-8 个镜头(动态时间轴，精确到小数点)。",
+			"必须保留代码公式：人物 {角色:名}、场景 {场景:名}、",
+			"台词 {音频:角色名}的音色[情绪]:“…”、内心 {音频:OS-角色名}、旁白 {音频:VO-旁白}、音效 音效:“…”。",
+			"无字幕、无 BGM、仅保留音效。",
+			"",
+			"本批次所需资产：{{所需资产}}",
+			"前文上下文：{{前文上下文}}",
+			"",
+			"当前分镜：",
+			"{{分镜内容}}",
+		].join("\n"),
+	}),
 	// ── 画风预设（无 purpose，不可执行；body = 视觉风格描述符，新建项目时选用，可附参考图）──
 	tpl({
 		id: "style.3d-guoman",

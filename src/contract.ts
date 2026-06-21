@@ -9,7 +9,7 @@
  *  - id 是真理，url 是缓存（可过期，凭 id 向管理端重解析）。
  *  - 资产 id 全局单调递增、永不复用，由管理端分配。
  *  - 任务四态归一：queued / running / success / failed。
- *  - 出图 basePrompt 由"槽位(LLM填) + 出图模板(catalog)"合成，提取阶段只产槽位。
+ *  - 出图提示词：LLM 直接产出**整段出图模板**（2026-06-21 第26轮锁定，推翻原"槽位+catalog模板合成"方案）。
  */
 
 // ============================================================
@@ -26,7 +26,8 @@ export type AssetType = "character" | "scene" | "creature" | "prop";
 export type Purpose =
   | "script.toScenes"        // 小说原文 → 分场剧本
   | "script.analyze"         // 剧本 → 资产体系(角色/场景/生物/道具/分集)
-  | "storyboard.split"       // 单集 → 分镜 + 分镜提示词
+  | "storyboard.split"       // 单集剧本 → 大分镜卡(scriptContent + duration)
+  | "storyboard.toVideoPrompt" // 分镜 → 视频生成提示词(visualDescription，保留 {角色:}{场景:}{音频:} 公式)
   | "asset.character.image"  // 角色基础形象（文生图）
   | "asset.character.variant"// 角色变体（图生图）
   | "asset.scene.image"

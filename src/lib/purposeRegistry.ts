@@ -61,7 +61,7 @@ export interface PurposeMeta {
 }
 
 /**
- * purpose → 元信息。覆盖 contract.ts 中全部 13 个 Purpose。
+ * purpose → 元信息。覆盖 contract.ts 中全部 14 个 Purpose。
  * buttonLabel 为 "" 的条目表示当前表格侧尚无对应按键（已知覆盖空洞）。
  */
 export const PURPOSE_REGISTRY: Record<Purpose, PurposeMeta> = {
@@ -87,7 +87,15 @@ export const PURPOSE_REGISTRY: Record<Purpose, PurposeMeta> = {
 		nodeType: "script",
 		buttonLabel: "开始分镜",
 		view: "storyboard",
-		description: "单集 → 分镜 + 分镜提示词",
+		description: "单集剧本 → 大分镜卡（scriptContent + duration）",
+	},
+	"storyboard.toVideoPrompt": {
+		purpose: "storyboard.toVideoPrompt",
+		capability: "text",
+		nodeType: "script",
+		buttonLabel: "生成视频提示词",
+		view: "storyboard",
+		description: "分镜 → 视频生成提示词（visualDescription，保留 {角色:}{场景:}{音频:} 公式）",
 	},
 	"asset.character.image": {
 		purpose: "asset.character.image",

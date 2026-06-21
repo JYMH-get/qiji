@@ -65,6 +65,7 @@ const variantPrefixes: CatalogVariantPrefix[] = [
 
 // ── 输出 schema（结构化输出强制 + 校验依据）──
 const schemas: Record<string, unknown> = {
+	// ① storyboard.split：单集剧本 → 大分镜卡（每卡 scriptContent + duration）
 	"storyboard.v1": {
 		type: "object",
 		properties: {
@@ -75,30 +76,52 @@ const schemas: Record<string, unknown> = {
 					type: "object",
 					properties: {
 						index: { type: "number" },
-						plot: { type: "string" },
-						dialogue: { type: "string", description: "≤30字，无则填'无'，不增不删" },
-						dynamicVideoPrompt: { type: "string" },
-						refCharacters: { type: "array", items: { type: "string" } },
-						refScenes: { type: "array", items: { type: "string" } },
-						refProps: { type: "array", items: { type: "string" } },
-						durationSec: { type: "number", description: "≤15" },
+						scriptContent: {
+							type: "string",
+							description: "本卡剧本内容，保留【对话】/【旁白】/【画外音】/【内心OS】标签与原换行；含足够动作神态支撑15秒内多镜头",
+						},
+						durationSec: { type: "number", description: "固定 15" },
 					},
-					required: ["index", "plot", "dialogue", "dynamicVideoPrompt", "durationSec"],
+					required: ["index", "scriptContent", "durationSec"],
 				},
 			},
 		},
 		required: ["episodeIndex", "shots"],
 	},
+	// ② storyboard.toVideoPrompt：分镜 → 视频生成提示词（第26轮新增；visualDescription 保留代码公式）
+	"videoPrompt.v1": {
+		type: "object",
+		properties: {
+			shots: {
+				type: "array",
+				items: {
+					type: "object",
+					properties: {
+						id: { type: "string", description: "如 card_01" },
+						durationSec: { type: "number", description: "固定 15" },
+						visualDescription: {
+							type: "string",
+							description:
+								"完整视频提示词，必须保留代码公式：人物 {角色:名}、场景 {场景:名}、台词 {音频:角色名}的音色[情绪]:\"…\"、内心 {音频:OS-角色名}、旁白 {音频:VO-旁白}、音效 音效:\"…\"；含动态15秒时间轴(5-8镜头)",
+						},
+					},
+					required: ["id", "durationSec", "visualDescription"],
+				},
+			},
+		},
+		required: ["shots"],
+	},
+	// ③ script.analyze：剧本 → 资产体系。整段模板版——每个资产带 imagePrompt(完整出图提示词，LLM 直接产)
 	"asset.extract.v1": {
 		type: "object",
 		properties: {
-			visualBible: { type: "object" },
-			characters: { type: "array", items: { type: "object" } },
+			visualBible: { type: "object", description: "项目视觉圣经：style/styleAnchors[]/negativeBaseline[]" },
+			characters: { type: "array", items: { type: "object" }, description: "{code,name,importance,voiceHint,firstAppearance,imagePrompt,variants[]}" },
 			scenes: { type: "array", items: { type: "object" } },
 			creatures: { type: "array", items: { type: "object" } },
 			props: { type: "array", items: { type: "object" } },
 			episodes: { type: "array", items: { type: "object" } },
-			ledger: { type: "object" },
+			ledger: { type: "object", description: "状态账本：newVariants[]/deprecated[]/filteredTemp[]" },
 		},
 		required: ["visualBible", "characters", "scenes", "creatures", "props", "episodes", "ledger"],
 	},

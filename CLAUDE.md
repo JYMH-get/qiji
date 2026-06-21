@@ -142,9 +142,41 @@ POST /v1/assets  (multipart 或 base64)  → { id, url }
 
 **模板已数据化（权威来源 = 管理端）**：模板正文存 `server/data/templates.json`（`TemplateDef`：body/purpose/category/nodeTypes 白名单/variables/schemaId/chainNextId+chainPipeVar 链式/images 参考图/isDefault/order），经 `/v1/catalog` 下发，客户端 `catalogStore` 按 `templatesByNode/templatesByPurpose/templatesByCategory/artStyles` 取用。内置 3 类：①`asset.extract.basic`(purpose=script.analyze)；②`storyboard.split.basic`(purpose=storyboard.split)；③画风预设 `style.3d-guoman/2d-hand/realistic`(无 purpose、不可执行，仅作视觉风格描述符)。
 
-**`skills/` 文件夹现状（2026-06-21）**：旧的 `skills/剧本/*.md`(123/测试通用字段/角色提取/资产拆分)已删（`D` 未提交）；新增 `skills/{剧本2分镜,小说2资产,分镜2视频}/*.docx` 三份**原始提示词草稿**（`??` 未跟踪）。即 `skills/` 已从「运行时 import 的 .md 模板」退化为「待录入管理端的素材草稿」——运行时模板一律走 catalog，不再 `import('...md?raw')`（除 Frame1693 等历史路径，见 §11 遗留）。
+**`skills/` 文件夹（2026-06-21 第26轮已落）**：按**流水线步骤分目录**，每步一份 md 提示词（Word 原稿已转 md 并删除）：
+- `skills/小说2资产/资产拆分.md` → purpose `script.analyze`（资产提取，**整段出图模板**）
+- `skills/剧本2分镜/剧本划分分镜.md` → purpose `storyboard.split`（分集剧本 → 大分镜卡）
+- `skills/分镜2视频/视频分镜提示词.md` → purpose `storyboard.toVideoPrompt`（分镜 → 视频提示词，第26轮新增）
 
-**输出契约 schema（已落 server catalog，硬编码 JSON-Schema）**：`storyboard.v1`(episodeIndex+shots[])、`asset.extract.v1`(visualBible/characters/scenes/creatures/props/episodes/ledger)。变体前缀 `variantPrefixes`(character/scene/creature/prop 各一套，含 `{{变体描述}}{{视觉风格}}` 占位)随 catalog 下发。**仍待定**：分镜字段终稿、规范变量集命名。
+这些 md 是**权威提示词正文的来源**，待录入管理端 `templates.json`（DEFAULT_TEMPLATES）；运行时模板走 catalog 下发。
+
+**输出契约 v1（2026-06-21 第26轮锁定，四项决策：整段模板 / 字段锁定 / 独立 toVideoPrompt purpose / 保留 `{角色:}{场景:}{音频:}` 公式）**：
+
+① `asset.extract.v1`（`script.analyze` 输出，**整段模板版**）——每个资产带 `imagePrompt`(完整出图提示词，LLM 直接产)：
+```jsonc
+{ "visualBible": { "style","styleAnchors[]","negativeBaseline[]" },
+  "characters": [{ "code":"C01","name","importance":"core|support|crowd","voiceHint","firstAppearance",
+                   "imagePrompt":"<完整出图模板>",
+                   "variants":[{ "code":"C01A","label","inheritsFrom":"C01","imagePrompt":"<完整变体模板>" }] }],
+  "scenes":[{ "code":"S01","name","imagePrompt","variants":[] }],
+  "creatures":[{ "code":"M01",… }], "props":[{ "code":"P01",… }],
+  "episodes":[{ "index","title","summary" }],
+  "ledger":{ "newVariants[]","deprecated[]","filteredTemp[]" } }
+```
+编号 C(核心)/A(配角反派)/G(群像→importance:crowd)/M(怪物异兽=creature)/S(场景)/P(道具)。
+
+② `storyboard.v1`（`storyboard.split` 输出）——大分镜卡：
+```jsonc
+{ "episodeIndex":1, "shots":[{ "index":1, "scriptContent":"<含【对话】【旁白】等标签的剧本内容>", "durationSec":15 }] }
+```
+
+③ `videoPrompt.v1`（`storyboard.toVideoPrompt` 输出，第26轮新增）——视频生成提示词，`visualDescription` **保留代码公式**供自动素材匹配：
+```jsonc
+{ "shots":[{ "id":"card_01", "durationSec":15,
+             "visualDescription":"…{角色:楚长生} 走入 {场景:阎王殿}… {音频:楚长生}的音色[怒]:\"…\" 音效:\"剑鸣\"…" }] }
+```
+客户端正则抽 `{角色:名}`/`{场景:名}` → 自动填分镜垫素材槽（§5 第5步）。下游 `video.generate` 吃 `visualDescription` + 匹配到的资产图。
+
+**仍待定**：规范变量集命名（`{{text}}/{{requiredAssets}}/{{context}}/{{视觉风格}}` 等统一）。
 
 
 ## 5. 业务工作流（用户端）✅（来自首轮需求）
@@ -192,10 +224,10 @@ POST /v1/assets  (multipart 或 base64)  → { id, url }
 
 ## 9. 关键设计决定（开发期锁定）
 
-- **槽位拆分 ✅**：basePrompt 不再由 LLM 整段生成。提取 LLM 只产**槽位**(身份/年龄/体型/气质/脸型五官/眼神/发型/发色/服装/主色调/辅色/标志特征 等)；完整出图模板(前缀+排版+镜头+布光+负面约束)做成 catalog 的**出图模板**(每类资产 × 每画风一套)，最终 basePrompt = 模板套槽位、确定性合成。好处：模板质量100%保留+一致+可远程改，提取提示词短而准、不漂移。
+- **❌已推翻：槽位拆分**（2026-06-21 第26轮用户拍板「以提示词为准、整段模板」）。原方案是「提取 LLM 只产槽位 + catalog 出图模板确定性合成」；现改为 **LLM 直接产出整段出图模板**（见 `skills/小说2资产/资产拆分.md` 原文：每个资产输出完整「统一风格前缀+DNA锁定+画面要求+禁止红线」）。**后果**：catalog 的 `imageTemplates`(出图模板) 与 `src/services/promptComposer.ts`(槽位合成) 退居**休眠**(不在关键路径，保留不删)；`asset.extract.v1` 每个资产带 `imagePrompt`(完整出图提示词) 字段，详见 §4。变体同理由 LLM 直接产整段变体模板(继承来源+DNA不可变+唯一变化项)。
 - **变体前缀 ✅**：管理端可配全局变量；**角色/场景/生物/道具各一套**前缀（非通用）。
 - **表格/画布单数据源双视图 ✅**：两视图操作同一份项目数据，无 A→B 拷贝；表格按键 ⇄ 画布节点一一映射；节点自带素材格子可直接选/传资产，连线为补充。资产项目级、分集按 id 引用使用。详见 §5。
-  - **映射地基已落 ✅**：`src/lib/purposeRegistry.ts`——`PURPOSE_REGISTRY: Record<Purpose,PurposeMeta>`（类型强制穷尽 **12 个 purpose**，2026-06-21 实测：`contract.ts` 与 `purposeRegistry.ts` 均已删去 `script.toScenes`），固化 `表格按键→purpose→capability→画布节点`，含 `nodeType/assetType/isVariant/buttonLabel/view`，`unwiredPurposes()` 列出当前 **4 个**覆盖空洞（场景/生物/物品变体、audio.tts）。表格视图与节点侧都从此表读语义。
+  - **映射地基已落 ✅**：`src/lib/purposeRegistry.ts`——`PURPOSE_REGISTRY: Record<Purpose,PurposeMeta>`（类型强制穷尽全部 purpose），固化 `表格按键→purpose→capability→画布节点`，含 `nodeType/assetType/isVariant/buttonLabel/view`，`unwiredPurposes()` 列出当前覆盖空洞。表格视图与节点侧都从此表读语义。（**实测 14 个 purpose**：原 13 个含 `script.toScenes`，2026-06-21 第26轮新增 `storyboard.toVideoPrompt`；unwired=5：script.toScenes + 场景/生物/物品变体 + audio.tts。）
   - **执行管线合并·样板已落 🟡**：新增 `src/services/purposeRunner.ts`——`runPurpose(purpose, {prompt/variables/params/onProgress})`，按 purposeRegistry 取 capability/nodeType → resolveAssetModelKey → getAdapter → submit → **复用通用 TaskTracker 集中轮询**（一次性 Promise 包装），表格无需造画布节点；无模型返回 `no_model` 供本地 mock 兜底。已改 `Frame1693.handleAnalyzeScript` 走 runner、删其自建 30×1s 轮询（tsc/build/60 测试全过）。
     - **已推广 4 资产界面 ✅**：16285/16550/16780/161000 的 `handleGenerateImage` + `handleGeneratePresetImage`（共 7 段）改走 `runPurpose("asset.{character|scene|creature|prop}.image")`，删尽各自 30×1s 轮询；保留 `activeImageModel`(=run.modelKey)+Unsplash 兜底（no_model 时走兜底）。tsc/build/60 测试全过。
     - **收口完成·画布表格共用唯一路径 ✅**：新增单例 `src/services/taskCenter.ts`（一个 TaskTracker + 按 taskId 分发 onUpdate 回调），purposeRunner.awaitTask 改用它。`runPurpose` 加 `modelKey` 覆盖（画布传已解析的节点模型）。`pluginRegistry.defaultNodeExecute` 重写为：resolveActiveModelKey→预检→`runPurpose(purpose, {modelKey, onProgress})`→成功分支落资产库+回写 resultAssetId（原 nodeTaskTracker 逻辑搬入）。purpose 取 `params.purpose || NODE_DEFAULT_PURPOSE[node.type]`（约束 meta.nodeType===节点类型，提交类型不变）。**删除 nodeTaskTracker.ts**（dead）。至此画布节点与表格按键共用 runPurpose→taskCenter 单例轮询；batchExecutor 仍为独立批量协调器。tsc/build/60 测试全过（画布节点执行待真机回归）。
@@ -236,8 +268,8 @@ POST /v1/assets  (multipart 或 base64)  → { id, url }
 - 轮询节奏：首轮 400ms、之后 2s；超时按能力——text 20min / video 15min / 其余 4min。5xx/网络抖动不立即判败，下轮重试。
 
 ### 11.2 用户端目录（实测文件，✅=已验证存在）
-- `src/contract.ts`✅ — 两端共享协议类型。**Purpose 共 12 个**（script.analyze, storyboard.split, asset.{character|scene|creature|prop}.{image|variant}, video.generate, audio.tts）；`script.toScenes` **已删**。
-- `src/lib/purposeRegistry.ts`✅ — 12 purpose 全映射；`unwiredPurposes()`=4（scene/creature/prop variant + audio.tts）。
+- `src/contract.ts`✅ — 两端共享协议类型。**Purpose 共 14 个**：script.toScenes, script.analyze, storyboard.split, **storyboard.toVideoPrompt**(第26轮新增), asset.{character|scene|creature|prop}.{image|variant}, video.generate, audio.tts。
+- `src/lib/purposeRegistry.ts`✅ — 14 purpose 全映射；`unwiredPurposes()`=5（script.toScenes + scene/creature/prop variant + audio.tts）。
 - `src/services/`：`managedClient.ts`(HTTP：login/heartbeat/fetchCatalog/generate/getTask/batch/uploadAsset/resolveAssetUrl) · `purposeRunner.ts`(runPurpose) · `taskCenter.ts`(单例分发) · `taskTracker.ts`(共享定时器) · `promptComposer.ts`(槽位合成 base/variant) · `modelAdapter.ts`(re-export) · `projectFile.ts`(+`.test.ts`) · `assetStore.ts` · `creditLedger.ts` · `fileStorage.ts` · `imageEditService.ts` · `projectZip.ts` · `scheduler.ts` · `taskBlackbox.ts` · `webdavSync.ts`。
 - `src/services/adapters/`：`managedAdapter.ts`(catalog 模型→adapter，syncManagedAdapters) · `channelAdapter.ts`(模型解析助手，零兜底) · `registry.ts` · `types.ts` · `mockAdapter.ts`(离线 echo) · `index.ts`(只注册 mock) · `utils.ts`(printLLM*/truncateBase64)。
 - `src/store/`：`connectionStore`(serverUrl+accessKey+session) · `catalogStore`(catalog 缓存+选择器) · `projectStore` · `settingsStore`(含休眠态 channels/apiKeys) · `uiStore` · `canvasStore`(节点/边/组+undo/redo) · `libraryStore`(软删) · `commitStore` · `assistantStore` · `history.ts` · `debouncedSave.ts`(+`.test.ts`)。
@@ -273,7 +305,8 @@ POST /v1/assets  (multipart 或 base64)  → { id, url }
 
 ## 8. 变更记录
 
-- 2026-06-21 第25轮（全量代码复审 + 文档校准）：不依赖旧文档、直接读码核对用户端 services/store/views/nodes + 管理端 server/ 全量，新增 §11 代码地图（请求主链路、目录实测、视图⇄路由⇄功能表、管理端端点/协议/持久化/计费/env、遗留清理）。**校正**：①Purpose 由 13→**12**（`contract.ts`+`purposeRegistry.ts` 均已删 `script.toScenes`），unwired 由 5→**4**；②资产视图映射修正(16285角色/16550场景/16780生物/161000物品/161195视频)；③`nodeTaskTracker.ts` 实已删除（旧快照仍提及），画布表格共用 `taskCenter` 单例；④`skills/` 旧 .md 已删、改为 `剧本2分镜/小说2资产/分镜2视频` 三份 .docx 草稿，运行时模板走 catalog。**实测质量**：客户端 tsc 干净 + 60 测试全过、server tsc 干净。**重点提示**：阶段1/2 全部改动尚未提交（untracked/deleted 未 commit），建议尽快固化。
+- 2026-06-21 第26轮（输出契约锁定 + 提示词分目录转 md + 修正 purpose 计数）：① **修正第25轮回归**——实测 `script.toScenes` 仍在 `contract.ts`+`purposeRegistry.ts`，purpose 是 **13 个**不是 12（上轮正则漏了 `toScenes` 的大写 S）。② **提示词按流水线步骤分目录**：三份 Word 转 md——`小说2资产/资产拆分.md`(script.analyze)、`剧本2分镜/剧本划分分镜.md`(storyboard.split)、`分镜2视频/视频分镜提示词.md`(新 purpose)，删源 docx。③ **四项决策落契约**(整段模板/字段锁定/独立 purpose/保留公式)：契约 `Purpose` 加 `storyboard.toVideoPrompt`(共 14)，purposeRegistry 加映射(buttonLabel 生成视频提示词)；server catalog 三 schema 锁定——`asset.extract.v1`(整段模板版，每资产带 imagePrompt)、`storyboard.v1`(scriptContent+durationSec)、新 `videoPrompt.v1`(visualDescription 保留 {角色:}{场景:}{音频:} 公式)；templates 加 `storyboard.tovideo.basic` 默认模板。④ **§9 槽位拆分决策推翻**——改为 LLM 直接产整段出图模板，catalog imageTemplates + promptComposer 退居休眠。两端 tsc 干净、60 测试全过。**待办**：把 skills md 全文录入 DEFAULT_TEMPLATES body；server prompt.ts/dispatch 处理新 purpose；客户端 storyboard 界面接 toVideoPrompt + 正则抽公式自动填垫素材；parseShots 适配新 storyboard.v1(scriptContent)。
+- 2026-06-21 第25轮（全量代码复审 + 文档校准）：不依赖旧文档、直接读码核对用户端 services/store/views/nodes + 管理端 server/ 全量，新增 §11 代码地图（请求主链路、目录实测、视图⇄路由⇄功能表、管理端端点/协议/持久化/计费/env、遗留清理）。**校正**：①资产视图映射修正(16285角色/16550场景/16780生物/161000物品/161195视频)；③`nodeTaskTracker.ts` 实已删除（旧快照仍提及），画布表格共用 `taskCenter` 单例；④`skills/` 旧 .md 已删、改为 `剧本2分镜/小说2资产/分镜2视频` 三份 .docx 草稿，运行时模板走 catalog。**实测质量**：客户端 tsc 干净 + 60 测试全过、server tsc 干净。**重点提示**：阶段1/2 全部改动尚未提交（untracked/deleted 未 commit），建议尽快固化。
 
 - 2026-06-20 第24轮（图像/视频上游对接：g-aisc 图 + 简梦 JA 视频）：图像 `translateOpenAIImage` 改 g-aisc `/v1/images/generations`(response_format=url + 图生图 images[].image_url + 下载回字节落资产)。新增简梦视频协议 `jianmeng-video`：`jianmeng.ts`(submitJianmengVideo→POST /v1/videos 拿 task_id；pollJianmengVideo→GET /v1/videos/{id} 映射 queued/dispatched/running/completed/failed)；`createVideoPollingTask`(先回 taskId，后台提交+8s 轮询上游→completed 取 video_url 落任务，6h 链接，failed/20min 超时置败，进度随上游)。config 加 `jianmeng{baseUrl=api.jian1.vip, apiKey=JIANMENG_API_KEY}`；resolveUpstream 对 jianmeng-video 走独立渠道回退。models 加 7 个 JA 视频模型(fast/pro × 480/720 + 15s + 1080p，秒计费档可调时长/15s 档固定)+迁移补种；tasks 加 setTaskProgress；admin PROTOCOLS、.env.example 同步。server tsc + 冒烟(catalog 含 JA 模型；无 key 优雅失败"未配置上游密钥")过。**注意**：图生图/视频参考图需公网 HTTPS——本地生成图经 /raw 在 localhost 不可达，需部署到公网域名后真机验证；JA 用独立 sk-(JIANMENG_API_KEY)，与网关 key 不同。
 - 2026-06-20 第23轮（文本上游 SSE 流式·保活+部分正文+进度）：server↔上游由"一次性阻塞(120s)"改为 SSE 流式，配合上一轮 client↔server 轮询，构成"上游流式保活 + 下游轮询抗断连"完整健壮组合。openai.ts `translateOpenAIText` 加 `stream:true` + 手解 SSE(data: 增量 choices[].delta.content)累积 + **空闲超时**(120s 无新数据才中断，总时长不限)；json 流式累积末尾整体 parse。anthropic.ts 改 `client.messages.stream`(on("text")累积 / 结构化用 finalMessage 取 tool_use)，客户端超时放宽 20min。tasks.ts 加 `partialText/partialProgress` + `appendTaskText`，getTaskState 对 running 任务回传部分正文+推进进度。index.ts 串 `OnDelta`：createTextTask 注入 `appendTaskText`，runTextSync/runChain 透传(A段中间不回传、B段最终回传)。server tsc + 冒烟(echo→async→poll success+partial)过。**已知缺口**：①管理端任务内存态，进程重启丢任务(待 Postgres 持久化)；②部分正文已到任务、客户端 UI 尚未展示(poll 仅成功回 resultUri)；③上游真实长任务联调待真 key。
