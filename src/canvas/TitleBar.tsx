@@ -38,7 +38,6 @@ export function TitleBar() {
   const navigate = useNavigate();
   const isWorkspace = location.pathname !== "/" && location.pathname !== "/frame164";
   const isCanvas = location.pathname === "/frame-canvas";
-  const isStoryboard = location.pathname === "/frame-storyboard";
 
   const sortedCommits = useMemo(() => {
     return Object.values(commits).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
@@ -114,7 +113,7 @@ export function TitleBar() {
         
         {isWorkspace && (
           <>
-            {(isCanvas || isStoryboard) && (
+            {isCanvas && (
               <button
                 onClick={() => navigate("/frame1693")}
                 className="flex items-center gap-1 px-1.5 py-0.5 ml-3 rounded text-[10px] text-primary hover:text-primary-foreground hover:bg-primary/20 transition-all cursor-pointer border border-primary/20 active:scale-95"

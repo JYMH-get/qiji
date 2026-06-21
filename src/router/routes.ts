@@ -7,7 +7,6 @@ import Frame16780 from "@/views/Frame16780";
 import Frame16550 from "@/views/Frame16550";
 import Frame21 from "@/views/Frame21";
 import FrameGroup from "@/views/FrameGroup";
-import FrameStoryboard from "@/views/FrameStoryboard";
 import FrameCanvas from "@/views/FrameCanvas";
 
 export const routes = [
@@ -50,11 +49,6 @@ export const routes = [
     path: "/frame16550",
     component: Frame16550,
     guid: "16:550",
-  },
-  {
-    path: "/frame-storyboard",
-    component: FrameStoryboard,
-    guid: "16:storyboard",
   },
   {
     path: "/frame-canvas",

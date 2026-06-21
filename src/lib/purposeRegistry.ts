@@ -39,7 +39,7 @@ export const VIEW_ROUTE: Record<WorkbenchView, string> = {
 	creature: "/frame16780",
 	prop: "/frame161000",
 	video: "/frame161195",
-	storyboard: "/frame-storyboard",
+	storyboard: "/frame161195",
 };
 
 export interface PurposeMeta {

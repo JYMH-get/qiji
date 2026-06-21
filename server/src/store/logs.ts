@@ -10,6 +10,25 @@ import type { GenerateRequest } from "../contract.ts";
 const FILE = "logs.jsonl";
 const MAX_KEEP = 5000; // 超过则裁剪最旧
 
+/** 步骤 purpose 的中文代称（与客户端 purposeRegistry / admin PURPOSE_LABELS 对应） */
+export const PURPOSE_LABELS: Record<string, string> = {
+	"script.toScenes": "小说转剧本",
+	"script.analyze": "剧本分析",
+	"storyboard.split": "剧本分镜",
+	"storyboard.toVideoPrompt": "视频提示词",
+	"asset.character.image": "角色出图",
+	"asset.character.variant": "角色变体",
+	"asset.scene.image": "场景出图",
+	"asset.scene.variant": "场景变体",
+	"asset.creature.image": "生物出图",
+	"asset.creature.variant": "生物变体",
+	"asset.prop.image": "物品出图",
+	"asset.prop.variant": "物品变体",
+	"video.generate": "视频生成",
+	"audio.tts": "语音合成",
+};
+const purposeLabel = (p?: string) => (p ? PURPOSE_LABELS[p] || p : "");
+
 export interface LogEntry {
 	id: string;
 	clientTaskId?: string;
@@ -18,6 +37,7 @@ export interface LogEntry {
 	userName?: string;
 	purpose?: string; // 请求方式 / 在哪一步
 	model?: string;
+	cost?: number; // 本次消耗积分（model.cost）
 	status: "running" | "success" | "failed";
 	startedAt: string;
 	finishedAt?: string;
@@ -36,6 +56,7 @@ export function startLog(input: {
 	req: GenerateRequest;
 	userId?: string;
 	userName?: string;
+	cost?: number;
 }): LogEntry {
 	const entry: LogEntry = {
 		id: genId("log"),
@@ -44,6 +65,7 @@ export function startLog(input: {
 		userName: input.userName,
 		purpose: input.req.purpose,
 		model: input.req.model,
+		cost: input.cost,
 		status: "running",
 		startedAt: new Date().toISOString(),
 		request: truncateBase64(input.req),
@@ -90,12 +112,14 @@ export function listLogs(opts?: {
 }): { total: number; items: LogEntry[] } {
 	const limit = opts?.limit ?? 50;
 	const offset = opts?.offset ?? 0;
+	// 文本筛选一律「不区分大小写的包含」；步骤同时匹配中文代称与原 purpose
+	const has = (hay: string, needle?: string) => !needle || hay.toLowerCase().includes(needle.toLowerCase());
 	let arr = logs;
 	if (opts?.from != null) arr = arr.filter((l) => new Date(l.startedAt).getTime() >= opts.from!);
 	if (opts?.to != null) arr = arr.filter((l) => new Date(l.startedAt).getTime() < opts.to!);
-	if (opts?.userName) arr = arr.filter((l) => (l.userName || "") === opts.userName);
-	if (opts?.purpose) arr = arr.filter((l) => (l.purpose || "") === opts.purpose);
-	if (opts?.model) arr = arr.filter((l) => (l.model || "") === opts.model);
+	if (opts?.userName) arr = arr.filter((l) => has(l.userName || "", opts.userName));
+	if (opts?.purpose) arr = arr.filter((l) => has((l.purpose || "") + " " + purposeLabel(l.purpose), opts.purpose));
+	if (opts?.model) arr = arr.filter((l) => has(l.model || "", opts.model));
 	const sorted = [...arr].reverse(); // 最新在前
 	return { total: arr.length, items: sorted.slice(offset, offset + limit) };
 }

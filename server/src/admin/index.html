@@ -341,7 +341,17 @@ function selOpts(list, sel, labelFn){
     (list||[]).map(v=>`<option value="${esc(v)}" ${v===sel?'selected':''}>${esc(labelFn?labelFn(v):v)}</option>`)
   ).join("");
 }
-function setLogRange(key){ logFilter.rangeKey=key; loadLogs(true); }
+// 读取三个文本框到筛选状态（按「应用」或时间按钮时调用，避免边打字边查）
+function readLogInputs(){
+  const u=$("#f_user"), p=$("#f_purpose"), m=$("#f_model");
+  if(u) logFilter.user=u.value.trim();
+  if(p) logFilter.purpose=p.value.trim();
+  if(m) logFilter.model=m.value.trim();
+}
+function applyLogFilter(){ readLogInputs(); loadLogs(true); }
+function clearLogFilter(){ logFilter.user=logFilter.purpose=logFilter.model=""; loadLogs(true); }
+function setLogRange(key){ readLogInputs(); logFilter.rangeKey=key; loadLogs(true); }
+function fmtTime(s){ return s? new Date(s).toLocaleString() : "—"; }
 
 async function loadLogs(reset=true){
   if (reset) logOffset = 0;
@@ -349,17 +359,23 @@ async function loadLogs(reset=true){
   if (reset){
     if (!logFacetsCache){ try { logFacetsCache = await api("/admin-api/logs/facets"); } catch { logFacetsCache = {users:[],purposes:[],models:[]}; } }
     const f = logFacetsCache;
+    const dlPurpose = (f.purposes||[]).map(p=>`<option value="${esc(purposeLabel(p))}">`).join("");
+    const dlModel = (f.models||[]).map(m=>`<option value="${esc(m)}">`).join("");
+    const dlUser = (f.users||[]).map(u=>`<option value="${esc(u)}">`).join("");
     el.innerHTML = `
       <div class="row" style="gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
         ${rangeBtn("today","今日")}${rangeBtn("yesterday","昨日")}${rangeBtn("3d","近三天")}${rangeBtn("7d","近一周")}${rangeBtn("all","全部")}
         <span style="width:10px"></span>
-        <span class="muted">用户</span><select onchange="logFilter.user=this.value;loadLogs(true)">${selOpts(f.users, logFilter.user)}</select>
-        <span class="muted">步骤</span><select onchange="logFilter.purpose=this.value;loadLogs(true)">${selOpts(f.purposes, logFilter.purpose, purposeLabel)}</select>
-        <span class="muted">模型</span><select onchange="logFilter.model=this.value;loadLogs(true)">${selOpts(f.models, logFilter.model)}</select>
+        <span class="muted">用户</span><input id="f_user" value="${esc(logFilter.user)}" placeholder="用户名" list="dl_user" style="width:110px" onkeydown="if(event.key==='Enter')applyLogFilter()">
+        <span class="muted">步骤</span><input id="f_purpose" value="${esc(logFilter.purpose)}" placeholder="如 角色出图" list="dl_purpose" style="width:120px" onkeydown="if(event.key==='Enter')applyLogFilter()">
+        <span class="muted">模型</span><input id="f_model" value="${esc(logFilter.model)}" placeholder="模型" list="dl_model" style="width:130px" onkeydown="if(event.key==='Enter')applyLogFilter()">
+        <button class="sm" onclick="applyLogFilter()">应用</button>
+        <button class="sm" onclick="clearLogFilter()">清空</button>
         <button class="sm" onclick="logFacetsCache=null;loadLogs(true)">刷新</button>
         <span class="muted" id="l_meta"></span>
+        <datalist id="dl_user">${dlUser}</datalist><datalist id="dl_purpose">${dlPurpose}</datalist><datalist id="dl_model">${dlModel}</datalist>
       </div>
-      <table><thead><tr><th>开始</th><th>用户</th><th>步骤</th><th>模型</th><th>状态</th><th>耗时</th><th></th></tr></thead><tbody id="l_body"></tbody></table>
+      <table><thead><tr><th>请求时间</th><th>开始时间</th><th>结束时间</th><th>用时(秒)</th><th>用户</th><th>步骤</th><th>模型</th><th>消耗</th><th>状态</th><th></th></tr></thead><tbody id="l_body"></tbody></table>
       <div class="row" style="margin-top:10px"><button class="sm" onclick="moreLogs()">加载更多</button></div>`;
   }
   try {
@@ -373,16 +389,19 @@ async function loadLogs(reset=true){
     const { total, items } = await api("/admin-api/logs?"+qs.toString());
     $("#l_meta").textContent = "共 " + total + " 条（已筛选）";
     const rows = items.map(l => `<tr>
-      <td class="muted">${new Date(l.startedAt).toLocaleString()}</td>
+      <td class="muted">${fmtTime(l.startedAt)}</td>
+      <td class="muted">${fmtTime(l.startedAt)}</td>
+      <td class="muted">${fmtTime(l.finishedAt)}</td>
+      <td class="muted">${l.durationMs!=null? (l.durationMs/1000).toFixed(1)+"s":"—"}</td>
       <td>${esc(l.userName||"—")}</td>
       <td title="${esc(l.purpose||"")}">${esc(purposeLabel(l.purpose))}</td>
       <td class="mono">${esc(l.model||"—")}</td>
+      <td>${l.cost!=null? l.cost : "—"}</td>
       <td><span class="pill ${l.status==='success'?'ok':l.status==='failed'?'bad':'run'}">${l.status}</span></td>
-      <td class="muted">${l.durationMs!=null? l.durationMs+"ms":"—"}</td>
       <td><button class="sm" onclick="showLog('${l.id}')">详情</button></td></tr>`).join("");
-    if (reset) $("#l_body").innerHTML = rows || `<tr><td colspan="7" class="muted">该筛选条件下暂无记录</td></tr>`;
+    if (reset) $("#l_body").innerHTML = rows || `<tr><td colspan="10" class="muted">该筛选条件下暂无记录</td></tr>`;
     else $("#l_body").insertAdjacentHTML("beforeend", rows);
-  } catch(e){ $("#l_body").innerHTML = `<tr><td colspan="7" class="bad">${esc(e.message)}</td></tr>`; }
+  } catch(e){ $("#l_body").innerHTML = `<tr><td colspan="10" class="bad">${esc(e.message)}</td></tr>`; }
 }
 function moreLogs(){ logOffset += 50; loadLogs(false); }
 async function showLog(id){
@@ -393,6 +412,7 @@ async function showLog(id){
       <div><div class="muted">用户</div>${esc(l.userName||"—")}</div>
       <div><div class="muted">步骤</div><span title="${esc(l.purpose||"")}">${esc(purposeLabel(l.purpose))}</span></div>
       <div><div class="muted">模型</div><span class="mono">${esc(l.model||"—")}</span></div>
+      <div><div class="muted">消耗</div>${l.cost!=null? l.cost+" 积分" : "—"}</div>
       <div><div class="muted">状态</div>${esc(l.status)}</div>
       <div><div class="muted">请求时间</div>${new Date(l.startedAt).toLocaleString()}</div>
       <div><div class="muted">完成时间</div>${l.finishedAt? new Date(l.finishedAt).toLocaleString():"—"}</div>
