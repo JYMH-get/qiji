@@ -79,11 +79,38 @@ export function attachUpstream(id: string, rec: { request?: unknown; response?: 
 	writeJsonl(FILE, logs);
 }
 
-export function listLogs(opts?: { limit?: number; offset?: number }): { total: number; items: LogEntry[] } {
+export function listLogs(opts?: {
+	limit?: number;
+	offset?: number;
+	from?: number; // startedAt ≥ from（epoch ms）
+	to?: number; // startedAt < to（epoch ms）
+	userName?: string;
+	purpose?: string;
+	model?: string;
+}): { total: number; items: LogEntry[] } {
 	const limit = opts?.limit ?? 50;
 	const offset = opts?.offset ?? 0;
-	const sorted = [...logs].reverse(); // 最新在前
-	return { total: logs.length, items: sorted.slice(offset, offset + limit) };
+	let arr = logs;
+	if (opts?.from != null) arr = arr.filter((l) => new Date(l.startedAt).getTime() >= opts.from!);
+	if (opts?.to != null) arr = arr.filter((l) => new Date(l.startedAt).getTime() < opts.to!);
+	if (opts?.userName) arr = arr.filter((l) => (l.userName || "") === opts.userName);
+	if (opts?.purpose) arr = arr.filter((l) => (l.purpose || "") === opts.purpose);
+	if (opts?.model) arr = arr.filter((l) => (l.model || "") === opts.model);
+	const sorted = [...arr].reverse(); // 最新在前
+	return { total: arr.length, items: sorted.slice(offset, offset + limit) };
+}
+
+/** 筛选下拉的可选值（去重，取全量日志） */
+export function logFacets(): { users: string[]; purposes: string[]; models: string[] } {
+	const u = new Set<string>();
+	const p = new Set<string>();
+	const m = new Set<string>();
+	for (const l of logs) {
+		if (l.userName) u.add(l.userName);
+		if (l.purpose) p.add(l.purpose);
+		if (l.model) m.add(l.model);
+	}
+	return { users: [...u].sort(), purposes: [...p].sort(), models: [...m].sort() };
 }
 
 export function getLog(id: string): LogEntry | undefined {

@@ -20,7 +20,7 @@ import {
 	listTemplates, createTemplate, updateTemplate, deleteTemplate,
 	type TemplateDef,
 } from "../store/templates.ts";
-import { listLogs, getLog } from "../store/logs.ts";
+import { listLogs, getLog, logFacets } from "../store/logs.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ADMIN_HTML = join(here, "..", "admin", "index.html");
@@ -98,9 +98,20 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 		});
 
 		// ── 请求记录 ──
+		// 筛选下拉选项（用户/步骤/模型去重）。须在 /:id 之前注册以免被参数路由吞掉。
+		api.get("/admin-api/logs/facets", async () => logFacets());
 		api.get("/admin-api/logs", async (req) => {
-			const q = req.query as { limit?: string; offset?: string };
-			return listLogs({ limit: Number(q.limit ?? 50), offset: Number(q.offset ?? 0) });
+			const q = req.query as Record<string, string | undefined>;
+			const num = (v?: string) => (v != null && v !== "" ? Number(v) : undefined);
+			return listLogs({
+				limit: num(q.limit) ?? 50,
+				offset: num(q.offset) ?? 0,
+				from: num(q.from),
+				to: num(q.to),
+				userName: q.user || undefined,
+				purpose: q.purpose || undefined,
+				model: q.model || undefined,
+			});
 		});
 		api.get("/admin-api/logs/:id", async (req, reply) => {
 			const { id } = req.params as { id: string };

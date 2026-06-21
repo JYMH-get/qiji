@@ -305,6 +305,7 @@ POST /v1/assets  (multipart 或 base64)  → { id, url }
 
 ## 8. 变更记录
 
+- 2026-06-21 第33轮（请求记录筛选 + 步骤中文代称）：管理端请求记录加筛选——快捷时间(今日/昨日/近三天/近一周/全部，**默认今日**)+用户+步骤+模型下拉。`listLogs` 加 `from/to/userName/purpose/model` 过滤，新增 `logFacets()`(去重下拉值) + `GET /admin-api/logs/facets`(注册在 `/:id` 前)。admin 页加筛选栏(快捷按钮高亮+三下拉，改任一即重查)、空结果提示、刷新清缓存。步骤列与详情改用**中文代称**(`PURPOSE_LABELS`：剧本分析/剧本分镜/角色出图/…，原 purpose 存 title 悬浮)。server tsc 过。
 - 2026-06-21 第32轮（请求记录四段全留 + 清理休眠 CSS）：① 删除已休眠的 `Frame16550/16780/161000.css`(无引用)。② 管理端请求记录原本只存**两段**（①用户→管理端请求、②管理端→用户响应）；本轮补齐**上游两段**——③管理端→上游(网关/第三方)请求体、④上游→管理端原始响应。`LogEntry` 加 `upstreamRequest/upstreamResponse` + `attachUpstream()`；新增 `OnUpstream` 回调由 `dispatchGenerate` 经 `attachUpstream(logId)` 注入，贯穿 openai 文本/图、anthropic 文本、gemini 图、jianmeng 视频(提交+轮询终态)；echo 也记录。简梦视频 ④ 先记提交响应、后被**轮询完成/失败的原始响应覆盖**（终态以最终为准）。admin 日志详情渲染四段(③④无则提示)。base64 经 `truncateBase64` 截断。server tsc + client build 过。
 - 2026-06-21 第31轮（资产工作台推广至全部 5 页）：场景 `Frame16550`(scenes/asset.scene.image)、生物 `Frame16780`(organisms/asset.creature.image)、物品 `Frame161000`(items/asset.prop.image)、群像 `FrameGroup`(crowds/asset.character.image，无音色) 均改为薄壳调用 `AssetWorkbench`（与角色页同一 5 区布局）。各页 textField=description（群像=features）。旧的 Frame16550/16780/161000.css 不再被引用(休眠)。tsc+build+60 测试全过。
 - 2026-06-21 第30轮（提示词栏区4 重排 + 出图要求）：AssetWorkbench 区4 去空位重排为：①设计理念/说明(仅展示，不入请求)②出图提示词(占满剩余高度)③绑定音色(独占一行，占位：音色选择/音色生成/本地上传，暂未实现)④出图要求(进入请求)——数量 1-4 默认1、质量 low/medium/high/auto 默认auto、比例分辨率 7 档(1024²/1536×1024/1024×1536/2048²/2048×1152/3840×2160/2160×3840)。生成调用 params 改用所选 {size,quality}。tsc+build 过。

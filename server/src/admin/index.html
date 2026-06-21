@@ -307,25 +307,81 @@ async function removeImage(id, idx){
 }
 
 // ── 请求记录 ──
+// 步骤 purpose 中文代称（展示用；与客户端 purposeRegistry 对应）
+const PURPOSE_LABELS = {
+  "script.toScenes":"小说转剧本", "script.analyze":"剧本分析", "storyboard.split":"剧本分镜",
+  "storyboard.toVideoPrompt":"视频提示词",
+  "asset.character.image":"角色出图", "asset.character.variant":"角色变体",
+  "asset.scene.image":"场景出图", "asset.scene.variant":"场景变体",
+  "asset.creature.image":"生物出图", "asset.creature.variant":"生物变体",
+  "asset.prop.image":"物品出图", "asset.prop.variant":"物品变体",
+  "video.generate":"视频生成", "audio.tts":"语音合成",
+};
+const purposeLabel = (p) => PURPOSE_LABELS[p] || p || "—";
+
 let logOffset = 0;
+let logFacetsCache = null;
+let logFilter = { rangeKey:"today", user:"", purpose:"", model:"" }; // 默认今日
+
+function dayStartMs(t){ const x=new Date(t); x.setHours(0,0,0,0); return x.getTime(); }
+function computeRange(key){
+  const now=Date.now(), today=dayStartMs(now), DAY=86400000;
+  if(key==="today") return {from:today, to:now};
+  if(key==="yesterday") return {from:today-DAY, to:today};
+  if(key==="3d") return {from:today-2*DAY, to:now};
+  if(key==="7d") return {from:today-6*DAY, to:now};
+  return {from:undefined, to:undefined}; // all
+}
+function rangeBtn(key,label){
+  const on = logFilter.rangeKey===key;
+  return `<button class="sm" style="${on?'background:#8b5cf6;color:#fff;border-color:#8b5cf6':''}" onclick="setLogRange('${key}')">${label}</button>`;
+}
+function selOpts(list, sel, labelFn){
+  return ['<option value="">全部</option>'].concat(
+    (list||[]).map(v=>`<option value="${esc(v)}" ${v===sel?'selected':''}>${esc(labelFn?labelFn(v):v)}</option>`)
+  ).join("");
+}
+function setLogRange(key){ logFilter.rangeKey=key; loadLogs(true); }
+
 async function loadLogs(reset=true){
   if (reset) logOffset = 0;
   const el = $("#tab-logs");
-  if (reset) el.innerHTML = `<div class="row"><button class="sm" onclick="loadLogs(true)">刷新</button><span class="muted" id="l_meta"></span></div>
-    <table><thead><tr><th>开始</th><th>用户</th><th>步骤(purpose)</th><th>模型</th><th>状态</th><th>耗时</th><th></th></tr></thead><tbody id="l_body"></tbody></table>
-    <div class="row" style="margin-top:10px"><button class="sm" onclick="moreLogs()">加载更多</button></div>`;
+  if (reset){
+    if (!logFacetsCache){ try { logFacetsCache = await api("/admin-api/logs/facets"); } catch { logFacetsCache = {users:[],purposes:[],models:[]}; } }
+    const f = logFacetsCache;
+    el.innerHTML = `
+      <div class="row" style="gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+        ${rangeBtn("today","今日")}${rangeBtn("yesterday","昨日")}${rangeBtn("3d","近三天")}${rangeBtn("7d","近一周")}${rangeBtn("all","全部")}
+        <span style="width:10px"></span>
+        <span class="muted">用户</span><select onchange="logFilter.user=this.value;loadLogs(true)">${selOpts(f.users, logFilter.user)}</select>
+        <span class="muted">步骤</span><select onchange="logFilter.purpose=this.value;loadLogs(true)">${selOpts(f.purposes, logFilter.purpose, purposeLabel)}</select>
+        <span class="muted">模型</span><select onchange="logFilter.model=this.value;loadLogs(true)">${selOpts(f.models, logFilter.model)}</select>
+        <button class="sm" onclick="logFacetsCache=null;loadLogs(true)">刷新</button>
+        <span class="muted" id="l_meta"></span>
+      </div>
+      <table><thead><tr><th>开始</th><th>用户</th><th>步骤</th><th>模型</th><th>状态</th><th>耗时</th><th></th></tr></thead><tbody id="l_body"></tbody></table>
+      <div class="row" style="margin-top:10px"><button class="sm" onclick="moreLogs()">加载更多</button></div>`;
+  }
   try {
-    const { total, items } = await api("/admin-api/logs?limit=50&offset="+logOffset);
-    $("#l_meta").textContent = "共 " + total + " 条";
+    const r = computeRange(logFilter.rangeKey);
+    const qs = new URLSearchParams({ limit:"50", offset:String(logOffset) });
+    if (r.from!=null) qs.set("from", String(r.from));
+    if (r.to!=null) qs.set("to", String(r.to));
+    if (logFilter.user) qs.set("user", logFilter.user);
+    if (logFilter.purpose) qs.set("purpose", logFilter.purpose);
+    if (logFilter.model) qs.set("model", logFilter.model);
+    const { total, items } = await api("/admin-api/logs?"+qs.toString());
+    $("#l_meta").textContent = "共 " + total + " 条（已筛选）";
     const rows = items.map(l => `<tr>
       <td class="muted">${new Date(l.startedAt).toLocaleString()}</td>
       <td>${esc(l.userName||"—")}</td>
-      <td class="mono">${esc(l.purpose||"—")}</td>
+      <td title="${esc(l.purpose||"")}">${esc(purposeLabel(l.purpose))}</td>
       <td class="mono">${esc(l.model||"—")}</td>
       <td><span class="pill ${l.status==='success'?'ok':l.status==='failed'?'bad':'run'}">${l.status}</span></td>
       <td class="muted">${l.durationMs!=null? l.durationMs+"ms":"—"}</td>
       <td><button class="sm" onclick="showLog('${l.id}')">详情</button></td></tr>`).join("");
-    if (reset) $("#l_body").innerHTML = rows; else $("#l_body").insertAdjacentHTML("beforeend", rows);
+    if (reset) $("#l_body").innerHTML = rows || `<tr><td colspan="7" class="muted">该筛选条件下暂无记录</td></tr>`;
+    else $("#l_body").insertAdjacentHTML("beforeend", rows);
   } catch(e){ $("#l_body").innerHTML = `<tr><td colspan="7" class="bad">${esc(e.message)}</td></tr>`; }
 }
 function moreLogs(){ logOffset += 50; loadLogs(false); }
@@ -335,7 +391,7 @@ async function showLog(id){
   $("#dlgBody").innerHTML = `
     <div class="grid" style="margin-bottom:12px">
       <div><div class="muted">用户</div>${esc(l.userName||"—")}</div>
-      <div><div class="muted">步骤 purpose</div><span class="mono">${esc(l.purpose||"—")}</span></div>
+      <div><div class="muted">步骤</div><span title="${esc(l.purpose||"")}">${esc(purposeLabel(l.purpose))}</span></div>
       <div><div class="muted">模型</div><span class="mono">${esc(l.model||"—")}</span></div>
       <div><div class="muted">状态</div>${esc(l.status)}</div>
       <div><div class="muted">请求时间</div>${new Date(l.startedAt).toLocaleString()}</div>
