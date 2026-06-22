@@ -15,9 +15,26 @@ export interface User {
 	enabled: boolean;
 	note: string;
 	credits: number;
+	/** 累计消耗（总） */
+	totalSpent: number;
+	/** 当日消耗（配合 dailyDate 判定是否跨天清零） */
+	dailySpent: number;
+	/** dailySpent 所属日期 YYYY-MM-DD；与今天不一致则当日消耗视为 0 */
+	dailyDate: string;
+	/** 绑定机器码（空=未绑定，首次登录激活时绑定当前机器） */
+	machineCode?: string;
 	createdAt: string;
 	updatedAt: string;
 	lastSeenAt?: string;
+}
+
+function todayKey(): string {
+	return new Date().toISOString().slice(0, 10);
+}
+
+/** 当日消耗（跨天自动归零的展示值，不改存储） */
+export function dailySpentToday(u: User): number {
+	return u.dailyDate === todayKey() ? (u.dailySpent || 0) : 0;
 }
 
 const FILE = "users.json";
@@ -41,10 +58,20 @@ if (users.length === 0) {
 		enabled: true,
 		note: "首次启动自动创建",
 		credits: 100000,
+		totalSpent: 0,
+		dailySpent: 0,
+		dailyDate: "",
 		createdAt: now,
 		updatedAt: now,
 	});
 	persist();
+}
+
+// 兼容旧数据：补齐新增字段
+for (const u of users) {
+	if (typeof u.totalSpent !== "number") u.totalSpent = 0;
+	if (typeof u.dailySpent !== "number") u.dailySpent = 0;
+	if (typeof u.dailyDate !== "string") u.dailyDate = "";
 }
 
 export function listUsers(): User[] {
@@ -68,6 +95,9 @@ export function createUser(input: Partial<Pick<User, "name" | "note" | "credits"
 		enabled: input.enabled ?? true,
 		note: input.note ?? "",
 		credits: input.credits ?? 0,
+		totalSpent: 0,
+		dailySpent: 0,
+		dailyDate: "",
 		createdAt: now,
 		updatedAt: now,
 	};
@@ -104,9 +134,33 @@ export function chargeCredits(id: string, amount: number): { ok: boolean; remain
 	if (amount <= 0) return { ok: true, remaining: u.credits };
 	if (u.credits < amount) return { ok: false, remaining: u.credits };
 	u.credits -= amount;
+	// 记录消耗：当日（跨天清零）+ 累计
+	const today = todayKey();
+	if (u.dailyDate !== today) { u.dailyDate = today; u.dailySpent = 0; }
+	u.dailySpent = (u.dailySpent || 0) + amount;
+	u.totalSpent = (u.totalSpent || 0) + amount;
 	u.updatedAt = new Date().toISOString();
 	persist();
 	return { ok: true, remaining: u.credits };
+}
+
+/**
+ * 机器码校验/绑定（登录时调用）：
+ *  - 未绑定 → 绑定当前机器，返回 ok。
+ *  - 已绑定且一致 → ok。
+ *  - 已绑定但不一致 / 缺机器码 → 拒绝。
+ */
+export function bindOrCheckMachine(u: User, machineCode: string | undefined): { ok: boolean; error?: string } {
+	const mc = (machineCode ?? "").trim();
+	if (!mc) return { ok: false, error: "缺少机器码" };
+	if (!u.machineCode) {
+		u.machineCode = mc;
+		u.updatedAt = new Date().toISOString();
+		persist();
+		return { ok: true };
+	}
+	if (u.machineCode !== mc) return { ok: false, error: "该激活码已绑定其他机器，请联系管理员解绑" };
+	return { ok: true };
 }
 
 /** 校验 accessKey 是否对应一个启用的用户；顺便刷新 lastSeen */

@@ -166,7 +166,7 @@ export async function translateOpenAIImage(req: GenerateRequest, up: Upstream, o
 			signal: AbortSignal.timeout(180000),
 		});
 	} catch (err) {
-		return { ok: false, error: `图像上游请求失败：${(err as Error).message}` };
+		return { ok: false, error: `图像上游请求失败，请审查提示词是否规范：${(err as Error).message}` };
 	}
 	const data: any = await resp.json().catch(() => ({}));
 	onUpstream?.({ response: { httpStatus: resp.status, body: data } });

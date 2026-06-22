@@ -5,7 +5,7 @@
  * templateId → 管理端模板库正文，{{变量}} 由 req.variables 填充。
  */
 import type { GenerateRequest, AssetType } from "../contract.ts";
-import { getTemplateDef } from "../store/templates.ts";
+import { getTemplateDef, getDefaultTemplate } from "../store/templates.ts";
 import { getVariantPrefix } from "../catalog.ts";
 
 /** asset.{character|scene|creature|prop}.variant → 资产类型 */
@@ -41,7 +41,14 @@ export function buildPrompt(req: GenerateRequest): string {
 		if (tpl && tpl.body.trim()) return fillTemplate(tpl.body, v as Record<string, string>);
 	}
 
+	// 自由提示词（画布节点等显式整段 prompt）优先于按 purpose 的默认模板，避免被模板覆盖
 	if (typeof v.prompt === "string" && v.prompt.trim()) return v.prompt;
+
+	// 无 templateId 且无自由 prompt：按 purpose 取默认模板正文兜底（提示词拼接全量服务端化）
+	if (req.purpose) {
+		const def = getDefaultTemplate(req.purpose);
+		if (def && def.body.trim()) return fillTemplate(def.body, v as Record<string, string>);
+	}
 	if (typeof v.原文 === "string" && v.原文.trim()) {
 		const parts = [`视觉风格：${v.视觉风格 ?? ""}`, `原文：\n${v.原文}`];
 		if (v.历史资产) parts.push(`历史资产：\n${v.历史资产}`);

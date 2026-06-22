@@ -120,7 +120,7 @@ async function loadUsers(){
     <input id="nu_note" placeholder="备注" style="flex:1" />
     <button class="primary" onclick="addUser()">+ 新建用户</button></div>
     <div class="muted" id="u_err"></div></div>
-    <table><thead><tr><th>用户名</th><th>accessKey</th><th>启用</th><th>额度</th><th>备注</th><th>最近活跃</th><th></th></tr></thead><tbody id="u_body"></tbody></table>`;
+    <table><thead><tr><th>用户名</th><th>accessKey</th><th>启用</th><th>额度</th><th>当日消耗</th><th>总消耗</th><th>绑定机器码</th><th>备注</th><th>最近活跃</th><th></th></tr></thead><tbody id="u_body"></tbody></table>`;
   try {
     const { items } = await api("/admin-api/users");
     $("#u_body").innerHTML = items.map(u => `<tr>
@@ -128,11 +128,15 @@ async function loadUsers(){
       <td><span class="mono">${esc(u.accessKey)}</span> <button class="sm" onclick="navigator.clipboard.writeText('${esc(u.accessKey)}')">复制</button> <button class="sm" onclick="regen('${u.id}')">重置</button></td>
       <td><input type="checkbox" ${u.enabled?"checked":""} onchange="updUser('${u.id}','enabled',this.checked)"/></td>
       <td><input type="number" value="${u.credits}" onchange="updUser('${u.id}','credits',Number(this.value))" style="width:90px"/></td>
+      <td class="muted">${u.dailySpent||0}</td>
+      <td class="muted">${u.totalSpent||0}</td>
+      <td>${u.machineCode ? `<span class="mono" title="${esc(u.machineCode)}">${esc(u.machineCode.slice(0,10))}…</span> <button class="sm danger" onclick="unbind('${u.id}')">解绑</button>` : `<span class="muted">未绑定</span>`}</td>
       <td><input value="${esc(u.note)}" onchange="updUser('${u.id}','note',this.value)" style="width:140px"/></td>
       <td class="muted">${u.lastSeenAt ? new Date(u.lastSeenAt).toLocaleString() : "—"}</td>
       <td><button class="sm danger" onclick="delUser('${u.id}','${esc(u.name)}')">删除</button></td></tr>`).join("");
   } catch(e){ $("#u_err").textContent = e.message; }
 }
+async function unbind(id){ if(!confirm("解绑该用户的机器码？解绑后可在新机器上重新登录绑定。"))return; await updUser(id,'machineCode',''); loadUsers(); }
 async function addUser(){ try { await api("/admin-api/users",{method:"POST",body:JSON.stringify({name:$("#nu_name").value,credits:Number($("#nu_credits").value)||0,note:$("#nu_note").value})}); loadUsers(); } catch(e){ $("#u_err").textContent=e.message; } }
 async function updUser(id,k,v){ try { await api("/admin-api/users/"+id,{method:"PUT",body:JSON.stringify({[k]:v})}); } catch(e){ alert(e.message); } }
 async function regen(id){ if(!confirm("重置该用户 accessKey？旧的将失效。"))return; await api("/admin-api/users/"+id+"/regenerate-key",{method:"POST"}); loadUsers(); }

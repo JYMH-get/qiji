@@ -9,7 +9,7 @@ import { buildCatalog } from "./catalog.ts";
 import { dispatchGenerate } from "./translators/index.ts";
 import { getTaskState, createCompletedTask } from "./store/tasks.ts";
 import { createAsset, getAsset, getAssetBytes, assetUrl } from "./store/assets.ts";
-import { getUserByAccessKey, chargeCredits } from "./store/users.ts";
+import { getUserByAccessKey, chargeCredits, bindOrCheckMachine } from "./store/users.ts";
 import { getModelDef } from "./store/models.ts";
 import { startLog } from "./store/logs.ts";
 import type { GenerateRequest, BatchRequest, BatchState, TaskState, Capability } from "./contract.ts";
@@ -43,11 +43,17 @@ let _batchSeq = 0;
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
 	// ── 公开：登录校验 accessKey ──
 	app.post("/v1/login", async (req, reply) => {
-		const body = (req.body ?? {}) as { accessKey?: string };
+		const body = (req.body ?? {}) as { accessKey?: string; machineCode?: string };
 		const key = body.accessKey?.trim() || bearer(req);
 		const user = key ? getUserByAccessKey(key) : undefined;
 		if (!user || !user.enabled) {
 			return reply.code(401).send({ error: { message: "accessKey 无效或已被禁用" } });
+		}
+		// 机器码：未绑定→绑定当前机器；已绑定→必须一致（body 优先，回退请求头）
+		const machineCode = body.machineCode || (req.headers["x-machine-code"] as string | undefined);
+		const mc = bindOrCheckMachine(user, machineCode);
+		if (!mc.ok) {
+			return reply.code(403).send({ error: { message: mc.error || "机器码校验失败" } });
 		}
 		return { ok: true, user: { id: user.id, name: user.name, credits: user.credits } };
 	});
@@ -67,7 +73,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 	await app.register(async (api) => {
 		api.addHook("preHandler", requireAccessKey);
 
-		// 心跳：accessKey 仍有效（启用）则 200，否则 401 → 用户端登出
+		// 心跳：能进到这里说明 requireAccessKey 已校验 accessKey 启用 + 机器码激活匹配。
+		// 任一不符（被禁用/未激活/换机）→ requireAccessKey 直接 401/403 → 用户端登出。
 		api.post("/v1/heartbeat", async (req) => {
 			const u = req.user!;
 			return { ok: true, user: { id: u.id, name: u.name, credits: u.credits } };

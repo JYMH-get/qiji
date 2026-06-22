@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { requireAdmin } from "../auth.ts";
 import {
-	listUsers, getUser, createUser, updateUser, deleteUser, genAccessKey,
+	listUsers, getUser, createUser, updateUser, deleteUser, genAccessKey, dailySpentToday,
 } from "../store/users.ts";
 import {
 	listModels, createModel, updateModel, deleteModel,
@@ -38,7 +38,9 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 		api.addHook("preHandler", requireAdmin);
 
 		// ── 用户 ──
-		api.get("/admin-api/users", async () => ({ items: listUsers() }));
+		api.get("/admin-api/users", async () => ({
+			items: listUsers().map((u) => ({ ...u, dailySpent: dailySpentToday(u), totalSpent: u.totalSpent || 0 })),
+		}));
 		api.post("/admin-api/users", async (req) => createUser((req.body ?? {}) as any));
 		api.put("/admin-api/users/:id", async (req, reply) => {
 			const { id } = req.params as { id: string };
