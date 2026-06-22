@@ -15,6 +15,7 @@
     "core:window:allow-start-dragging",
     "core:webview:default",
     "dialog:default",
+    "drag:default",
     "fs:allow-read",
     "fs:allow-write",
     "fs:read-all",
