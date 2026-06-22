@@ -37,12 +37,14 @@ export interface RunPurposeInput {
 	params?: Record<string, unknown>;
 	/** 显式指定生效模型 key（画布节点传入已解析的节点模型；省略则按表格解析） */
 	modelKey?: string;
-	/** 进度回调（0~100 + 四态） */
-	onProgress?: (progress: number, status: string) => void;
+	/** 进度回调（0~100 + 四态 + 文本流式部分正文） */
+	onProgress?: (progress: number, status: string, partialText?: string) => void;
+	/** 提交确认后立即回传 taskId + adapterKey（供断连保护持久化在途任务） */
+	onTaskId?: (taskId: string, adapterKey: string) => void;
 }
 
 export type RunPurposeResult =
-	| { status: "success"; resultUri: string; taskId: string; modelKey: string; adapterKey: string }
+	| { status: "success"; resultUri: string; assetId?: string; taskId: string; modelKey: string; adapterKey: string }
 	| { status: "failed"; error: string; taskId?: string; modelKey: string; adapterKey?: string }
 	/** 未配置可用模型（管理端未连/未选模型）——调用方可据此走本地 mock 兜底 */
 	| { status: "no_model"; modelKey: string };
@@ -51,17 +53,17 @@ export type RunPurposeResult =
 function awaitTask(
 	taskId: string,
 	adapterKey: string,
-	onProgress?: (progress: number, status: string) => void,
+	onProgress?: (progress: number, status: string, partialText?: string) => void,
 	timeoutMs?: number,
-): Promise<{ status: "success" | "failed"; resultUri?: string; error?: string }> {
+): Promise<{ status: "success" | "failed"; resultUri?: string; assetId?: string; error?: string }> {
 	return new Promise((resolve) => {
 		trackTask({
 			taskId,
 			adapterKey,
 			timeoutMs,
-			onUpdate: (progress, status, resultUri, error) => {
-				onProgress?.(progress, status);
-				if (status === "success") resolve({ status: "success", resultUri });
+			onUpdate: (progress, status, resultUri, error, assetId, partialText) => {
+				onProgress?.(progress, status, partialText);
+				if (status === "success") resolve({ status: "success", resultUri, assetId });
 				else if (status === "failed") resolve({ status: "failed", error });
 			},
 		});
@@ -106,6 +108,7 @@ export async function runPurpose(
 	try {
 		inp.onProgress?.(10, "queued");
 		const { taskId } = await adapter.submit(submitInput, inp.params ?? {}, meta.nodeType);
+		inp.onTaskId?.(taskId, adapter.key);
 
 		// 3. 复用通用 TaskTracker 集中轮询（文本/视频放宽超时）
 		const done = await awaitTask(taskId, adapter.key, inp.onProgress, timeoutMs);
@@ -113,6 +116,7 @@ export async function runPurpose(
 			return {
 				status: "success",
 				resultUri: done.resultUri ?? "",
+				assetId: done.assetId,
 				taskId,
 				modelKey,
 				adapterKey: adapter.key,

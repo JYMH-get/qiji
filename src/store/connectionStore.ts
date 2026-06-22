@@ -12,6 +12,7 @@ import { create } from "zustand";
  */
 
 const LS_KEY = "Qiji:connection";
+const MACHINE_KEY = "Qiji:machineCode";
 
 interface Persisted {
 	serverUrl: string;
@@ -34,6 +35,31 @@ function persist(p: Persisted): void {
 	} catch {
 		/* ignore */
 	}
+}
+
+/**
+ * 本机机器码：首次生成并持久化（localStorage），此后稳定不变。
+ * 管理端首次登录用它绑定当前机器；之后每次登录/心跳都带上做一致性校验。
+ * 清空存储/重装会重新生成 → 需管理端「解绑」后才能在新环境登录。
+ */
+function loadMachineCode(): string {
+	try {
+		let mc = localStorage.getItem(MACHINE_KEY);
+		if (!mc) {
+			mc = (typeof crypto !== "undefined" && crypto.randomUUID)
+				? crypto.randomUUID()
+				: `mc-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+			localStorage.setItem(MACHINE_KEY, mc);
+		}
+		return mc;
+	} catch {
+		return "mc-unknown";
+	}
+}
+
+/** 获取本机机器码（稳定，跨会话持久） */
+export function getMachineCode(): string {
+	return loadMachineCode();
 }
 
 interface SessionUser {

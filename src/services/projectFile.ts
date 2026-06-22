@@ -64,6 +64,44 @@ export interface AssetVariantLite {
   images?: string[];   // 历史生成图
 }
 
+/** 在途生成任务（断连保护：持久化到项目，切页/重启后续跑或重试） */
+export interface PendingGen {
+  id: string;                 // 本地唯一 id
+  taskId?: string;            // 上游任务 id（提交确认后才有）
+  adapterKey?: string;        // 续跑轮询用
+  cat: "characters" | "scenes" | "items" | "organisms" | "crowds";
+  assetId: string;            // 目标资产实体 id
+  variantId: string | null;   // null=基础形象
+  purpose: string;            // Purpose
+  prompt: string;
+  params?: Record<string, unknown>;
+  modelKey?: string;          // 生效模型（重试/续跑沿用同一模型；空=按设置默认解析）
+  input?: Record<string, unknown>; // 额外输入（如图生图垫图 images:[{url}]）；重试/续跑沿用
+  label: string;              // 展示用（资产名/造型）
+  status: "running" | "failed";
+  error?: string;
+  createdAt: number;
+}
+
+/**
+ * 资产二进制三元映射：一份素材同时记录
+ *  - id：管理端分配的全局资产 id（端内自用 + 与管理端沟通的真理）
+ *  - url：公网 url（OSS，兜底 + 跨用户项目互传加载）
+ *  - localPath / localUri：本地原件路径与可显示 uri（convertFileSrc，项目秒级加载 + 拖出复制）
+ */
+export interface AssetBlob {
+  id: string;
+  url?: string;
+  localPath?: string;
+  localUri?: string;
+  mime?: string;
+  ext?: string;
+  /** 拖出软件外时的小预览图本地路径（降采样，避免原图大小的巨大拖影） */
+  thumbPath?: string;
+  /** 落盘前的原始来源 uri（http/data/blob）——用于按界面显示的原 uri 反查回本 blob */
+  srcUri?: string;
+}
+
 /** 分镜的垫素材（来自资产库或本地上传） */
 export interface ShotMaterial {
   id: string;
@@ -79,6 +117,7 @@ export interface StoryboardShot {
   index: number;
   title: string;            // 分镜1
   prompt: string;           // 画面/动态视频提示词
+  durationSec?: number;     // 该分镜时长（秒），从模型输出解析
   materials: ShotMaterial[];
   storyboardUri?: string;   // 故事板图片（图像模型产出）
   videoUri?: string;        // 视频结果（视频模型产出）
@@ -104,6 +143,8 @@ export interface QijiProject {
   migrationLog?: MigrationLogEntry[];
   scriptText?: string;
   visualStyle?: string;
+  /** 项目视觉圣经：全局风格 / 全局色调 / 全局禁用词（资产提取产出） */
+  visualBible?: { style: string; colorSystem: string; negativeGlobal: string };
   /** 项目封面缩略图（data URL，新建时上传，已压缩） */
   coverImage?: string;
   characters?: Array<{ id: string; name: string; features: string; philosophy: string; prompt: string; image?: string; images?: string[]; variants?: AssetVariantLite[] }>;
@@ -113,6 +154,10 @@ export interface QijiProject {
   crowds?: Array<{ id: string; name: string; features: string; philosophy: string; prompt: string; image?: string; images?: string[]; variants?: AssetVariantLite[] }>;
   isAnalyzed?: boolean;
   analysisTime?: string;
+  /** 在途生成任务（断连保护），持久化随项目 */
+  pendingGens?: PendingGen[];
+  /** 资产二进制三元映射：assetId ↔ 公网url ↔ 本地路径（随项目持久化） */
+  assetBlobs?: Record<string, AssetBlob>;
   /** 视频/分镜：分集列表（每集含本集剧本 + 分镜 + 垫素材 + 故事板/视频产物） */
   episodes?: VideoEpisode[];
   projectModelConfig?: ProjectModelConfig;

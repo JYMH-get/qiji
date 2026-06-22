@@ -22,6 +22,8 @@ export type ProgressCallback = (
 	status: string,
 	resultUri?: string,
 	error?: string,
+	assetId?: string,
+	partialText?: string,
 ) => void;
 
 const DEFAULT_TIMEOUT_MS = 4 * 60 * 1000;
@@ -29,7 +31,8 @@ const DEFAULT_TIMEOUT_MS = 4 * 60 * 1000;
 export class TaskTracker {
 	private tasks = new Map<string, TrackedTask>();
 	private timer: ReturnType<typeof setTimeout> | null = null;
-	private intervalMs = 2000;
+	// 1s 轮询：文本流式时「提取一个刷新一个」更细腻（部分正文每秒刷新一次）；图/视频长任务也仍可接受
+	private intervalMs = 1000;
 	constructor(private onProgress: ProgressCallback) {}
 
 	track(task: Omit<TrackedTask, "startedAt" | "timeoutMs"> & { timeoutMs?: number }): void {
@@ -71,7 +74,7 @@ export class TaskTracker {
 					try {
 						const res = await adapter.poll(t.taskId);
 						if (res.status === "success" || res.status === "failed") this.finish(t.taskId);
-						this.onProgress(t.nodeId, res.progress, res.status, res.resultUri, res.error);
+						this.onProgress(t.nodeId, res.progress, res.status, res.resultUri, res.error, res.assetId, res.partialText);
 					} catch (err) {
 						// 网络/网关抖动：保留任务，下一轮继续（不立即失败）
 						this.onProgress(t.nodeId, 50, "running", undefined, (err as Error).message);

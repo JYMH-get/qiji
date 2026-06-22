@@ -6,7 +6,7 @@ import { create } from "zustand";
 import { useCanvasStore } from "./canvasStore";
 import { useLibraryStore } from "./libraryStore";
 import { useCommitStore, createInitialCommits } from "./commitStore";
-import type { QijiProject, ProjectModelConfig, AssetVariantLite, VideoEpisode, StoryboardShot } from "@/services/projectFile";
+import type { QijiProject, ProjectModelConfig, AssetVariantLite, VideoEpisode, StoryboardShot, PendingGen, AssetBlob } from "@/services/projectFile";
 import { useSettingsStore } from "./settingsStore";
 import { initDebouncedSave, scheduleSave } from "./debouncedSave";
 
@@ -94,6 +94,8 @@ interface ProjectState {
   isProjectLoading: boolean;
   scriptText: string;
   visualStyle: string;
+  /** 项目视觉圣经：全局风格 / 全局色调 / 全局禁用词（资产提取产出，剧本页展示编辑） */
+  visualBible: { style: string; colorSystem: string; negativeGlobal: string };
   coverImage: string;
   characters: Array<{ id: string; name: string; features: string; philosophy: string; prompt: string; image?: string; images?: string[]; variants?: AssetVariantLite[] }>;
   scenes: Array<{ id: string; name: string; description: string; philosophy: string; prompt: string; image?: string; images?: string[]; variants?: AssetVariantLite[] }>;
@@ -103,8 +105,14 @@ interface ProjectState {
   crowds: Array<{ id: string; name: string; features: string; philosophy: string; prompt: string; image?: string; images?: string[]; variants?: AssetVariantLite[] }>;
   isAnalyzed: boolean;
   analysisTime: string;
+  /** 分析进行态（搬进 store：切换界面再切回不丢进度，因底层轮询是单例后台） */
+  analysisRunning: boolean;
+  analysisProgress: number;
   episodes: VideoEpisode[];
   projectModelConfig: ProjectModelConfig;
+  pendingGens: PendingGen[];
+  /** 资产二进制三元映射 assetId → {id,url,localPath,localUri}（随项目持久化） */
+  assetBlobs: Record<string, AssetBlob>;
 
   setName: (name: string) => void;
   setSavePath: (path: string) => void;
@@ -114,8 +122,11 @@ interface ProjectState {
   removeFileRef: (fileId: string) => void;
   setScriptText: (text: string) => void;
   setVisualStyle: (style: string) => void;
+  setVisualBible: (patch: Partial<{ style: string; colorSystem: string; negativeGlobal: string }>) => void;
+  setAnalysisRunning: (running: boolean) => void;
+  setAnalysisProgress: (progress: number) => void;
   setCoverImage: (cover: string) => void;
-  setAnalysisResult: (data: { characters: any[], scenes: any[], items: any[], organisms: any[], crowds?: any[], time: string }) => void;
+  setAnalysisResult: (data: { characters: any[], scenes: any[], items: any[], organisms: any[], crowds?: any[], visualBible?: { style: string; colorSystem: string; negativeGlobal: string }, time: string }) => void;
   updateCharacterImage: (charId: string, imageUri: string) => void;
   updateCrowdImage: (crowdId: string, imageUri: string) => void;
   // 通用资产/变体操作（5 类共用，供资产工作台 AssetWorkbench 使用）
@@ -124,6 +135,13 @@ interface ProjectState {
   updateAssetVariant: (cat: AssetCat, id: string, variantId: string, patch: Partial<AssetVariantLite>) => void;
   addAssetImage: (cat: AssetCat, id: string, variantId: string | null, uri: string, makeMain?: boolean) => void;
   setAssetMainImage: (cat: AssetCat, id: string, variantId: string | null, uri: string) => void;
+  // 在途生成任务（断连保护）
+  addPendingGen: (p: PendingGen) => void;
+  updatePendingGen: (id: string, patch: Partial<PendingGen>) => void;
+  removePendingGen: (id: string) => void;
+  // 资产二进制三元映射
+  registerAssetBlob: (blob: AssetBlob) => void;
+  blobByUri: (uri: string) => AssetBlob | undefined;
   setProjectModelConfig: (config: Partial<ProjectModelConfig>) => void;
   // ── 视频/分镜 ──
   setEpisodes: (episodes: VideoEpisode[]) => void;
@@ -166,6 +184,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   fileRefs: {},
   scriptText: "",
   visualStyle: "国漫电影感",
+  visualBible: { style: "", colorSystem: "", negativeGlobal: "" },
   coverImage: "",
   characters: [],
   scenes: [],
@@ -174,8 +193,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   crowds: [],
   isAnalyzed: false,
   analysisTime: "",
+  analysisRunning: false,
+  analysisProgress: 0,
   episodes: [],
   projectModelConfig: {},
+  pendingGens: [],
+  assetBlobs: {},
 
   setName: (name) => set({ name }),
   setSavePath: (path) => set({ savePath: path }),
@@ -191,18 +214,30 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }),
   setScriptText: (scriptText) => { set({ scriptText, isDirty: true }); get().scheduleAutoSave("canvas"); },
   setVisualStyle: (visualStyle) => { set({ visualStyle, isDirty: true }); get().scheduleAutoSave("canvas"); },
+  setVisualBible: (patch) => { set((s) => ({ visualBible: { ...s.visualBible, ...patch }, isDirty: true })); get().scheduleAutoSave("canvas"); },
+  // 进行态为内存瞬态，不落盘：切换界面再切回靠它复原进度条
+  setAnalysisRunning: (analysisRunning) => set({ analysisRunning }),
+  setAnalysisProgress: (analysisProgress) => set({ analysisProgress }),
   setCoverImage: (coverImage) => { set({ coverImage, isDirty: true }); get().scheduleAutoSave("canvas"); },
   setAnalysisResult: (data) => {
-    set({
+    set((s) => ({
       characters: data.characters,
       scenes: data.scenes,
       items: data.items,
       organisms: data.organisms,
       crowds: data.crowds ?? [],
+      // visualBible：有非空字段才覆盖，避免空对象抹掉已有
+      visualBible: data.visualBible
+        ? {
+            style: data.visualBible.style || s.visualBible.style,
+            colorSystem: data.visualBible.colorSystem || s.visualBible.colorSystem,
+            negativeGlobal: data.visualBible.negativeGlobal || s.visualBible.negativeGlobal,
+          }
+        : s.visualBible,
       isAnalyzed: true,
       analysisTime: data.time,
       isDirty: true,
-    });
+    }));
     get().scheduleAutoSave("canvas");
   },
   updateCharacterImage: (charId, imageUri) => {
@@ -248,6 +283,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       return { ...a, image: uri };
     }), isDirty: true } as any));
     get().scheduleAutoSave("canvas");
+  },
+  addPendingGen: (p) => set((s) => ({ pendingGens: [...s.pendingGens, p], isDirty: true })),
+  updatePendingGen: (id, patch) => set((s) => ({ pendingGens: s.pendingGens.map((x) => x.id === id ? { ...x, ...patch } : x), isDirty: true })),
+  removePendingGen: (id) => set((s) => ({ pendingGens: s.pendingGens.filter((x) => x.id !== id), isDirty: true })),
+  registerAssetBlob: (blob) => set((s) => ({ assetBlobs: { ...s.assetBlobs, [blob.id]: { ...s.assetBlobs[blob.id], ...blob } }, isDirty: true })),
+  blobByUri: (uri) => {
+    if (!uri) return undefined;
+    return Object.values(get().assetBlobs).find((b) => b.localUri === uri || b.url === uri || b.srcUri === uri);
   },
   setProjectModelConfig: (config) => {
     set((s) => ({
@@ -350,6 +393,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           head: targetCommitId,
           scriptText: s.scriptText,
           visualStyle: s.visualStyle,
+          visualBible: s.visualBible,
           coverImage: s.coverImage,
           characters: s.characters,
           scenes: s.scenes,
@@ -359,6 +403,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           isAnalyzed: s.isAnalyzed,
           analysisTime: s.analysisTime,
           episodes: s.episodes,
+          pendingGens: s.pendingGens,
+          assetBlobs: s.assetBlobs,
           projectModelConfig: s.projectModelConfig,
         };
 
@@ -391,6 +437,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           head: targetCommitId,
           scriptText: s.scriptText,
           visualStyle: s.visualStyle,
+          visualBible: s.visualBible,
           coverImage: s.coverImage,
           characters: s.characters,
           scenes: s.scenes,
@@ -400,6 +447,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           isAnalyzed: s.isAnalyzed,
           analysisTime: s.analysisTime,
           episodes: s.episodes,
+          pendingGens: s.pendingGens,
+          assetBlobs: s.assetBlobs,
           projectModelConfig: s.projectModelConfig,
         };
         const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: "application/json" });
@@ -441,6 +490,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       fileRefs: {},
       scriptText: "",
       visualStyle: "国漫电影感",
+      visualBible: { style: "", colorSystem: "", negativeGlobal: "" },
       coverImage: "",
       characters: [],
       scenes: [],
@@ -449,8 +499,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       crowds: [],
       isAnalyzed: false,
       analysisTime: "",
+      analysisRunning: false,
+      analysisProgress: 0,
       episodes: [],
       projectModelConfig: {},
+      pendingGens: [],
     });
     useCommitStore.setState({ head: "commit-init", commits: createInitialCommits() });
     useCanvasStore.setState({
@@ -502,6 +555,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         isDirty: false,
         scriptText: project.scriptText || "",
         visualStyle: project.visualStyle || "国漫电影感",
+        visualBible: project.visualBible || { style: "", colorSystem: "", negativeGlobal: "" },
         coverImage: project.coverImage || "",
         characters: project.characters || [],
         scenes: project.scenes || [],
@@ -510,8 +564,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         crowds: (project as any).crowds || [],
         isAnalyzed: project.isAnalyzed || false,
         analysisTime: project.analysisTime || "",
+        analysisRunning: false,
+        analysisProgress: 0,
         episodes: project.episodes || [],
         projectModelConfig: project.projectModelConfig || {},
+        pendingGens: (project as any).pendingGens || [],
+        assetBlobs: (project as any).assetBlobs || {},
       });
 
       useCommitStore.setState({
@@ -537,6 +595,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         : [entry, ...recent];
       saveRecent(updated.slice(0, MAX_RECENT));
       set({ recentProjects: updated.slice(0, MAX_RECENT) });
+
+      // 断连保护：项目加载后续跑上次未完成的在途生成（重新挂轮询 / 标失败可重试）。
+      // 动态 import 规避 projectStore ↔ generationQueue 的循环引用。
+      try {
+        const { resumePendingGenerations } = await import("@/services/generationQueue");
+        resumePendingGenerations();
+      } catch (e) {
+        console.warn("[project] resume pending generations skipped:", e);
+      }
 
       return true;
     } catch (err) {
@@ -565,6 +632,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       head,
       scriptText: s.scriptText,
       visualStyle: s.visualStyle,
+      visualBible: s.visualBible,
       characters: s.characters,
       scenes: s.scenes,
       items: s.items,
@@ -572,6 +640,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       isAnalyzed: s.isAnalyzed,
       analysisTime: s.analysisTime,
       episodes: s.episodes,
+      pendingGens: s.pendingGens,
+      assetBlobs: s.assetBlobs,
       projectModelConfig: s.projectModelConfig,
     };
 
@@ -602,6 +672,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             isDirty: true,
             scriptText: project.scriptText || "",
             visualStyle: project.visualStyle || "国漫电影感",
+            visualBible: project.visualBible || { style: "", colorSystem: "", negativeGlobal: "" },
             coverImage: project.coverImage || "",
             characters: project.characters || [],
             scenes: project.scenes || [],
@@ -610,8 +681,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             crowds: (project as any).crowds || [],
             isAnalyzed: project.isAnalyzed || false,
             analysisTime: project.analysisTime || "",
+            analysisRunning: false,
+            analysisProgress: 0,
             episodes: project.episodes || [],
             projectModelConfig: project.projectModelConfig || {},
+            pendingGens: (project as any).pendingGens || [],
+        assetBlobs: (project as any).assetBlobs || {},
           });
           useCommitStore.setState({
             head: project.head || "commit-init",

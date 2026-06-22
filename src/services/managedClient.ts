@@ -15,7 +15,7 @@ import {
 	type AssetUploadResult,
 	type SessionUser,
 } from "@/contract";
-import { useConnectionStore } from "@/store/connectionStore";
+import { useConnectionStore, getMachineCode } from "@/store/connectionStore";
 
 /** 同步结果暂存：sync 任务无需轮询远端，poll 时从这里取一次 */
 const _immediate = new Map<string, TaskState>();
@@ -33,7 +33,8 @@ class ManagedClientError extends Error {
 
 function headers(json = true): Record<string, string> {
 	const { accessKey } = useConnectionStore.getState();
-	const h: Record<string, string> = { Authorization: `Bearer ${accessKey}` };
+	// 机器码随每个请求带上：管理端对已绑定用户逐请求校验，未激活/换机一律拦截
+	const h: Record<string, string> = { Authorization: `Bearer ${accessKey}`, "x-machine-code": getMachineCode() };
 	if (json) h["Content-Type"] = "application/json";
 	return h;
 }
@@ -97,7 +98,7 @@ export const managedClient = {
 			resp = await fetch(url(Endpoints.login), {
 				method: "POST",
 				headers: headers(true),
-				body: JSON.stringify({ accessKey }),
+				body: JSON.stringify({ accessKey, machineCode: getMachineCode() }),
 				signal: AbortSignal.timeout(20000),
 			});
 		} catch (err) {
@@ -114,7 +115,7 @@ export const managedClient = {
 			const resp = await fetch(url(Endpoints.heartbeat), {
 				method: "POST",
 				headers: headers(true),
-				body: "{}",
+				body: JSON.stringify({ machineCode: getMachineCode() }),
 				signal: AbortSignal.timeout(15000),
 			});
 			if (!resp.ok) return { ok: false };

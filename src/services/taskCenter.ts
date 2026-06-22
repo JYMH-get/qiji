@@ -16,6 +16,8 @@ export type TaskUpdate = (
 	status: string,
 	resultUri?: string,
 	error?: string,
+	assetId?: string,
+	partialText?: string,
 ) => void;
 
 /** taskId → 该任务的更新回调 */
@@ -26,10 +28,10 @@ let _tracker: TaskTracker | null = null;
 function getTracker(): TaskTracker {
 	if (_tracker) return _tracker;
 	// TaskTracker 的 nodeId 形参在此用作关联 id（= taskId），用于回查 handler
-	_tracker = new TaskTracker((corrId, progress, status, resultUri, error) => {
+	_tracker = new TaskTracker((corrId, progress, status, resultUri, error, assetId, partialText) => {
 		const h = handlers.get(corrId);
 		if (!h) return;
-		h(progress, status, resultUri, error);
+		h(progress, status, resultUri, error, assetId, partialText);
 		if (status === "success" || status === "failed") handlers.delete(corrId);
 	});
 	return _tracker;

@@ -108,12 +108,13 @@ export function buildManagedAdapter(model: CatalogModel): ModelAdapter {
 						t.result?.assets?.[0]?.url ||
 						t.result?.text ||
 						(t.result?.json ? JSON.stringify(t.result.json) : "");
-					return { status: "success", progress: 100, resultUri: uri };
+					return { status: "success", progress: 100, resultUri: uri, assetId: t.result?.assets?.[0]?.id };
 				}
 				if (t.status === "failed") {
 					return { status: "failed", progress: 100, error: t.error || "生成失败" };
 				}
-				return { status: t.status, progress: t.progress ?? 50 };
+				// 进行中：把服务端流式累积的部分正文透出来（供调用方边收边解析渲染）
+				return { status: t.status, progress: t.progress ?? 50, partialText: t.result?.text };
 			} catch (err) {
 				// 网关 5xx / 网络抖动：当作仍在进行，让上层继续轮询
 				return { status: "running", progress: 50, error: (err as Error).message };

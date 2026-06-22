@@ -31,6 +31,10 @@ export interface PollResult {
   status: "queued" | "running" | "success" | "failed";
   progress: number;
   resultUri?: string;
+  /** 管理端分配的资产 id（图像/视频成功时；用于三元映射与本地落盘） */
+  assetId?: string;
+  /** 进行中任务的部分正文（文本流式：服务端 partialText 经 task.result.text 透出，供边收边解析） */
+  partialText?: string;
   error?: string;
 }
 
