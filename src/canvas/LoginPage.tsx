@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useConnectionStore } from "@/store/connectionStore";
+import { useConnectionStore, getMachineCode } from "@/store/connectionStore";
 import { managedClient } from "@/services/managedClient";
 import { Server, Loader2, LogIn } from "lucide-react";
 
@@ -16,6 +16,7 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
 
 	const [busy, setBusy] = useState(false);
 	const [err, setErr] = useState<string | null>(null);
+	const machineCode = getMachineCode();
 
 	const handleLogin = async () => {
 		if (!serverUrl.trim() || !accessKey.trim()) {
@@ -36,7 +37,7 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
 	};
 
 	return (
-		<div className="fixed inset-0 flex items-center justify-center bg-[#0a0b0f] text-foreground">
+		<div className="qiji-login-page fixed inset-0 flex items-center justify-center bg-[#0a0b0f] text-foreground">
 			<div className="Qiji-panel w-[380px] rounded-2xl border border-white/10 p-7 shadow-2xl">
 				<div className="flex items-center gap-2 mb-1">
 					<Server className="h-5 w-5 text-primary" />
@@ -51,7 +52,7 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
 					value={serverUrl}
 					onChange={(e) => setServerUrl(e.target.value)}
 					placeholder="http://localhost:8787"
-					className="w-full mb-3 bg-secondary/60 border border-border/40 rounded-lg px-3 py-2 text-[12px] font-mono focus:outline-none focus:border-primary"
+					className="w-full mb-3 bg-secondary/60 border border-border/40 rounded-lg px-3 py-2 text-[12px] font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary"
 				/>
 
 				<label className="block text-[11px] text-muted-foreground mb-1">accessKey</label>
@@ -61,10 +62,21 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
 					onChange={(e) => setAccessKey(e.target.value)}
 					onKeyDown={(e) => e.key === "Enter" && handleLogin()}
 					placeholder="qk-..."
-					className="w-full mb-4 bg-secondary/60 border border-border/40 rounded-lg px-3 py-2 text-[12px] font-mono focus:outline-none focus:border-primary"
+					className="w-full mb-4 bg-secondary/60 border border-border/40 rounded-lg px-3 py-2 text-[12px] font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary"
 				/>
 
 				{err && <p className="text-[11px] text-destructive mb-3">{err}</p>}
+
+				<div className="mb-4 text-[10px] text-muted-foreground">
+					<div className="mb-1">本机机器码（首次登录将绑定到该账号，换机需管理员解绑）</div>
+					<div
+						className="font-mono text-[10px] break-all bg-secondary/40 border border-border/30 rounded px-2 py-1 cursor-pointer hover:border-primary/50"
+						title="点击复制"
+						onClick={() => navigator.clipboard?.writeText(machineCode)}
+					>
+						{machineCode}
+					</div>
+				</div>
 
 				<button
 					onClick={handleLogin}

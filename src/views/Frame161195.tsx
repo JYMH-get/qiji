@@ -3,6 +3,8 @@ import EditorHeader from "@/components/EditorHeader";
 import EditorSidebar from "@/components/EditorSidebar";
 import { useProjectStore } from "@/store/projectStore";
 import { runPurpose } from "@/services/purposeRunner";
+import ModelPicker, { effectiveModelKey } from "@/components/ModelPicker";
+import TemplatePicker from "@/components/TemplatePicker";
 import type { ShotMaterial, StoryboardShot } from "@/services/projectFile";
 import "@/styles/Frame161195.css";
 
@@ -33,11 +35,12 @@ async function fileToThumb(file: File, maxSize = 512): Promise<string> {
 
 // ── 解析「开始分镜」LLM 输出为分镜数组（只认模型真实产出，不编造） ──
 function parseShots(text: string): StoryboardShot[] {
-    const mk = (index: number, prompt: string, title?: string): StoryboardShot => ({
+    const mk = (index: number, prompt: string, title?: string, durationSec?: number): StoryboardShot => ({
         id: `shot-${Date.now()}-${index}-${Math.floor(Math.random() * 1000)}`,
         index,
         title: title || `分镜${index}`,
         prompt: prompt.trim(),
+        durationSec,
         materials: [],
     });
 
@@ -58,6 +61,7 @@ function parseShots(text: string): StoryboardShot[] {
                         Number(s.index) || i + 1,
                         String(s.dynamicVideoPrompt || s.prompt || s.plot || "").trim(),
                         s.title,
+                        Number(s.durationSec) || undefined,
                     ),
                 );
             }
@@ -66,7 +70,35 @@ function parseShots(text: string): StoryboardShot[] {
         }
     }
 
-    // 2) 文本解析：按「分镜N」/编号分块
+    // 2) Markdown 表格解析（模型常返回 | 分镜 | 时长 | 画面/提示词 | 形态）
+    const tableRows = text.split(/\r?\n/).filter((l) => /^\s*\|.*\|\s*$/.test(l));
+    if (tableRows.length >= 2) {
+        const cells = (l: string) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+        const isSep = (l: string) => /-/.test(l) && cells(l).every((c) => /^:?-+:?$/.test(c) || c === "");
+        const header = cells(tableRows[0]);
+        const findCol = (...kw: string[]) => header.findIndex((h) => kw.some((k) => h.includes(k)));
+        const promptCol = findCol("画面", "提示词", "提示", "描述", "内容", "prompt");
+        const durCol = findCol("时长", "时间", "秒", "duration");
+        const idxCol = findCol("分镜", "镜头", "序号", "编号", "#");
+        const out: StoryboardShot[] = [];
+        for (const row of tableRows.slice(1)) {
+            if (isSep(row)) continue;
+            const cs = cells(row);
+            if (cs.every((c) => !c)) continue;
+            // 提示词列：优先表头匹配，否则取最长单元格
+            let p = promptCol >= 0 ? cs[promptCol] : "";
+            if (!p) p = cs.reduce((a, b) => (b.length > a.length ? b : a), "");
+            if (!p) continue;
+            const n = out.length + 1;
+            const index = (idxCol >= 0 && parseInt(cs[idxCol], 10)) || n;
+            const durStr = durCol >= 0 ? cs[durCol] : "";
+            const durM = durStr.match(/\d+(?:\.\d+)?/);
+            out.push(mk(index, p, undefined, durM ? Number(durM[0]) : undefined));
+        }
+        if (out.length > 0) return out;
+    }
+
+    // 3) 文本解析：按「分镜N」/编号分块
     const blocks = text.split(/\n(?=\s*(?:分镜|镜头|shot)\s*\d+|^\s*\d+[.、])/i).map((b) => b.trim()).filter(Boolean);
     if (blocks.length > 1) {
         return blocks.map((b, i) => mk(i + 1, b.replace(/^\s*(?:分镜|镜头|shot)?\s*\d+[.、:：]?/i, "").trim()));
@@ -104,17 +136,7 @@ const KIND_LABEL: Record<string, string> = {
     character: "角色", scene: "场景", creature: "生物", prop: "道具", local: "本地",
 };
 
-// 故事板提示词模板（基座）：故事板 = 图片素材 + 故事板提示词 + 分镜提示词 三方共同生成。
-// 这里先留空占位，后续接管理端/catalog 的「故事板」模板正文；用 {{分镜提示词}} 占位接入分镜提示词。
-const STORYBOARD_PROMPT_TEMPLATE = "";
-function composeStoryboardPrompt(shotPrompt: string): string {
-    if (STORYBOARD_PROMPT_TEMPLATE.trim()) {
-        return STORYBOARD_PROMPT_TEMPLATE.includes("{{分镜提示词}}")
-            ? STORYBOARD_PROMPT_TEMPLATE.replace(/{{分镜提示词}}/g, shotPrompt)
-            : `${STORYBOARD_PROMPT_TEMPLATE.trim()}\n\n${shotPrompt}`;
-    }
-    return shotPrompt;
-}
+// 提示词正文已全量交管理端：客户端只发 templateId（可空→服务端按 purpose 用默认模板）+ 变量。
 
 const Frame161195 = () => {
     const episodes = useProjectStore((s) => s.episodes);
@@ -126,7 +148,10 @@ const Frame161195 = () => {
 
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [maxDuration, setMaxDuration] = useState(15);
-    const [shotCount, setShotCount] = useState(20);
+    const [shotCount, setShotCount] = useState(0); // 0 = 自动（不限数量，按时长拆完整剧情）
+    const [storyboardTpl, setStoryboardTpl] = useState("");  // 分镜提示词模板（storyboard.split）
+    const [sbImgTpl, setSbImgTpl] = useState("");            // 故事板提示词模板（asset.scene.image）
+    const [videoTpl, setVideoTpl] = useState("");            // 视频提示词模板（video.generate）
     const [busy, setBusy] = useState<Record<string, boolean>>({});
     const [zoomUri, setZoomUri] = useState<string | null>(null);
     const [addingShotId, setAddingShotId] = useState<string | null>(null); // 哪个分镜在加素材
@@ -162,18 +187,21 @@ const Frame161195 = () => {
         if (!activeEp.scriptText.trim()) { alert("请先填写本集剧本内容"); return; }
         setFlag(`split-${activeEp.id}`, true);
         try {
-            const prompt = [
-                `请把下面这一集剧本拆分为分镜。要求：约 ${shotCount} 个分镜，每个分镜时长不超过 ${maxDuration} 秒。`,
-                `每个分镜给出：画面/动态视频提示词（用于AI视频生成）。视觉风格：${visualStyle}。`,
-                "",
-                "本集剧本：",
-                activeEp.scriptText,
-            ].join("\n");
-            // 不强制结构化输出（避免上游不返回合法 JSON 时硬失败）；parseShots 同时兼容 JSON 与文本
+            // 提示词正文留服务端：只发 templateId（可空→服务端按 purpose 用默认模板）+ 变量。
+            // parseShots 同时兼容 JSON 与 Markdown 表格/文本。
             const run = await runPurpose("storyboard.split", {
-                prompt,
-                params: { maxDurationSec: maxDuration, shotCount },
-                onProgress: () => {},
+                modelKey: effectiveModelKey("text") || undefined,
+                params: { maxDurationSec: maxDuration, shotCount: shotCount || undefined },
+                onProgress: () => { },
+                templateId: storyboardTpl || undefined,
+                variables: {
+                    原文: activeEp.scriptText,
+                    历史资产: assetPool.map((a) => a.name).join("、"),
+                    当前时间: new Date().toLocaleString(),
+                    视觉风格: visualStyle,
+                    分镜数量: shotCount > 0 ? String(shotCount) : "自动",
+                    单镜时长: String(maxDuration),
+                },
             });
             if (run.status === "no_model") throw new Error("未配置可用的文本模型，请先在「设置 → 模型」中选择后重试。");
             if (run.status === "failed") throw new Error(run.error || "分镜失败");
@@ -211,13 +239,15 @@ const Frame161195 = () => {
         if (!activeEp) return;
         setFlag(`sb-${shot.id}`, true);
         try {
-            // 故事板 = 图片素材 + 故事板提示词模板 + 分镜提示词 → 图像模型
+            // 故事板 = 图片素材 + 分镜提示词(内容) → 图像模型。提示词拼接留服务端：
+            // 只发 templateId(可空) + 变量；图像类无系统模板时服务端用 variables.prompt(分镜内容)。
             const materialImages = shot.materials.filter((m) => m.uri).map((m) => ({ url: m.uri }));
-            const finalPrompt = composeStoryboardPrompt(shot.prompt);
             const run = await runPurpose("asset.scene.image", {
-                prompt: finalPrompt,
+                modelKey: effectiveModelKey("image") || undefined,
                 input: materialImages.length ? { images: materialImages } : undefined,
                 params: { size: "1024x1024", quality: "standard" },
+                templateId: sbImgTpl || undefined,
+                variables: { prompt: shot.prompt, 分镜提示词: shot.prompt, 视觉风格: visualStyle },
             });
             if (run.status === "no_model") throw new Error("未配置可用的图像模型，请先在「设置 → 模型」中选择后重试。");
             if (run.status === "failed") throw new Error(run.error || "生成失败");
@@ -237,9 +267,12 @@ const Frame161195 = () => {
         try {
             const images = shot.storyboardUri ? { images: [{ url: shot.storyboardUri }] } : undefined;
             const run = await runPurpose("video.generate", {
-                prompt: shot.prompt,
-                params: { duration: maxDuration, aspect_ratio: "9:16" },
+                modelKey: effectiveModelKey("video") || undefined,
+                params: { duration: shot.durationSec || maxDuration, aspect_ratio: "9:16" },
                 input: images,
+                // 提示词拼接留服务端：templateId(可空) + 变量；无系统模板时用 variables.prompt(分镜内容)
+                templateId: videoTpl || undefined,
+                variables: { prompt: shot.prompt, 分镜提示词: shot.prompt, 视觉风格: visualStyle },
             });
             if (run.status === "no_model") throw new Error("未配置可用的视频模型，请先在「设置 → 模型」中选择后重试。");
             if (run.status === "failed") throw new Error(run.error || "生成失败");
@@ -280,12 +313,45 @@ const Frame161195 = () => {
         setAddingShotId(null);
     };
 
+    // 素材：从资产助手 / 本地文件拖入
+    const onMaterialDrop = (shot: StoryboardShot, e: React.DragEvent) => {
+        e.preventDefault();
+        if (!activeEp) return;
+        const raw = e.dataTransfer.getData("application/x-qiji-asset") || e.dataTransfer.getData("text/plain");
+        if (raw) {
+            try {
+                const d = JSON.parse(raw);
+                const u = d?.url || d?.localUri || d?.uri; // 垫素材引用优先公网 url（服务端可 fetch）
+                if (u) {
+                    useProjectStore.getState().updateShot(activeEp.id, shot.id, {
+                        materials: [...shot.materials, { id: `mat-${Date.now()}-${Math.floor(Math.random() * 1e6)}`, kind: "local", name: d.name || "素材", uri: u }],
+                    });
+                    return;
+                }
+            } catch { /* 落到文件分支 */ }
+        }
+        const f = e.dataTransfer.files?.[0];
+        if (f && f.type.startsWith("image/")) {
+            // 原生拖入的资产文件名为 <assetId>.<ext> → 解析回三元映射，垫素材用公网 url
+            const base = f.name.replace(/\.[^.]+$/, "");
+            const blob = useProjectStore.getState().assetBlobs[base];
+            const ref = blob?.url || blob?.localUri;
+            if (ref) {
+                useProjectStore.getState().updateShot(activeEp.id, shot.id, {
+                    materials: [...shot.materials, { id: `mat-${Date.now()}-${Math.floor(Math.random() * 1e6)}`, kind: "local", name: f.name, uri: ref }],
+                });
+            } else {
+                addLocalMaterial(shot, f);
+            }
+        }
+    };
+
     const cardBtn: React.CSSProperties = { padding: "5px 10px", borderRadius: 6, fontSize: 12, cursor: "pointer", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.05)", color: "#fff" };
 
     return (
         <div className="scroll-container">
             <div id="16_1195" className="Pixso-frame-16_1195">
-                <EditorHeader title="分镜配置" infoLabels={["默认视频模型 seedance 2.0", `画风 ${visualStyle}`, "默认视频比例 9:16"]} />
+                <EditorHeader title="分镜配置" />
                 <div style={{ display: "flex", height: "calc(100% - 56px)", overflow: "hidden" }}>
                     <EditorSidebar activeTab="视频" />
 
@@ -331,17 +397,28 @@ const Frame161195 = () => {
                             onChange={(e) => activeEp && useProjectStore.getState().updateEpisode(activeEp.id, { scriptText: e.target.value })}
                             style={{ flex: 1, minHeight: 240, resize: "none", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, color: "#fff", fontSize: 13, padding: 10, outline: "none", lineHeight: 1.6 }}
                         />
-                        <div style={{ display: "flex", gap: 12 }}>
-                            <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "var(--muted-foreground)" }}>
+                        {/* 参数 + 模型 + 提示词模板：两列网格 */}
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, paddingTop: 4, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+                            <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "rgba(255,255,255,0.55)" }}>
                                 单分镜最大时长(秒)
                                 <input type="number" value={maxDuration} min={1} max={60} onChange={(e) => setMaxDuration(Number(e.target.value) || 15)}
-                                    style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#fff", padding: "6px 8px", fontSize: 13 }} />
+                                    style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, color: "#fff", padding: "6px 8px", fontSize: 12, outline: "none" }} />
                             </label>
-                            <label style={{ flex: 1, display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "var(--muted-foreground)" }}>
-                                需要分成多少分镜
-                                <input type="number" value={shotCount} min={1} max={200} onChange={(e) => setShotCount(Number(e.target.value) || 20)}
-                                    style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 6, color: "#fff", padding: "6px 8px", fontSize: 13 }} />
+                            <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "rgba(255,255,255,0.55)" }}>
+                                分镜数量
+                                <input type="number" value={shotCount || ""} min={0} max={200} placeholder="自动（按时长拆完）"
+                                    onChange={(e) => setShotCount(Math.max(0, Number(e.target.value) || 0))}
+                                    style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, color: "#fff", padding: "6px 8px", fontSize: 12, outline: "none" }} />
                             </label>
+
+                            <ModelPicker cap="text" label="分镜模型（文本）" />
+                            <TemplatePicker purpose="storyboard.split" value={storyboardTpl} onChange={setStoryboardTpl} label="分镜提示词模板" />
+
+                            <ModelPicker cap="image" label="故事板模型（图像）" />
+                            <TemplatePicker purpose="asset.scene.image" value={sbImgTpl} onChange={setSbImgTpl} label="故事板提示词模板" />
+
+                            <ModelPicker cap="video" label="视频模型" />
+                            <TemplatePicker purpose="video.generate" value={videoTpl} onChange={setVideoTpl} label="视频提示词模板" />
                         </div>
                         <button
                             onClick={handleSplit}
@@ -361,8 +438,9 @@ const Frame161195 = () => {
                         ) : (
                             activeEp.shots.map((shot) => (
                                 <div key={shot.id} style={{ display: "flex", gap: 14, border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, padding: 12, background: "rgba(255,255,255,0.02)" }}>
-                                    {/* 素材区 */}
-                                    <div style={{ width: 150, flexShrink: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+                                    {/* 素材区（支持从资产助手拖入） */}
+                                    <div style={{ width: 150, flexShrink: 0, display: "flex", flexDirection: "column", gap: 6 }}
+                                        onDragOver={(e) => e.preventDefault()} onDrop={(e) => onMaterialDrop(shot, e)}>
                                         <span style={{ fontSize: 11, color: "var(--muted-foreground)" }}>垫素材</span>
                                         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                                             {shot.materials.map((m) => (
@@ -404,21 +482,35 @@ const Frame161195 = () => {
                                         )}
                                     </div>
 
-                                    {/* 结果区（故事板/视频） */}
-                                    <div style={{ width: 160, flexShrink: 0, borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.25)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", minHeight: 120 }}>
-                                        {shot.videoUri ? (
-                                            <video src={shot.videoUri} controls style={{ width: "100%", maxHeight: 180 }} />
-                                        ) : shot.storyboardUri ? (
-                                            <img src={shot.storyboardUri} alt={shot.title} onDoubleClick={() => setZoomUri(shot.storyboardUri!)} style={{ width: "100%", height: "100%", objectFit: "cover", cursor: "zoom-in" }} />
-                                        ) : (
-                                            <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>{busy[`sb-${shot.id}`] || busy[`vid-${shot.id}`] ? "生成中…" : "待生成"}</span>
-                                        )}
+                                    {/* 故事板展示区 */}
+                                    <div style={{ width: 150, flexShrink: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+                                        <span style={{ fontSize: 11, color: "var(--muted-foreground)" }}>故事板</span>
+                                        <div style={{ flex: 1, borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.25)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", minHeight: 120 }}>
+                                            {shot.storyboardUri ? (
+                                                <img src={shot.storyboardUri} alt={shot.title} onDoubleClick={() => setZoomUri(shot.storyboardUri!)} style={{ width: "100%", height: "100%", objectFit: "cover", cursor: "zoom-in" }} />
+                                            ) : (
+                                                <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>{busy[`sb-${shot.id}`] ? "生成中…" : "待生成"}</span>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* 视频展示区 */}
+                                    <div style={{ width: 150, flexShrink: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+                                        <span style={{ fontSize: 11, color: "var(--muted-foreground)" }}>视频</span>
+                                        <div style={{ flex: 1, borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.25)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", minHeight: 120 }}>
+                                            {shot.videoUri ? (
+                                                <video src={shot.videoUri} controls style={{ width: "100%", maxHeight: 180 }} />
+                                            ) : (
+                                                <span style={{ color: "var(--muted-foreground)", fontSize: 12 }}>{busy[`vid-${shot.id}`] ? "生成中…" : "待生成"}</span>
+                                            )}
+                                        </div>
                                     </div>
 
                                     {/* 提示词 + 操作 */}
                                     <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
                                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                             <span style={{ fontWeight: 600, fontSize: 13 }}>{shot.title}</span>
+                                            {shot.durationSec ? <span style={{ fontSize: 11, color: "var(--muted-foreground)" }}>· {shot.durationSec}s</span> : null}
                                             <button style={{ ...cardBtn, padding: "2px 8px", fontSize: 11 }} onClick={() => setEditingPromptId(editingPromptId === shot.id ? null : shot.id)}>
                                                 {editingPromptId === shot.id ? "完成" : "编辑提示词"}
                                             </button>

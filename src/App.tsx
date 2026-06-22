@@ -9,7 +9,15 @@ import { SettingsModal } from "@/canvas/SettingsModal";
 import { BlackboxPanel } from "@/canvas/BlackboxPanel";
 import { RouterView } from "@/router/index";
 import { TitleBar } from "@/canvas/TitleBar";
-import { BrowserRouter as Router } from "react-router";
+import { BrowserRouter as Router, useLocation } from "react-router";
+import AssetAssistant from "@/components/AssetAssistant";
+
+/** 悬浮资产助手：项目大厅（/）外可见 */
+function AssetAssistantGate() {
+	const { pathname } = useLocation();
+	if (pathname === "/") return null;
+	return <AssetAssistant />;
+}
 
 import { startPluginWatcher, stopPluginWatcher } from "@/nodes/pluginWatcher";
 import { useCatalogStore } from "@/store/catalogStore";
@@ -146,6 +154,17 @@ export default function App() {
 		};
 	}, []);
 
+	// 全局屏蔽浏览器右键菜单（桌面应用观感）；文本输入框保留（右键粘贴）
+	useEffect(() => {
+		const onContextMenu = (e: MouseEvent) => {
+			const t = e.target as HTMLElement | null;
+			if (t?.closest("input, textarea, [contenteditable=''], [contenteditable='true']")) return;
+			e.preventDefault();
+		};
+		window.addEventListener("contextmenu", onContextMenu);
+		return () => window.removeEventListener("contextmenu", onContextMenu);
+	}, []);
+
 	// 登录后：初始化应用（仅一次）+ 周期心跳；掉线/被禁用则登出回登录页。
 	useEffect(() => {
 		if (!loggedIn) return;
@@ -206,6 +225,7 @@ export default function App() {
 			<div className="Qiji-shell">
 				<TitleBar />
 				<RouterView />
+				<AssetAssistantGate />
 				{settingsOpen && <SettingsModal />}
 				{blackboxOpen && <BlackboxPanel />}
 			</div>

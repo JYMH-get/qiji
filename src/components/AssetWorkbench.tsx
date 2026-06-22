@@ -1,7 +1,9 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router";
 import { useProjectStore, type AssetCat } from "@/store/projectStore";
 import { runPurpose } from "@/services/purposeRunner";
+import { startGeneration, retryGeneration } from "@/services/generationQueue";
+import ModelPicker, { effectiveModelKey } from "@/components/ModelPicker";
 import type { Purpose } from "@/contract";
 
 interface AssetWorkbenchProps {
@@ -23,19 +25,28 @@ type Form = {
     images: string[];
 };
 
-const GEN_COUNTS = [1, 2, 3, 4];
 const QUALITIES = ["auto", "low", "medium", "high"];
-// 比例 / 分辨率（与提示词一起进入生成请求）
-const SIZES: Array<{ v: string; label: string }> = [
-    { v: "1024x1024", label: "1024×1024 1：1" },
-    { v: "1536x1024", label: "1536×1024 3：2" },
-    { v: "1024x1536", label: "1024×1536 2：3" },
-    { v: "2048x2048", label: "2048×2048 1：1" },
-    { v: "2048x1152", label: "2048×1152 16：9" },
-    { v: "1152x2048", label: "1152×2048 9：16" },
-    { v: "3840x2160", label: "3840×2160 16：9" },
-    { v: "2160x3840", label: "2160×3840 9：16" },
+// 比例（界面选）
+const ASPECTS: Array<{ v: string; label: string }> = [
+    { v: "1:1", label: "1：1" },
+    { v: "16:9", label: "16：9" },
+    { v: "9:16", label: "9：16" },
 ];
+// 分辨率档（界面选）
+const RESOLUTIONS: Array<{ v: string; label: string }> = [
+    { v: "1k", label: "1K" },
+    { v: "2k", label: "2K" },
+    { v: "4k", label: "4K" },
+];
+// (比例, 分辨率档) → 实际请求的具体分辨率（请求仍用具体像素表示）
+const SIZE_MAP: Record<string, Record<string, string>> = {
+    "1:1": { "1k": "1024x1024", "2k": "2048x2048", "4k": "4096x4096" },
+    "16:9": { "1k": "1024x576", "2k": "2048x1152", "4k": "3840x2160" },
+    "9:16": { "1k": "576x1024", "2k": "1152x2048", "4k": "2160x3840" },
+};
+function resolveSize(aspect: string, resolution: string): string {
+    return SIZE_MAP[aspect]?.[resolution] ?? "1024x1024";
+}
 
 // 资产 id 类型前缀（管理端据此分配 C00000123 等）：角色 C / 群像 G / 场景 S / 生物 M / 物品 P
 const CAT_PREFIX: Record<AssetCat, string> = { characters: "C", crowds: "G", scenes: "S", organisms: "M", items: "P" };
@@ -47,18 +58,67 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
     const navigate = useNavigate();
     const assets = useProjectStore((s) => s[cat]) as any[];
     const {
-        updateAsset, addAssetVariant, updateAssetVariant, addAssetImage, setAssetMainImage,
+        updateAsset, addAssetVariant, updateAssetVariant, setAssetMainImage, removePendingGen,
     } = useProjectStore.getState();
 
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [selectedFormKey, setSelectedFormKey] = useState<string>("base");
     const [searchQuery, setSearchQuery] = useState("");
-    const [genCount, setGenCount] = useState(1);
     const [quality, setQuality] = useState("auto");
-    const [size, setSize] = useState(SIZES[0].v);
-    const [busy, setBusy] = useState<Record<string, boolean>>({});
+    const [aspect, setAspect] = useState("1:1");
+    const [resolution, setResolution] = useState("1k");
+    // 区5 图片：自然分辨率信息 + 框内缩放/平移
+    const [imgDims, setImgDims] = useState<{ w: number; h: number } | null>(null);
+    const [imgScale, setImgScale] = useState(1);
+    const [imgOffset, setImgOffset] = useState({ x: 0, y: 0 });
+    const dragRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
+    const pendingGens = useProjectStore((s) => s.pendingGens);
     const [optimizing, setOptimizing] = useState(false);
-    const [bulkRunning, setBulkRunning] = useState(false);
+    // 垫图（图生图参考素材）：本地上传或从资产库选
+    const [refImages, setRefImages] = useState<Array<{ uri: string; name?: string }>>([]);
+    const [refPickerOpen, setRefPickerOpen] = useState(false);
+
+    // 资产库可选垫图（跨类：角色/群像/场景/生物/物品的主图）
+    const allCats = useProjectStore((s) => ({ characters: s.characters, crowds: s.crowds, scenes: s.scenes, organisms: s.organisms, items: s.items }));
+    const libraryImages = useMemo(() => {
+        const out: Array<{ uri: string; name: string }> = [];
+        for (const arr of Object.values(allCats)) {
+            for (const a of arr as any[]) if (a.image) out.push({ uri: a.image, name: a.name });
+        }
+        return out;
+    }, [allCats]);
+
+    const addLocalRef = (file: File) => {
+        const reader = new FileReader();
+        reader.onload = () => setRefImages((prev) => [...prev, { uri: String(reader.result), name: file.name }]);
+        reader.readAsDataURL(file);
+    };
+
+    // 垫图引用需服务端可 fetch：本地 uri(asset://) 解析回公网 url（图生图底图）
+    const toRefUri = (displayUri: string) => useProjectStore.getState().blobByUri(displayUri)?.url || displayUri;
+
+    // 拖放到垫图素材区：资产助手卡片 / 本地图片文件 → 垫图
+    const onRefDrop = (e: React.DragEvent) => {
+        e.preventDefault();
+        const raw = e.dataTransfer.getData("application/x-qiji-asset") || e.dataTransfer.getData("text/plain");
+        if (raw) {
+            try {
+                const d = JSON.parse(raw);
+                // 垫图引用优先用公网 url（服务端可 fetch 做图生图），否则本地 uri
+                const u = d?.url || d?.localUri || d?.uri;
+                if (u) { setRefImages((prev) => prev.some((r) => r.uri === u) ? prev : [...prev, { uri: u, name: d.name }]); return; }
+            } catch { /* 非 JSON，落到文件分支 */ }
+        }
+        const f = e.dataTransfer.files?.[0];
+        if (f && f.type.startsWith("image/")) {
+            // 原生拖入的资产文件名为 <assetId>.<ext> → 解析回三元映射，垫图用公网 url（无需重读字节）
+            const base = f.name.replace(/\.[^.]+$/, "");
+            const blob = useProjectStore.getState().assetBlobs[base];
+            const ref = blob?.url || blob?.localUri;
+            if (ref) setRefImages((prev) => prev.some((r) => r.uri === ref) ? prev : [...prev, { uri: ref, name: f.name }]);
+            else addLocalRef(f);
+        }
+    };
 
     useEffect(() => {
         if (assets.length > 0 && !assets.find((a) => a.id === selectedId)) {
@@ -86,6 +146,19 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
 
     const activeForm = forms.find((f) => f.key === selectedFormKey) || forms[0] || null;
 
+    // 切换显示图片时复位框内缩放/平移
+    useEffect(() => { setImgScale(1); setImgOffset({ x: 0, y: 0 }); }, [activeForm?.image]);
+
+    // 选择造型时初始化垫图：分体（变体）默认参考基础形象，基础形象默认无垫图；用户可增删
+    useEffect(() => {
+        if (activeForm?.variantId && activeAsset?.image) {
+            setRefImages([{ uri: toRefUri(activeAsset.image), name: `${activeAsset.name}·基础形象` }]);
+        } else {
+            setRefImages([]);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedId, selectedFormKey]);
+
     const filtered = assets.filter((a) =>
         a.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (a[textField] || "").toLowerCase().includes(searchQuery.toLowerCase())
@@ -96,51 +169,36 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
         else updateAsset(cat, activeAsset.id, { prompt });
     };
 
-    // 生成一张/多张图，落入该 form 的历史，最新一张设为主图
-    const generateForm = async (assetId: string, form: Form, count: number) => {
+    // 在途任务（断连保护）：按 资产+造型 过滤；运行中=占位、失败=标红可重试
+    const pendingFor = (assetId: string, variantId: string | null) =>
+        pendingGens.filter((p) => p.cat === cat && p.assetId === assetId && p.variantId === variantId);
+    const isRunning = (assetId: string, variantId: string | null) =>
+        pendingFor(assetId, variantId).some((p) => p.status === "running");
+
+    // 生成一张：交给 generationQueue 持久化在途任务（切页/关软件不丢；UI 由 pendingGens 驱动）
+    const generateForm = (assetId: string, form: Form) => {
         if (!form.prompt.trim()) { alert("该造型暂无提示词，请先填写出图提示词。"); return; }
-        const busyKey = `${assetId}:${form.key}`;
-        setBusy((p) => ({ ...p, [busyKey]: true }));
-        try {
-            for (let i = 0; i < count; i++) {
-                const run = await runPurpose(imagePurpose, { prompt: form.prompt, params: { size, quality, idPrefix: CAT_PREFIX[cat], assetName: form.title } });
-                if (run.status === "no_model") throw new Error("未配置可用的图像模型，请先在「设置 → 模型」中选择后重试。");
-                if (run.status === "failed") throw new Error(run.error || "生成失败");
-                if (!run.resultUri) throw new Error("模型返回为空，未生成图片。");
-                addAssetImage(cat, assetId, form.variantId, run.resultUri, true);
-            }
-            await useProjectStore.getState().save(true);
-        } catch (err) {
-            console.error("generate failed:", err);
-            alert(`生成失败：${err instanceof Error ? err.message : "未知错误"}`);
-        } finally {
-            setBusy((p) => ({ ...p, [busyKey]: false }));
-        }
+        const modelKey = effectiveModelKey("image");
+        const size = resolveSize(aspect, resolution);
+        // 有垫图 → 图生图：把参考图作为 input.images 传入
+        const input = refImages.length ? { images: refImages.map((r) => ({ url: r.uri })) } : undefined;
+        startGeneration({ cat, assetId, variantId: form.variantId, purpose: imagePurpose, prompt: form.prompt, modelKey, input, params: { size, quality, idPrefix: CAT_PREFIX[cat], assetName: form.title }, label: form.title });
     };
 
     // 区域2 一键生成：为所有资产生成「基础形象」
-    const generateAllBase = async () => {
-        setBulkRunning(true);
-        try {
-            for (const a of assets) {
-                if (!a.prompt?.trim()) continue;
-                const run = await runPurpose(imagePurpose, { prompt: a.prompt, params: { size, quality, idPrefix: CAT_PREFIX[cat], assetName: a.name } });
-                if (run.status === "success" && run.resultUri) addAssetImage(cat, a.id, null, run.resultUri, true);
-            }
-            await useProjectStore.getState().save(true);
-        } catch (err) {
-            console.error(err);
-            alert(`批量生成失败：${err instanceof Error ? err.message : "未知错误"}`);
-        } finally {
-            setBulkRunning(false);
+    const generateAllBase = () => {
+        const modelKey = effectiveModelKey("image");
+        const size = resolveSize(aspect, resolution);
+        for (const a of assets) {
+            if (a.prompt?.trim()) startGeneration({ cat, assetId: a.id, variantId: null, purpose: imagePurpose, prompt: a.prompt, modelKey, params: { size, quality, idPrefix: CAT_PREFIX[cat], assetName: a.name }, label: a.name });
         }
     };
 
     // 区域3 一键生成：为当前资产的所有造型（基础+变体）各生成一张
-    const generateAllForms = async () => {
+    const generateAllForms = () => {
         if (!activeAsset) return;
         for (const f of forms) {
-            if (f.prompt.trim()) await generateForm(activeAsset.id, f, 1);
+            if (f.prompt.trim()) generateForm(activeAsset.id, f);
         }
     };
 
@@ -160,15 +218,8 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
         if (!activeForm.prompt.trim()) { alert("提示词为空，无可优化内容。"); return; }
         setOptimizing(true);
         try {
-            const instruction = [
-                "你是 AI 出图提示词工程师。请在不改变资产身份与 DNA 的前提下，润色优化下面这段【出图提示词】，",
-                "使其更精确、更利于 3D/国漫风格出图：补全画质/构图/光影/镜头细节，保留纯白背景与禁止红线，",
-                "不要新增剧情动作或无关元素。只输出优化后的提示词正文，不要任何解释。",
-                "",
-                "【原提示词】：",
-                activeForm.prompt,
-            ].join("\n");
-            const run = await runPurpose("script.analyze", { prompt: instruction, params: { temperature: 0.6, maxTokens: 2048 } });
+            // 润色提示词正文留服务端（内部模板 asset.prompt.optimize）；只发变量 原提示词
+            const run = await runPurpose("script.analyze", { templateId: "asset.prompt.optimize", variables: { 原提示词: activeForm.prompt }, modelKey: effectiveModelKey("text") || undefined, params: { temperature: 0.6, maxTokens: 2048 } });
             if (run.status === "success" && run.resultUri && run.resultUri.trim()) {
                 writePrompt(activeForm, run.resultUri.trim());
                 await useProjectStore.getState().save(true);
@@ -182,7 +233,10 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
         }
     };
 
-    const busyKey = activeForm ? `${activeAsset?.id}:${activeForm.key}` : "";
+    // 当前造型的在途生成状态（驱动区5 的「生成中 / 失败」显示）
+    const activePendings = activeAsset && activeForm ? pendingFor(activeAsset.id, activeForm.variantId) : [];
+    const runningPending = activePendings.find((p) => p.status === "running");
+    const failedPending = activePendings.filter((p) => p.status === "failed").slice(-1)[0];
 
     return (
         <div style={{ flex: 1, minWidth: 0, display: "flex", gap: 10, padding: "10px 10px 10px 0", height: "100%", boxSizing: "border-box" }}>
@@ -192,7 +246,7 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <span style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>{unit}列表</span>
                     <div style={{ display: "flex", gap: 10, fontSize: 11 }}>
-                        <span onClick={() => !bulkRunning && generateAllBase()} style={{ color: bulkRunning ? "#a78bfa" : "rgba(255,255,255,0.6)", cursor: "pointer" }}>{bulkRunning ? "生成中…" : "一键生成"}</span>
+                        <span onClick={generateAllBase} style={{ color: "rgba(255,255,255,0.6)", cursor: "pointer" }}>一键生成</span>
                         <span style={{ color: "rgba(255,255,255,0.6)", cursor: "pointer" }}>管理</span>
                         <span style={{ color: accent, cursor: "pointer" }}>+ 新建</span>
                     </div>
@@ -235,7 +289,7 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
                         <div style={{ padding: 24, textAlign: "center", color: "rgba(255,255,255,0.4)", fontSize: 12 }}>请选择左侧{unit}</div>
                     ) : forms.map((f) => {
                         const isActive = f.key === selectedFormKey;
-                        const isBusy = busy[`${activeAsset.id}:${f.key}`];
+                        const isBusy = isRunning(activeAsset.id, f.variantId);
                         return (
                             <div key={f.key} onClick={() => setSelectedFormKey(f.key)}
                                 style={{ ...panel, padding: 8, cursor: "pointer", background: isActive ? "rgba(139,92,246,0.12)" : "rgba(255,255,255,0.03)", borderColor: isActive ? accent : "rgba(255,255,255,0.08)" }}>
@@ -275,6 +329,41 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
                                 style={{ flex: 1, minHeight: 140, width: "100%", ...panel, color: "#fff", fontSize: 11, lineHeight: 1.5, padding: 8, outline: "none", resize: "none", boxSizing: "border-box" }} />
                         </div>
 
+                        {/* 2b. 垫图素材区（图生图，可选；支持从资产助手拖入） */}
+                        <div style={{ position: "relative" }} onDragOver={(e) => e.preventDefault()} onDrop={onRefDrop}>
+                            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>垫图素材　<span style={{ color: "rgba(255,255,255,0.35)" }}>（可选，图生图参考；可从资产助手拖入）</span></div>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                {refImages.map((r, i) => (
+                                    <div key={i} title={r.name || "垫图"} style={{ position: "relative", width: 48, height: 48, borderRadius: 6, overflow: "hidden", border: "1px solid rgba(255,255,255,0.15)", background: `center/cover no-repeat url(${r.uri})` }}>
+                                        <span onClick={() => setRefImages((prev) => prev.filter((_, j) => j !== i))}
+                                            title="移除" style={{ position: "absolute", top: 0, right: 0, width: 16, height: 16, lineHeight: "14px", textAlign: "center", fontSize: 12, color: "#fff", background: "rgba(0,0,0,0.6)", cursor: "pointer" }}>×</span>
+                                    </div>
+                                ))}
+                                <button onClick={() => setRefPickerOpen((v) => !v)} title="添加垫图"
+                                    style={{ width: 48, height: 48, borderRadius: 6, border: "1px dashed rgba(255,255,255,0.25)", background: "transparent", color: "rgba(255,255,255,0.5)", cursor: "pointer", fontSize: 20 }}>+</button>
+                            </div>
+                            {refPickerOpen && (
+                                <div style={{ ...panel, position: "absolute", zIndex: 50, left: 0, right: 0, bottom: "100%", marginBottom: 6, padding: 8, background: "#161b26", maxHeight: 300, overflowY: "auto", boxShadow: "0 -8px 24px rgba(0,0,0,0.5)" }}>
+                                    <label style={{ display: "block", textAlign: "center", padding: "6px 0", marginBottom: 6, borderRadius: 6, background: "rgba(255,255,255,0.06)", cursor: "pointer", fontSize: 11, color: "#fff" }}>
+                                        本地上传
+                                        <input type="file" accept="image/*" style={{ display: "none" }}
+                                            onChange={(e) => { const f = e.target.files?.[0]; if (f) addLocalRef(f); e.target.value = ""; setRefPickerOpen(false); }} />
+                                    </label>
+                                    <div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", margin: "4px 0" }}>从资产库选</div>
+                                    {libraryImages.length === 0 ? (
+                                        <div style={{ fontSize: 11, color: "rgba(255,255,255,0.4)", padding: 4 }}>资产库暂无可用图片</div>
+                                    ) : (
+                                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                                            {libraryImages.map((img, i) => (
+                                                <div key={i} title={img.name} onClick={() => { setRefImages((prev) => [...prev, { uri: toRefUri(img.uri), name: img.name }]); setRefPickerOpen(false); }}
+                                                    style={{ width: 44, height: 44, borderRadius: 6, cursor: "pointer", border: "1px solid rgba(255,255,255,0.12)", background: `center/cover no-repeat url(${img.uri})` }} />
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+
                         {/* 3a. 绑定音色（独占一行，占位，暂未实现） */}
                         {showVoice && (
                             <div>
@@ -292,15 +381,9 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
                         {/* 3b. 出图要求（与提示词一起进入生成请求） */}
                         <div>
                             <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>出图要求</div>
+                            <ModelPicker cap="image" label="出图模型" style={{ marginBottom: 8 }} />
                             <div style={{ display: "flex", gap: 8 }}>
-                                <label style={{ flex: "0 0 64px" }}>
-                                    <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", marginBottom: 2 }}>数量</div>
-                                    <select value={genCount} onChange={(e) => setGenCount(Number(e.target.value))}
-                                        style={{ width: "100%", ...panel, color: "#fff", fontSize: 11, padding: "6px 6px", outline: "none" }}>
-                                        {GEN_COUNTS.map((n) => <option key={n} value={n} style={{ background: "#1f1f2e" }}>{n}</option>)}
-                                    </select>
-                                </label>
-                                <label style={{ flex: "0 0 84px" }}>
+                                <label style={{ flex: 1, minWidth: 0 }}>
                                     <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", marginBottom: 2 }}>质量</div>
                                     <select value={quality} onChange={(e) => setQuality(e.target.value)}
                                         style={{ width: "100%", ...panel, color: "#fff", fontSize: 11, padding: "6px 6px", outline: "none" }}>
@@ -308,19 +391,26 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
                                     </select>
                                 </label>
                                 <label style={{ flex: 1, minWidth: 0 }}>
-                                    <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", marginBottom: 2 }}>比例 / 分辨率</div>
-                                    <select value={size} onChange={(e) => setSize(e.target.value)}
+                                    <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", marginBottom: 2 }}>比例</div>
+                                    <select value={aspect} onChange={(e) => setAspect(e.target.value)}
                                         style={{ width: "100%", ...panel, color: "#fff", fontSize: 11, padding: "6px 6px", outline: "none" }}>
-                                        {SIZES.map((s) => <option key={s.v} value={s.v} style={{ background: "#1f1f2e" }}>{s.label}</option>)}
+                                        {ASPECTS.map((a) => <option key={a.v} value={a.v} style={{ background: "#1f1f2e" }}>{a.label}</option>)}
+                                    </select>
+                                </label>
+                                <label style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", marginBottom: 2 }}>分辨率</div>
+                                    <select value={resolution} onChange={(e) => setResolution(e.target.value)}
+                                        style={{ width: "100%", ...panel, color: "#fff", fontSize: 11, padding: "6px 6px", outline: "none" }}>
+                                        {RESOLUTIONS.map((r) => <option key={r.v} value={r.v} style={{ background: "#1f1f2e" }}>{r.label}</option>)}
                                     </select>
                                 </label>
                             </div>
                         </div>
 
                         <div style={{ display: "flex", gap: 10 }}>
-                            <button onClick={() => activeAsset && generateForm(activeAsset.id, activeForm, genCount)} disabled={!!busy[busyKey]}
-                                style={{ flex: 1, padding: "9px 0", background: accent, color: "#fff", border: "none", borderRadius: 6, cursor: busy[busyKey] ? "not-allowed" : "pointer", opacity: busy[busyKey] ? 0.7 : 1, fontSize: 12 }}>
-                                {busy[busyKey] ? "生成中…" : "生成形象"}
+                            <button onClick={() => activeAsset && generateForm(activeAsset.id, activeForm)} title="可重复提交，每次生成会在右侧历史区新增一个占位"
+                                style={{ flex: 1, padding: "9px 0", background: accent, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>
+                                生成形象
                             </button>
                             <button onClick={optimizePrompt} disabled={optimizing}
                                 style={{ flex: 1, padding: "9px 0", background: "transparent", color: "#a78bfa", border: `1px solid ${accent}`, borderRadius: 6, cursor: optimizing ? "not-allowed" : "pointer", opacity: optimizing ? 0.7 : 1, fontSize: 12 }}>
@@ -333,20 +423,47 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
 
             {/* 区域5：图片展示区（主图 + 历史，可选主图） */}
             <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 12, ...panel, padding: 12 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>图片展示{activeForm ? `　·　${activeForm.title}（${activeForm.label}）` : ""}</div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>图片展示{activeForm ? `　·　${activeForm.title}（${activeForm.label}）` : ""}</div>
+                    {activeForm?.image && imgDims && !runningPending && !failedPending && (
+                        <span style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", fontFamily: "monospace", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 5, padding: "2px 8px" }}>
+                            {imgDims.w}×{imgDims.h}
+                        </span>
+                    )}
+                </div>
                 {!activeForm ? (
                     <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.4)", fontSize: 12 }}>请选择左侧造型</div>
                 ) : (
                     <>
-                        <div style={{ flex: 1, minHeight: 0, borderRadius: 8, background: activeForm.image ? `center/contain no-repeat url(${activeForm.image})` : "rgba(255,255,255,0.04)", display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.35)", fontSize: 13 }}>
-                            {!activeForm.image && "暂无图片，点击「生成形象」"}
+                        <div
+                            onWheel={(e) => { if (activeForm.image && !runningPending && !failedPending) setImgScale((s) => Math.min(8, Math.max(0.5, s * (e.deltaY < 0 ? 1.1 : 0.9)))); }}
+                            onMouseDown={(e) => { if (imgScale !== 1) dragRef.current = { x: e.clientX, y: e.clientY, ox: imgOffset.x, oy: imgOffset.y }; }}
+                            onMouseMove={(e) => { if (dragRef.current) setImgOffset({ x: dragRef.current.ox + (e.clientX - dragRef.current.x), y: dragRef.current.oy + (e.clientY - dragRef.current.y) }); }}
+                            onMouseUp={() => { dragRef.current = null; }}
+                            onMouseLeave={() => { dragRef.current = null; }}
+                            onDoubleClick={() => { setImgScale(1); setImgOffset({ x: 0, y: 0 }); }}
+                            style={{ flex: 1, minHeight: 0, borderRadius: 8, background: "rgba(255,255,255,0.04)", display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.35)", fontSize: 13, overflow: "hidden" }}>
+                            {/* 主显示区只负责展示选中的主图；生成中/失败作为独立占位放到下方历史区，不抢占主图 */}
+                            {activeForm.image ? (
+                                <img src={activeForm.image} alt={activeForm.title} title="滚轮缩放 · 拖动平移 · 双击复位" draggable={false}
+                                    ref={(el) => {
+                                        if (el && el.complete && el.naturalWidth && (!imgDims || imgDims.w !== el.naturalWidth || imgDims.h !== el.naturalHeight)) {
+                                            setImgDims({ w: el.naturalWidth, h: el.naturalHeight });
+                                        }
+                                    }}
+                                    onLoad={(e) => setImgDims({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
+                                    style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", transform: `translate(${imgOffset.x}px, ${imgOffset.y}px) scale(${imgScale})`, transition: dragRef.current ? "none" : "transform 0.06s", cursor: imgScale > 1 ? "grab" : "default", userSelect: "none" }} />
+                            ) : runningPending ? (
+                                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, color: "#c4b5fd", fontSize: 13 }}>
+                                    <div style={{ width: 28, height: 28, border: "3px solid rgba(167,139,250,0.3)", borderTopColor: "#a78bfa", borderRadius: "50%", animation: "Qiji-spin 0.8s linear infinite" }} />
+                                    生成中…
+                                </div>
+                            ) : "暂无图片，点击「生成形象」"}
                         </div>
                         <div>
-                            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginBottom: 6 }}>历史记录（点击设为主图，绑定资产时使用主图）</div>
+                            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginBottom: 6 }}>历史记录（点击设为主图；生成中/失败的任务也在此展示）</div>
                             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                                {activeForm.images.length === 0 ? (
-                                    <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 12 }}>暂无历史</span>
-                                ) : activeForm.images.map((uri, i) => {
+                                {activeForm.images.filter(Boolean).map((uri, i) => {
                                     const isMain = uri === activeForm.image;
                                     return (
                                         <div key={i} onClick={() => activeAsset && setAssetMainImage(cat, activeAsset.id, activeForm.variantId, uri)}
@@ -354,6 +471,28 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
                                             style={{ width: 64, height: 64, borderRadius: 6, cursor: "pointer", background: `center/cover no-repeat url(${uri})`, border: isMain ? `2px solid ${accent}` : "2px solid transparent", boxShadow: isMain ? "0 0 0 1px rgba(139,92,246,0.4)" : "none" }} />
                                     );
                                 })}
+                                {/* 在途占位：每次「生成形象」新增一个独立占位（运行中=生成中 / 失败=标红可重试/删除），不影响主图 */}
+                                {activeAsset && pendingFor(activeAsset.id, activeForm.variantId).map((p) => (
+                                    p.status === "running" ? (
+                                        <div key={p.id} title="生成中（切页/关软件不丢，完成自动回填）"
+                                            style={{ width: 64, height: 64, borderRadius: 6, border: "2px dashed rgba(139,92,246,0.5)", background: "rgba(139,92,246,0.08)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 4, color: "#a78bfa", fontSize: 10 }}>
+                                            <div style={{ width: 16, height: 16, border: "2px solid rgba(167,139,250,0.3)", borderTopColor: "#a78bfa", borderRadius: "50%", animation: "Qiji-spin 0.8s linear infinite" }} />
+                                            生成中
+                                        </div>
+                                    ) : (
+                                        <div key={p.id} title={`失败：${p.error || ""}`}
+                                            style={{ width: 64, height: 64, borderRadius: 6, border: "2px solid #f87171", background: "rgba(248,113,113,0.12)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 2, color: "#fca5a5", fontSize: 10 }}>
+                                            <span>失败</span>
+                                            <div style={{ display: "flex", gap: 4 }}>
+                                                <span onClick={() => retryGeneration(p.id)} title="重试" style={{ cursor: "pointer", textDecoration: "underline" }}>重试</span>
+                                                <span onClick={() => removePendingGen(p.id)} title="删除" style={{ cursor: "pointer", textDecoration: "underline" }}>删除</span>
+                                            </div>
+                                        </div>
+                                    )
+                                ))}
+                                {activeForm.images.filter(Boolean).length === 0 && (!activeAsset || pendingFor(activeAsset.id, activeForm.variantId).length === 0) && (
+                                    <span style={{ color: "rgba(255,255,255,0.3)", fontSize: 12 }}>暂无历史</span>
+                                )}
                             </div>
                         </div>
                     </>

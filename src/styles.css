@@ -1093,3 +1093,12 @@ body:not(.dark) textarea::placeholder,
 body:not(.dark) input::placeholder {
   color: #6b7280 !important;
 }
+
+/* 登录页背景恒为深色，且其在登录前 body 尚未加 .dark 类——强制其输入框为浅色文字，
+   选择器特异性 (0,4,2) 高于上面的浅色主题规则 (0,3,2)，确保覆盖。 */
+body:not(.dark) .qiji-login-page input:not([type="submit"]):not([type="button"]) {
+  color: #e8eaf0 !important;
+}
+body:not(.dark) .qiji-login-page input::placeholder {
+  color: #9aa0aa !important;
+}

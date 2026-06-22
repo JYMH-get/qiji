@@ -32,24 +32,6 @@ const Frame10902 = () => {
                                         </div>
                                         <div className="stroke-10_908"></div>
                                     </div>
-                                    <p
-                                        id="10_911"
-                                        className="Pixso-paragraph-10_911"
-                                    >
-                                        {"默认图片模型 Image-2"}
-                                    </p>
-                                    <p
-                                        id="10_912"
-                                        className="Pixso-paragraph-10_912"
-                                    >
-                                        {"画风 3D动漫半真人写实"}
-                                    </p>
-                                    <p
-                                        id="10_913"
-                                        className="Pixso-paragraph-10_913"
-                                    >
-                                        {"默认角色比例 9:16"}
-                                    </p>
                                 </div>
                             </div>
                             <div id="10_914" className="Pixso-frame-10_914">
