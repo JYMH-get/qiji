@@ -4,6 +4,7 @@ import EditorSidebar from "@/components/EditorSidebar";
 import { useProjectStore } from "@/store/projectStore";
 import { useCatalogStore } from "@/store/catalogStore";
 import { runPurpose } from "@/services/purposeRunner";
+import { trackTask } from "@/services/taskCenter";
 import ModelPicker, { effectiveModelKey } from "@/components/ModelPicker";
 import "@/styles/Frame1693.css";
 
@@ -355,6 +356,53 @@ const Frame1693 = () => {
         setScriptText(storeScriptText);
     }, [storeScriptText]);
 
+    // 断连恢复：上次分析若在途（analysisTask 已落盘）且本会话尚未在跟踪 → 凭 taskId 重连服务端取结果。
+    // 覆盖「分析中关闭/刷新客户端」的场景（服务端任务仍在内存中跑）。只在挂载时尝试一次。
+    useEffect(() => {
+        const at = useProjectStore.getState().analysisTask;
+        if (!at) return;
+        if (useProjectStore.getState().analysisRunning) return; // 同会话仍在跟踪，无需恢复
+        let done = false;
+        const s0 = useProjectStore.getState();
+        s0.setAnalysisRunning(true);
+        s0.setAnalysisProgress(40);
+        // 续提恢复需与现有资产合并，先快照当前资产
+        const cur = { characters: s0.characters, scenes: s0.scenes, items: s0.items, organisms: s0.organisms, crowds: s0.crowds };
+        trackTask({
+            taskId: at.taskId,
+            adapterKey: at.adapterKey,
+            timeoutMs: 20 * 60 * 1000,
+            onUpdate: (progress, status, resultUri, _err, _aid, partialText) => {
+                if (done) return;
+                const s = useProjectStore.getState();
+                if (status === "queued" || status === "running") {
+                    s.setAnalysisProgress(Math.min(95, 40 + Math.round(progress * 0.5)));
+                    if (at.kind === "analyze" && partialText && partialText.length > 40) {
+                        const live = parseAssetExtraction(partialText);
+                        const t = live.characters.length + live.scenes.length + live.items.length + live.organisms.length + live.crowds.length;
+                        if (t > 0) s.setAnalysisResult({ characters: live.characters, scenes: live.scenes, items: live.items, organisms: live.organisms, crowds: live.crowds, visualBible: live.visualBible, time: "解析中…" });
+                    }
+                    return;
+                }
+                done = true;
+                if (status === "success") {
+                    const ex = parseAssetExtraction(resultUri || "");
+                    const buckets = { characters: ex.characters, scenes: ex.scenes, items: ex.items, organisms: ex.organisms, crowds: ex.crowds };
+                    const result = at.kind === "continue" ? mergeExtraction(cur, buckets).merged : buckets;
+                    const now = new Date();
+                    const ts = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, "0")}/${String(now.getDate()).padStart(2, "0")}   ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+                    s.setAnalysisResult({ ...result, visualBible: ex.visualBible, time: ts });
+                }
+                s.setAnalysisTask(null);
+                s.setAnalysisRunning(false);
+                s.setAnalysisProgress(status === "success" ? 100 : 0);
+                void s.save(true);
+            },
+        });
+        return () => { done = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     const handleAnalyzeScript = async () => {
         if (!scriptText.trim()) {
             alert("请输入剧本文本后再进行分析");
@@ -394,6 +442,10 @@ const Frame1693 = () => {
                 // 整段出图模板设计下，每个资产带 ~500 字提示词，长剧本资产多→输出极长。
                 // 4096 远不够（实测 1.8 万字仍被截断）。放宽到 65535，配合 parseAssetExtraction 的截断兜底。
                 params: { temperature: 0.7, maxTokens: 65535 },
+                // 落盘在途任务：关客户端后重开可凭 taskId 重连服务端取结果（见挂载时的断连恢复 useEffect）
+                onTaskId: (taskId, adapterKey) => {
+                    useProjectStore.getState().setAnalysisTask({ taskId, adapterKey, kind: "analyze", startedAt: Date.now() });
+                },
                 onProgress: (progress, status, partialText) => {
                     if (status === "running" || status === "queued") {
                         setAnalysisProgress(Math.min(95, 50 + Math.round(progress * 0.4)));
@@ -414,6 +466,9 @@ const Frame1693 = () => {
                     }
                 },
             });
+
+            // 任务已终态：清掉在途记录（无论成败），避免下次启动误重连
+            useProjectStore.getState().setAnalysisTask(null);
 
             // 无兜底：没有可用模型 / 失败 → 直接报错，绝不给假数据
             if (run.status === "no_model") {
@@ -542,12 +597,16 @@ const Frame1693 = () => {
                 variables,
                 modelKey: effectiveModelKey("text") || undefined,
                 params: { temperature: 0.7, maxTokens: 65535 },
+                onTaskId: (taskId, adapterKey) => {
+                    useProjectStore.getState().setAnalysisTask({ taskId, adapterKey, kind: "continue", startedAt: Date.now() });
+                },
                 onProgress: (progress, status) => {
                     if (status === "running" || status === "queued") {
                         setAnalysisProgress(Math.min(95, 40 + Math.round(progress * 0.5)));
                     }
                 },
             });
+            useProjectStore.getState().setAnalysisTask(null); // 任务已终态，清在途记录
             if (run.status === "no_model") throw new Error("未配置可用的文本模型，请先在「设置 → 模型」中选择后重试。");
             if (run.status === "failed") throw new Error(run.error || "继续提取失败");
             const resultText = run.resultUri || "";

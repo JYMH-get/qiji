@@ -156,6 +156,8 @@ export interface QijiProject {
   analysisTime?: string;
   /** 在途生成任务（断连保护），持久化随项目 */
   pendingGens?: PendingGen[];
+  /** 在途剧本分析任务（断连保护）：关客户端后重开凭 taskId 重连服务端取结果 */
+  analysisTask?: { taskId: string; adapterKey: string; kind: "analyze" | "continue"; startedAt: number } | null;
   /** 资产二进制三元映射：assetId ↔ 公网url ↔ 本地路径（随项目持久化） */
   assetBlobs?: Record<string, AssetBlob>;
   /** 视频/分镜：分集列表（每集含本集剧本 + 分镜 + 垫素材 + 故事板/视频产物） */

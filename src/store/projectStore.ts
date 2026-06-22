@@ -108,6 +108,8 @@ interface ProjectState {
   /** 分析进行态（搬进 store：切换界面再切回不丢进度，因底层轮询是单例后台） */
   analysisRunning: boolean;
   analysisProgress: number;
+  /** 在途分析任务（持久化到项目文件：关闭客户端后重开仍可凭 taskId 重连服务端取结果） */
+  analysisTask: { taskId: string; adapterKey: string; kind: "analyze" | "continue"; startedAt: number } | null;
   episodes: VideoEpisode[];
   projectModelConfig: ProjectModelConfig;
   pendingGens: PendingGen[];
@@ -125,6 +127,7 @@ interface ProjectState {
   setVisualBible: (patch: Partial<{ style: string; colorSystem: string; negativeGlobal: string }>) => void;
   setAnalysisRunning: (running: boolean) => void;
   setAnalysisProgress: (progress: number) => void;
+  setAnalysisTask: (task: { taskId: string; adapterKey: string; kind: "analyze" | "continue"; startedAt: number } | null) => void;
   setCoverImage: (cover: string) => void;
   setAnalysisResult: (data: { characters: any[], scenes: any[], items: any[], organisms: any[], crowds?: any[], visualBible?: { style: string; colorSystem: string; negativeGlobal: string }, time: string }) => void;
   updateCharacterImage: (charId: string, imageUri: string) => void;
@@ -195,6 +198,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   analysisTime: "",
   analysisRunning: false,
   analysisProgress: 0,
+  analysisTask: null,
   episodes: [],
   projectModelConfig: {},
   pendingGens: [],
@@ -218,6 +222,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   // 进行态为内存瞬态，不落盘：切换界面再切回靠它复原进度条
   setAnalysisRunning: (analysisRunning) => set({ analysisRunning }),
   setAnalysisProgress: (analysisProgress) => set({ analysisProgress }),
+  // 在途分析任务落盘：关客户端后重开可凭它重连服务端
+  setAnalysisTask: (analysisTask) => { set({ analysisTask, isDirty: true }); get().scheduleAutoSave("canvas"); },
   setCoverImage: (coverImage) => { set({ coverImage, isDirty: true }); get().scheduleAutoSave("canvas"); },
   setAnalysisResult: (data) => {
     set((s) => ({
@@ -404,6 +410,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           analysisTime: s.analysisTime,
           episodes: s.episodes,
           pendingGens: s.pendingGens,
+          analysisTask: s.analysisTask,
           assetBlobs: s.assetBlobs,
           projectModelConfig: s.projectModelConfig,
         };
@@ -448,6 +455,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           analysisTime: s.analysisTime,
           episodes: s.episodes,
           pendingGens: s.pendingGens,
+          analysisTask: s.analysisTask,
           assetBlobs: s.assetBlobs,
           projectModelConfig: s.projectModelConfig,
         };
@@ -501,6 +509,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       analysisTime: "",
       analysisRunning: false,
       analysisProgress: 0,
+      analysisTask: null,
       episodes: [],
       projectModelConfig: {},
       pendingGens: [],
@@ -569,6 +578,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         episodes: project.episodes || [],
         projectModelConfig: project.projectModelConfig || {},
         pendingGens: (project as any).pendingGens || [],
+        analysisTask: (project as any).analysisTask || null,
         assetBlobs: (project as any).assetBlobs || {},
       });
 
@@ -641,6 +651,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       analysisTime: s.analysisTime,
       episodes: s.episodes,
       pendingGens: s.pendingGens,
+      analysisTask: s.analysisTask,
       assetBlobs: s.assetBlobs,
       projectModelConfig: s.projectModelConfig,
     };
@@ -686,7 +697,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             episodes: project.episodes || [],
             projectModelConfig: project.projectModelConfig || {},
             pendingGens: (project as any).pendingGens || [],
-        assetBlobs: (project as any).assetBlobs || {},
+            analysisTask: (project as any).analysisTask || null,
+            assetBlobs: (project as any).assetBlobs || {},
           });
           useCommitStore.setState({
             head: project.head || "commit-init",
