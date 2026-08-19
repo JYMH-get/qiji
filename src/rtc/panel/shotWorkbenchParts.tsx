@@ -113,11 +113,13 @@ export function DraftArea({ value, placeholder, rows = 4, onCommit }: { value: s
  * 与 Frame161195 的提示词区同一套组件与语义：客户端只插胶囊标记（【预设:id】/@ImageN），
  * 展开收口在提交（shotGenActions 的 resolvePresets / 上游 @tag 注入）。
  * editorMinHeight：编辑区最小高（缺省 92=右栏旧观感；中栏工作台传大值走灯箱式布局）。
+ * fill：填充模式（第240轮补充，中栏工作台用）——栏位吃满父列剩余高度、编辑区**有界**：
+ *   超长提示词在编辑框内部滚动（收起），父列不再整列滑动；true 时忽略 editorMinHeight。
  * renderHeader：可选头部接管（中栏工作台照表格模式排「两行头」用）——传入时替换默认标题行，
  *   parts.presetBtn / parts.expandBtn 是本栏位已接好线的 ▦预设按钮与放大按钮（下拉/弹窗仍由本组件承载），
  *   调用方只负责把它们摆进自己的行布局；presetLabel 定制预设按钮文案（缺省「▦ 预设」）。
  */
-export function ShotPromptField({ episodeId, shotId, fieldKey, label, shot, presetSchemes, inferring, editorMinHeight = 92, renderHeader, presetLabel = "▦ 预设" }: {
+export function ShotPromptField({ episodeId, shotId, fieldKey, label, shot, presetSchemes, inferring, editorMinHeight = 92, renderHeader, presetLabel = "▦ 预设", fill = false }: {
 	episodeId: string;
 	shotId: string;
 	fieldKey: ShotPromptFieldKey;
@@ -128,6 +130,7 @@ export function ShotPromptField({ episodeId, shotId, fieldKey, label, shot, pres
 	editorMinHeight?: number | string;
 	renderHeader?: (parts: { presetBtn: React.ReactNode; expandBtn: React.ReactNode }) => React.ReactNode;
 	presetLabel?: string;
+	fill?: boolean;
 }) {
 	const editorRef = useRef<PromptMentionHandle | null>(null);
 	const [mention, setMention] = useState<{ x: number; y: number; viaAt: boolean } | null>(null);
@@ -165,7 +168,7 @@ export function ShotPromptField({ episodeId, shotId, fieldKey, label, shot, pres
 	);
 
 	return (
-		<div style={{ ...secBox, position: "relative" }}>
+		<div style={{ ...secBox, position: "relative", ...(fill ? { flex: 1, minHeight: 150 } : {}) }}>
 			{renderHeader ? renderHeader({ presetBtn, expandBtn }) : (
 				<div style={{ ...secTitle, fontSize: 10 }}>
 					<span>{label}</span>
@@ -188,7 +191,11 @@ export function ShotPromptField({ episodeId, shotId, fieldKey, label, shot, pres
 				onImportProbe={(pos) => setImportPos(pos ? { x: pos.x, y: pos.y } : null)}
 				onPasteMedia={(files) => { if (files.length) void addLocalShotMaterials(episodeId, shotId, files); }}
 				placeholder={inferring ? "推理中，结果将流式回填…" : "点「推理提示词」生成，或手动填写；输入 @ 引用素材、# 导入项目资产"}
-				style={{ minHeight: editorMinHeight, width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, color: "#fff", fontSize: 12, padding: "6px 8px", lineHeight: 1.6 }}
+				style={{
+					// fill=填充模式：编辑区吃满栏位剩余高且**有界**（超长提示词框内滚动=收起，父列不整列滑动）
+					...(fill ? { flex: 1, minHeight: 0, overflowY: "auto" as const } : { minHeight: editorMinHeight }),
+					width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, color: "#fff", fontSize: 12, padding: "6px 8px", lineHeight: 1.6,
+				}}
 			/>
 			{/* @ 素材引用待选框（与 Frame161195 同款：选中即光标处插胶囊） */}
 			{mention && (

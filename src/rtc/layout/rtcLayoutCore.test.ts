@@ -92,6 +92,12 @@ describe("rtcLayoutCore", () => {
 		expect(l.timelineHeight).toBe(350);
 	});
 
+	it("normalizeLayout：存量老默认宽 300 自动升级为新默认；用户手动拖过的值原样保留（第240轮补充）", () => {
+		expect(normalizeLayout({ assetWidth: 300 }, 1000).assetWidth).toBe(ASSET_W.def);
+		expect(normalizeLayout({ assetWidth: 310 }, 1000).assetWidth).toBe(310);
+		expect(normalizeLayout({ assetWidth: ASSET_W.def }, 1000).assetWidth).toBe(ASSET_W.def);
+	});
+
 	it("normalizeLayout：旧版 guideWidth/guideCollapsed（AI 生成子栏）键被忽略、读盘不炸", () => {
 		const l = normalizeLayout(
 			{ slotOrder: ["props", "stage", "asset"], assetWidth: 300, propsWidth: 400, timelineHeight: 300, guideWidth: 320, guideCollapsed: true },

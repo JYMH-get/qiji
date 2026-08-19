@@ -166,7 +166,8 @@ function LeftColumn({ episodeId, shotId, shot }: { episodeId: string; shotId: st
 		setSplitPct(Math.min(70, Math.max(30, pct)));
 	};
 	return (
-		<div ref={colRef} style={{ flex: "0 0 300px", minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
+		// 左列宽（第240轮补充，用户截图定稿「中间栏的左栏拉宽」）：随工作台宽度自适应 42%，钳 300–560px
+		<div ref={colRef} style={{ flex: "0 0 clamp(300px, 42%, 560px)", minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
 			<div style={{ height: `calc(${splitPct}% - 5px)`, minHeight: 0, display: "flex" }}>
 				<StoryboardPreview episodeId={episodeId} shotId={shotId} shot={shot} />
 			</div>
@@ -266,7 +267,9 @@ function WorkbenchBody({ episodeId, shotId, segId }: { episodeId: string; shotId
 			{/* ── 左列：故事板预览（上）+ 原文气泡（下），分界可拖 ── */}
 			<LeftColumn episodeId={episodeId} shotId={shotId} shot={shot} />
 
-			{/* ── 右列：提示词工作区（两行头照表格模式）── */}
+			{/* ── 右列：提示词工作区（两行头照表格模式）。第240轮补充：不整列滑动——
+			     提示词栏位 fill 吃满剩余高、超长提示词在编辑框内滚动（收起）；
+			     overflowY:auto 仅作极小视口的兜底（正常视口各区块恰好填满不出滚条） ── */}
 			<div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", gap: 10, overflowY: "auto", paddingRight: 2 }}>
 				{/* 头部：分镜身份 + 推理 */}
 				<div style={{ display: "flex", alignItems: "baseline", gap: 8, flexShrink: 0 }}>
@@ -301,7 +304,7 @@ function WorkbenchBody({ episodeId, shotId, segId }: { episodeId: string; shotId
 					episodeId={episodeId} shotId={shotId}
 					fieldKey={activeField} label={activeLabel}
 					shot={shot} presetSchemes={presetSchemes} inferring={inferring}
-					editorMinHeight="32vh"
+					fill
 					presetLabel="▦ 预设方案"
 					renderHeader={({ presetBtn, expandBtn }) => (
 						<div style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0 }}>
@@ -397,12 +400,14 @@ function WorkbenchBody({ episodeId, shotId, segId }: { episodeId: string; shotId
 					<JobChips shotId={shotId} field="video" />
 				</div>
 
-				{/* 视频历史 */}
+				{/* 视频历史（条内滚动，条目多也不把列撑出滚动） */}
 				{shot.videoUris?.length ? (
 					<div style={{ ...secBox, flexShrink: 0 }}>
 						<div style={{ ...secTitle, fontSize: 10 }}><span>视频历史（{shot.videoUris.length}）</span></div>
-						<HistoryGrid kind="video" uris={shot.videoUris} currentUri={shot.videoUri} name={`${shot.title || "分镜"}·视频`}
-							onSetCurrent={(u) => update({ videoUri: u, videoActiveKey: `u:${u}` })} />
+						<div style={{ maxHeight: 100, overflowY: "auto" }}>
+							<HistoryGrid kind="video" uris={shot.videoUris} currentUri={shot.videoUri} name={`${shot.title || "分镜"}·视频`}
+								onSetCurrent={(u) => update({ videoUri: u, videoActiveKey: `u:${u}` })} />
+						</div>
 					</div>
 				) : null}
 			</div>

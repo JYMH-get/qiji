@@ -18,8 +18,13 @@ export const RTC_LAYOUT_KEY = "Qiji:rtcLayout";
 
 export const DEFAULT_SLOT_ORDER: readonly RtcSlotId[] = ["asset", "stage", "props"];
 
-/** 各尺寸的钳位与默认值（px；时间轴按视口高比例换算见 timelineBounds） */
-export const ASSET_W = { min: 220, max: 520, def: 300 } as const;
+/** 各尺寸的钳位与默认值（px；时间轴按视口高比例换算见 timelineBounds）。
+ *  第240轮补充：素材面板默认 300→380（用户截图定稿「左栏拉宽」）；normalizeLayout 对存量
+ *  localStorage 里恰为老默认值 300 的 assetWidth 自动升级到新默认（用户手动拖到过 300 的
+ *  概率极低且升级无害——再拖一下即恢复自定义值）。 */
+export const ASSET_W = { min: 220, max: 640, def: 380 } as const;
+/** 素材面板的历史默认宽（读盘迁移用，见 normalizeLayout；改默认值时把旧默认追加进来） */
+export const ASSET_W_LEGACY_DEFS: readonly number[] = [300];
 /** 属性面板：三页签（属性/剧本/分镜）内容更多，上限放宽到 640 */
 export const PROPS_W = { min: 260, max: 640, def: 360 } as const;
 /** 时间轴高度：20vh–60vh，默认 35vh（与旧版写死的 h-[35vh] 观感一致） */
@@ -86,9 +91,11 @@ export function normalizeLayout(raw: unknown, viewportH: number): RtcLayout {
 	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return def;
 	const r = raw as Record<string, unknown>;
 	const tl = timelineBounds(viewportH);
+	// 老默认宽升级：存量落盘值恰为历史默认（用户从未按需拖动过）→ 跟随新默认
+	const assetRaw = typeof r.assetWidth === "number" && ASSET_W_LEGACY_DEFS.includes(r.assetWidth) ? undefined : r.assetWidth;
 	return {
 		slotOrder: isValidSlotOrder(r.slotOrder) ? [...r.slotOrder] : def.slotOrder,
-		assetWidth: numOr(r.assetWidth, ASSET_W.min, ASSET_W.max, def.assetWidth),
+		assetWidth: numOr(assetRaw, ASSET_W.min, ASSET_W.max, def.assetWidth),
 		propsWidth: numOr(r.propsWidth, PROPS_W.min, PROPS_W.max, def.propsWidth),
 		timelineHeight: numOr(r.timelineHeight, tl.min, tl.max, def.timelineHeight),
 	};
