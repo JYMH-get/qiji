@@ -526,6 +526,9 @@ function mergeIntervals(list: Array<[number, number]>): Array<[number, number]> 
 /**
  * 播放头 → 源素材时间（秒）：sourceStartUs + (t - targetStartUs) × speed。
  * 相对偏移钳非负；有源窗口时钳到窗口右缘（片段末尾浮点误差不越界）。
+ * ⚠ 右缘钳制兼作**存量失配 doc 的播放防御**：变速曾只 patch speed 不联动时长（老 bug），
+ * 存量项目里有 targetDur×speed > sourceDur 的片段——源耗尽后这里恒返回窗口末尾，
+ * 播放器漂移校正把 video.currentTime 拉回来=定住尾帧，绝不放飞出错画面。勿删此钳。
  */
 export function sourceTimeSec(seg: RtcSegment, tUs: number): number {
 	const speed = segmentRate(seg);

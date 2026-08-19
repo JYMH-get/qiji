@@ -24,6 +24,7 @@ import {
 	replaceSegmentMedia,
 	rippleDeleteSegments,
 	rulerStepUs,
+	setSegmentSpeed,
 	stepPlayheadUs,
 	setTrackProps,
 	snapCandidates,
@@ -648,5 +649,97 @@ describe("pruneScriptTracks（补充10：原文改派生只读——旧形态 ro
 		expect(pruned.tracks.map((t) => t.id)).toEqual(["tv"]);
 		const clean: RtcDoc = { id: "d2", name: "d2", fps: 30, tracks: [{ id: "tv", type: "video", segments: [] }] } as RtcDoc;
 		expect(pruneScriptTracks(clean)).toBe(clean);
+	});
+});
+
+describe("rtcOps setSegmentSpeed 变速联动时长", () => {
+	it("10s 源 speed 1→2：targetDur 变 5s，source 窗口原样（不变量 sourceDur = targetDur×speed）", () => {
+		const d = doc({
+			id: "t1",
+			segments: [seg("a", 2 * SEC, 10 * SEC, { sourceStartUs: 1 * SEC, sourceDurationUs: 10 * SEC })],
+		});
+		const d2 = setSegmentSpeed(d, "a", 2);
+		const a = d2.tracks[0].segments[0];
+		expect(a.speed).toBe(2);
+		expect(a.targetStartUs).toBe(2 * SEC); // 起点不动
+		expect(a.targetDurationUs).toBe(5 * SEC);
+		expect(a.sourceStartUs).toBe(1 * SEC); // 源窗口起点不动
+		expect(a.sourceDurationUs).toBe(10 * SEC); // round(5s×2)=10s 精确回写
+	});
+
+	it("减速被后方片段挡道：targetDur 钳到空隙，sourceDurationUs 回写 targetDur×speed 维持不变量", () => {
+		const d = doc({
+			id: "t1",
+			segments: [
+				seg("a", 0, 5 * SEC, { sourceStartUs: 0, sourceDurationUs: 10 * SEC, speed: 2 }),
+				seg("b", 7 * SEC, 2 * SEC),
+			],
+		});
+		const d2 = setSegmentSpeed(d, "a", 1); // 期望 10s，被 b 的左缘钳到 7s
+		const a = d2.tracks[0].segments[0];
+		expect("speed" in a).toBe(false); // speed=1 默认值不落键
+		expect(a.targetDurationUs).toBe(7 * SEC);
+		expect(a.sourceStartUs).toBe(0); // 起点不动——尾部源内容暂不展示，之后 trim 右缘可拉回
+		expect(a.sourceDurationUs).toBe(7 * SEC); // 钳位后回写 7s×1
+	});
+
+	it("时长下限 MIN_SEGMENT_US：极短源加速到底也不出零长片段", () => {
+		const d = doc({
+			id: "t1",
+			segments: [seg("a", 0, 6000, { sourceStartUs: 0, sourceDurationUs: 3000, speed: 0.5 })],
+		});
+		const d2 = setSegmentSpeed(d, "a", 5); // raw=round(3000/5)=600 < MIN
+		const a = d2.tracks[0].segments[0];
+		expect(a.targetDurationUs).toBe(MIN_SEGMENT_US);
+		expect(a.sourceDurationUs).toBe(MIN_SEGMENT_US * 5); // 回写维持不变量
+	});
+
+	it("无 source 窗口（图片等）：targetDur 按 oldSpeed/newSpeed 等比缩放 + 右缘空隙钳位", () => {
+		const d = doc({
+			id: "t1",
+			segments: [seg("img", 0, 3 * SEC, { media: "image" }), seg("b", 10 * SEC, SEC)],
+		});
+		const d2 = setSegmentSpeed(d, "img", 2); // 3s×(1/2)=1.5s
+		expect(d2.tracks[0].segments[0].targetDurationUs).toBe(1_500_000);
+		const d3 = setSegmentSpeed(d2, "img", 0.2); // 1.5s×(2/0.2)=15s → 被 b 钳到 10s
+		expect(d3.tracks[0].segments[0].targetDurationUs).toBe(10 * SEC);
+		expect(d3.tracks[0].segments[0].speed).toBe(0.2);
+	});
+
+	it("同值 no-op 返回原引用（含夹取后同值：99→夹到 5 == 现值 5）", () => {
+		const d = doc({
+			id: "t1",
+			segments: [seg("a", 0, 5 * SEC, { sourceStartUs: 0, sourceDurationUs: 10 * SEC, speed: 2 })],
+		});
+		expect(setSegmentSpeed(d, "a", 2)).toBe(d);
+		const d5 = setSegmentSpeed(d, "a", 5);
+		expect(setSegmentSpeed(d5, "a", 99)).toBe(d5); // 夹到 5 与现值相同
+		const clean = doc({ id: "t1", segments: [seg("a", 0, 5 * SEC)] });
+		expect(setSegmentSpeed(clean, "a", 1)).toBe(clean); // 缺省 speed=1 同值
+	});
+
+	it("非 media（placeholder/compound）与不存在的片段 → 原引用 no-op", () => {
+		const d = doc({
+			id: "t1",
+			segments: [
+				seg("p", 0, 2 * SEC, { kind: "placeholder" }),
+				seg("c", 3 * SEC, 2 * SEC, { kind: "compound", sourceStartUs: 0, sourceDurationUs: 2 * SEC }),
+			],
+		});
+		expect(setSegmentSpeed(d, "p", 2)).toBe(d);
+		expect(setSegmentSpeed(d, "c", 2)).toBe(d);
+		expect(setSegmentSpeed(d, "nope", 2)).toBe(d);
+	});
+
+	it("变速往返（2 再回 1）：时长与 source 窗口精确复原，speed 键摘除", () => {
+		const d = doc({
+			id: "t1",
+			segments: [seg("a", 0, 10 * SEC, { sourceStartUs: 0, sourceDurationUs: 10 * SEC })],
+		});
+		const back = setSegmentSpeed(setSegmentSpeed(d, "a", 2), "a", 1);
+		const a = back.tracks[0].segments[0];
+		expect(a.targetDurationUs).toBe(10 * SEC);
+		expect(a.sourceDurationUs).toBe(10 * SEC);
+		expect("speed" in a).toBe(false);
 	});
 });

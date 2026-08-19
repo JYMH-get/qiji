@@ -2,13 +2,14 @@
  * RtcMediaProps —— 右栏「media 片段」属性视图。
  * 只读：名称/所在轨/素材源（assetId + source 窗口）；
  * 可编辑：起点 / 时长（RtcTimeFields，走 moveSegment / trimSegment）+ speed / volume / muted
- *        （经 rtcStore.commit + 内联不可变 patch，见 rtcSegUtils）。
+ *        （volume/muted 经 rtcStore.commit + 内联不可变 patch；speed 经 commitSegmentSpeed →
+ *        rtcOps.setSegmentSpeed 联动 target 时长，见 rtcSegUtils）。
  */
 import { useEffect, useState } from "react";
 import { openLightbox } from "@/store/lightboxStore";
 import type { RtcSegment, RtcTrack } from "@/types/rtc";
 import { RtcTimeFields } from "./RtcTimeFields";
-import { commitSegmentPatch, fmtUs, usToSecLabel } from "./rtcSegUtils";
+import { commitSegmentPatch, commitSegmentSpeed, fmtUs, usToSecLabel } from "./rtcSegUtils";
 /* ── 第三批：倒放/裁剪/转场 ── */
 import { cropOf, withSegmentCrop } from "@/lib/rtcCropCore";
 import { useRtcStore } from "@/store/rtcStore";
@@ -23,7 +24,9 @@ const rowSt: React.CSSProperties = { display: "flex", alignItems: "center", just
 const valSt: React.CSSProperties = { color: "rgba(255,255,255,0.9)", fontSize: 12, textAlign: "right", wordBreak: "break-all" };
 const ctlSt: React.CSSProperties = { width: 110, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, color: "#fff", padding: "5px 8px", fontSize: 12, outline: "none" };
 
-/** 变速输入（草稿式；失焦/回车提交，夹 0.1–5） */
+/** 变速输入（草稿式；失焦/回车提交，夹 0.1–5）。
+ *  ⚠ 提交走 commitSegmentSpeed（speed 与 target 时长联动，10s×2倍=5s 轨道长度），
+ *  勿回退成 commitSegmentPatch 纯 patch speed——时长不跟=播放到源素材耗尽后画面出错。 */
 function SpeedInput({ segId, speed }: { segId: string; speed: number }) {
 	const [draft, setDraft] = useState(String(speed));
 	useEffect(() => { setDraft(String(speed)); }, [speed, segId]);
@@ -31,7 +34,7 @@ function SpeedInput({ segId, speed }: { segId: string; speed: number }) {
 		const n = Number(draft);
 		const v = Number.isFinite(n) ? Math.min(5, Math.max(0.1, Math.round(n * 100) / 100)) : speed;
 		setDraft(String(v));
-		if (v !== speed) commitSegmentPatch(segId, { speed: v });
+		if (v !== speed) commitSegmentSpeed(segId, v);
 	};
 	return (
 		<input

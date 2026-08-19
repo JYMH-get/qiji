@@ -10,14 +10,17 @@
  *     属性会把目标**重置回默认**（与剪映「应用全部属性」一致，比「只贴改过的」可预期）；
  *   - transform 落库经 storeTransform（等于缺省=删字段，与属性面板/预览拖动同一把尺）；
  *   - **音频片段跳过 transform**（画面变换对声音无意义，贴上去是脏数据）；volume/speed/muted 照贴；
- *   - speed 语义与属性面板 SpeedInput 完全一致：纯 patch `speed` 字段（夹 0.1–5），
- *     不动 target/source 窗口——与面板改变速同一行为，别在这里另起换算；
+ *   - speed 语义与属性面板 SpeedInput 完全一致：走 **rtcOps.setSegmentSpeed**（夹 0.1–5，
+ *     speed 与 target 时长联动、维持 sourceDurationUs ≈ targetDurationUs × speed）——
+ *     别在这里另起换算，也勿回退成纯 patch speed 字段（时长不跟=播放出错的老 bug 换个入口复发）；
+ *     setSegmentSpeed 只认 kind:"media"，粘到 compound 等其它片段上 speed 不生效（与面板一致）；
  *   - 值全部未变的片段保持原引用（commit 天然 no-op，不进撤销栈不落盘）。
  */
 import { create } from "zustand";
 import { useProjectStore } from "@/store/projectStore";
 import { segTransform, type RtcDoc, type RtcSegment, type RtcTransform } from "@/types/rtc";
 import { normalizeTransform, storeTransform } from "@/lib/rtcTransformCore";
+import { setSegmentSpeed } from "@/lib/rtcOps";
 
 /** 属性快照（规范化完整值；transform 恒为规范化后的完整对象，便于比较与应用） */
 export interface RtcSegAttrs {
@@ -59,6 +62,8 @@ function sameTransform(a: RtcTransform, b: RtcTransform): boolean {
 /**
  * 把属性快照应用到一批片段（不可变；一个都没变返回**原 doc 引用** → commit no-op）。
  * 默认值不落键（speed=1 / volume=1 / muted=false / transform=缺省 一律删字段，项目文件保持干净）。
+ * speed 单独走 setSegmentSpeed（联动 target 时长维持不变量；kind 非 media 时该项 no-op），
+ * 其余属性内联 patch——两步链式，全部 no-op 时仍返回原引用。
  */
 export function applyAttrsToDoc(doc: RtcDoc, ids: string[], attrs: RtcSegAttrs): RtcDoc {
 	const want = new Set(ids);
@@ -80,15 +85,11 @@ export function applyAttrsToDoc(doc: RtcDoc, ids: string[], attrs: RtcSegAttrs):
 					segChanged = true;
 				}
 			}
-			const patchNum = (key: "speed" | "volume", value: number, def: number) => {
-				const cur = s[key] ?? def;
-				if (cur === value) return;
-				if (value === def) delete next[key];
-				else next[key] = value;
+			if ((s.volume ?? 1) !== attrs.volume) {
+				if (attrs.volume === 1) delete next.volume;
+				else next.volume = attrs.volume;
 				segChanged = true;
-			};
-			patchNum("speed", attrs.speed, 1);
-			patchNum("volume", attrs.volume, 1);
+			}
 			if (!!s.muted !== attrs.muted) {
 				if (attrs.muted) next.muted = true;
 				else delete next.muted;
@@ -102,7 +103,10 @@ export function applyAttrsToDoc(doc: RtcDoc, ids: string[], attrs: RtcSegAttrs):
 		changed = true;
 		return { ...t, segments };
 	});
-	return changed ? { ...doc, tracks } : doc;
+	let out = changed ? { ...doc, tracks } : doc;
+	// speed：逐片段经 setSegmentSpeed（时长联动 + 夹隙钳位 + 默认值删键；同值/非 media = 原引用透传）
+	for (const id of ids) out = setSegmentSpeed(out, id, attrs.speed);
+	return out;
 }
 
 interface RtcAttrClipboardState {

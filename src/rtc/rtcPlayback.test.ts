@@ -196,6 +196,14 @@ describe("sourceTimeSec 源时间换算", () => {
 		expect(sourceTimeSec(s, 0)).toBe(1);
 		expect(sourceTimeSec(s, 100 * SEC)).toBe(5); // 1 + 4 上限
 	});
+
+	it("存量失配 doc 防御：targetDur×speed > sourceDur 的片段（老变速 bug 遗留）源耗尽后定住窗口末尾", () => {
+		// 10s 轨道长度 × 2 倍速，但源只有 10s——播放到 5s 处源耗尽，此后恒钳在窗口末尾（定尾帧不出错）
+		const s = seg("a", 0, 10 * SEC, { sourceStartUs: 0, sourceDurationUs: 10 * SEC, speed: 2 });
+		expect(sourceTimeSec(s, 3 * SEC)).toBe(6); // 源未耗尽：正常换算
+		expect(sourceTimeSec(s, 8 * SEC)).toBe(10); // 片段区间内、源已耗尽：钳到 0+10s
+		expect(sourceTimeSec(s, 9_999_999)).toBe(10);
+	});
 });
 
 describe("collectAudibleSegments 应发声音频片段", () => {

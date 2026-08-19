@@ -84,6 +84,32 @@ describe("rtcAttrClipboard applyAttrsToDoc", () => {
 		expect(a.muted).toBe(true);
 	});
 
+	it("粘贴 speed 走 setSegmentSpeed：target 时长联动、source 窗口回写维持不变量（老 bug 勿复发）", () => {
+		const d0 = doc([
+			{
+				id: "t",
+				type: "video",
+				segments: [seg("a", { targetDurationUs: 10_000_000, sourceStartUs: 0, sourceDurationUs: 10_000_000 })],
+			},
+		]);
+		const d1 = applyAttrsToDoc(d0, ["a"], ATTRS); // speed 2
+		const a = d1.tracks[0].segments[0];
+		expect(a.speed).toBe(2);
+		expect(a.targetDurationUs).toBe(5_000_000); // 10s 源 ×2 倍速 = 5s 轨道长度
+		expect(a.sourceDurationUs).toBe(10_000_000); // 不变量 sourceDur = targetDur×speed
+	});
+
+	it("compound 片段：speed 不经属性粘贴生效（setSegmentSpeed 只认 media），其余属性照贴", () => {
+		const c = seg("c", { kind: "compound", sourceStartUs: 0, sourceDurationUs: 1_000_000 });
+		const d0 = doc([{ id: "t", type: "video", segments: [c] }]);
+		const d1 = applyAttrsToDoc(d0, ["c"], ATTRS);
+		const out = d1.tracks[0].segments[0];
+		expect("speed" in out).toBe(false); // speed 未落
+		expect(out.targetDurationUs).toBe(1_000_000); // 时长不动
+		expect(out.volume).toBe(0.5); // 其余属性照贴
+		expect(out.muted).toBe(true);
+	});
+
 	it("值全部未变 → 原 doc 引用（commit 视为 no-op 不进撤销栈）", () => {
 		const already = seg("a", {
 			transform: { scaleX: 1.5, scaleY: 1.5, x: 0.1, y: 0, rotation: 90, opacity: 0.8 },

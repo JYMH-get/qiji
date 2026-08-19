@@ -375,6 +375,51 @@ export function trimSegment(
 }
 
 /**
+ * 变速（speed 写入唯一入口：属性面板 SpeedInput / 属性剪贴板粘贴都走这里）：
+ * 改 speed 的同时**联动 target 时长**，维持不变量 sourceDurationUs ≈ targetDurationUs × speed
+ * （trimSegment/splitSegment 同一把换算尺——只改 speed 不动时长=播放到源素材耗尽后画面出错，
+ * 第238轮后续用户实测 bug 的根因，勿回退成纯 patch speed 字段）。
+ * 规则：
+ *   - speed 夹取 0.1–5（与属性面板 SpeedInput 同尺）；与现值相同 / 非 media / 找不到片段 →
+ *     返回**原 doc 引用**（commit 天然 no-op）；speed=1 删字段（默认值不落键，项目文件保持干净）；
+ *   - 带 source 窗口：newTargetDur = round(sourceDurationUs / speed)，钳位（下限 MIN_SEGMENT_US、
+ *     右缘不越后一片段左缘）后**回写 sourceDurationUs = round(newTargetDur × speed)** 维持不变量
+ *     ——减速被空隙钳短时=尾部源内容暂不展示（sourceStartUs 不动，之后 trim 右缘可拉回）；
+ *   - 无 source 窗口（图片等）：targetDur 按 oldSpeed/newSpeed 等比缩放（round），
+ *     同样 MIN 下限 + 右缘空隙钳位；
+ *   - keyframes 不动：t 相对 target 起点，超出新时长的帧渲染时天然取端值（rtcKeyframes
+ *     「首尾之外取端值」语义），不做分账——变速回去帧还在，比删帧可逆。
+ */
+export function setSegmentSpeed(doc: RtcDoc, segId: string, speed: number): RtcDoc {
+	const found = findSeg(doc, segId);
+	if (!found) return doc;
+	const { track, seg, segIndex } = found;
+	if (seg.kind !== "media") return doc;
+	const cur = seg.speed ?? 1;
+	const v = Number.isFinite(speed) ? Math.min(5, Math.max(0.1, speed)) : cur;
+	if (v === cur) return doc;
+	const next = track.segments[segIndex + 1];
+	// 右缘上限：不越后一片段左缘（无 next 不限）；加速=时长变短本就不越界，只有减速会撞
+	const maxDur = next ? next.targetStartUs - seg.targetStartUs : Infinity;
+	const withSource = hasSourceWindow(seg);
+	const rawDur = withSource
+		? Math.round((seg.sourceDurationUs as number) / v)
+		: Math.round((seg.targetDurationUs * cur) / v);
+	const targetDurationUs = Math.max(MIN_SEGMENT_US, Math.min(rawDur, maxDur));
+	const patched: RtcSegment = {
+		...seg,
+		speed: v,
+		targetDurationUs,
+		// 钳位后回写 source 窗口时长维持不变量（未钳位时也回写——round 往返的 ±1µs 以不变量精确为准）
+		...(withSource ? { sourceDurationUs: Math.round(targetDurationUs * v) } : {}),
+	};
+	if (v === 1) delete patched.speed; // 默认值不落键
+	const segments = [...track.segments];
+	segments[segIndex] = patched;
+	return replaceTrack(doc, track.id, { ...track, segments });
+}
+
+/**
  * 在时间轴绝对位置 atUs 处把片段切成两段。
  * ⚠ 素材唯一性（定稿，勿回退）：**绝不产生新素材实体**——两段引用同一 assetId，
  * source 窗口相邻互补：前段 source=[s, s+off)，后段 source=[s+off, s+总长)（off=切点相对偏移×speed）。
