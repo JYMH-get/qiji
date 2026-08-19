@@ -40,3 +40,6 @@ qiji-server-deploy.tgz
 
 # 个人技能（含大体积宣传媒体，与项目无关不入库）
 .claude/skills/huashu-nuwa/
+
+# 内置深度模型 Depth Anything V2-Small（约 45MB，不入库；用 src-tauri/scripts/fetch-depth-model.ps1 重新拉取）
+public/depth-model/
