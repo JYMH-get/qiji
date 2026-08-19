@@ -1,6 +1,6 @@
 /**
  * RtcShotAiWorkbench —— 中栏「AI 工作台」页正文（中栏双页签改版：工作台/预览，见 rtcCenterTabCore）。
- * 绑定时间轴当前选中的「分镜占位符」（placeholder+shotRef，useRtcSelected），四栏样式按表格模式
+ * 绑定 useWorkbenchTarget（选中的分镜占位符优先，无选中回退播放头下主轨占位符——补充3），四栏样式按表格模式
  * 分镜行样板（用户定稿；第240轮补充2：**提示词列居左紧邻素材面板、参照列居右**——CSS order 互换）：
  *   - 右上：故事板预览（当前图点击放大 + 历史缩略条「设为当前」）；
  *   - 右下：原文对照（**逐行气泡渲染**：▲/（ 开头=动作行浅灰、「人名：台词」人名着色加粗——
@@ -37,7 +37,7 @@ import { mediaOf } from "@/lib/shotMaterials";
 import { useEffectiveModelKey, useCapModelOptions, useFamilyOrder } from "@/components/ModelPicker";
 import { modelFamilies, familyOf, modelForFamily, channelOf, sourceValueOf, modelForSource } from "@/services/adapters/localChannels";
 import type { StoryboardShot } from "@/services/projectFile";
-import { useRtcSelected } from "./useRtcSelected";
+import { useWorkbenchTarget } from "./useRtcSelected";
 import { RtcMaterialStrip } from "./RtcMaterialStrip";
 import { inferShotPrompts, genShotStoryboard, genShotVideo } from "./shotGenActions";
 import { matchShotAssets, type ShotPromptFieldKey } from "./shotMatchActions";
@@ -55,7 +55,7 @@ function WorkbenchHint() {
 		<div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
 			<div style={{ maxWidth: 460, fontSize: 12, color: "rgba(255,255,255,0.5)", lineHeight: 2 }}>
 				<div style={{ fontSize: 13, color: "rgba(255,255,255,0.8)", marginBottom: 6 }}>AI 工作台 · 未选中分镜占位符</div>
-				在下方时间轴{em("选中一个分镜占位符")}，这里就是它的生成工作台：
+				在下方时间轴{em("选中一个分镜占位符")}（或把{em("播放头移到占位符上")}），这里就是它的生成工作台：
 				<br />左侧{em("提示词编辑与垫图")}（紧邻素材面板），右侧{em("故事板预览 + 原文对照")}（原文右键进入编辑），
 				一站式 推理提示词 → 生成故事板 → 生成视频（成片自动替换占位符）。
 				<div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
@@ -416,11 +416,12 @@ function WorkbenchBody({ episodeId, shotId, segId }: { episodeId: string; shotId
 	);
 }
 
-/** 中栏「AI 工作台」页：绑定时间轴当前选中的分镜占位符；无则引导 */
+/** 中栏「AI 工作台」页：绑定 useWorkbenchTarget（选中占位符优先，无选中回退播放头下主轨占位符——
+ *  补充3「默认显示当前时间的 ai 界面」：播放头停在待生成片段上即直接绑定它，三栏常显不黑屏）；
+ *  两处都无目标（时间轴空/播放头在成片或空白上且无选中）才显示引导。 */
 export function RtcShotAiWorkbench() {
-	const sel = useRtcSelected();
-	const isShotPh = !!(sel && sel.seg.kind === "placeholder" && sel.seg.shotRef);
-	if (!isShotPh) return <WorkbenchHint />;
-	const ref = sel!.seg.shotRef!;
-	return <WorkbenchBody key={sel!.seg.id} episodeId={ref.episodeId} shotId={ref.shotId} segId={sel!.seg.id} />;
+	const target = useWorkbenchTarget();
+	const ref = target?.seg.shotRef;
+	if (!target || !ref) return <WorkbenchHint />;
+	return <WorkbenchBody key={target.seg.id} episodeId={ref.episodeId} shotId={ref.shotId} segId={target.seg.id} />;
 }

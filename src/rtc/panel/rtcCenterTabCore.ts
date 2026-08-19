@@ -9,20 +9,46 @@
  *     刻意不做合并签名——合并会把「取消其一露出另一」误判成新选中）→ 切「预览」；
  *  3) 选中片段 **placeholder→media（同 segId）**（生成成功占位符被原位替换，placeholderSwap 保 id；
  *     分镜占位与自由占位同规——判定只看 kind 变化，不看 shotRef）→ 切「预览」（成片即看）；
- *  4) 初始页签 = doc 已有任何可播片段（media/compound）? 「预览」:「AI 工作台」
+ *  4) 初始页签 = 播放头下主轨片段有结果?「预览」: 占位符?「AI 工作台」: 按 doc 是否有可播片段兜底
  *     （用户定「当没有结果时默认显示 AI 工作台」；会话级不持久化，见 rtcCenterTabStore）；
- *  5) 手动点页签永远生效，手动后仍接受后续自动信号（判定只看「新选中动作」，无手动锁）。
+ *  5) 手动点页签永远生效，手动后仍接受后续自动信号（判定只看「新选中动作」，无手动锁）；
+ *  6) **播放头跟随**（第240轮补充3 用户定稿「默认显示当前时间的 ai 界面：这个时间点有结果就显示
+ *     结果，没有结果就显示 AI 工作台」）：播放头下**主轨**片段变化（进入新片段 / 同片段占位→成片）
+ *     → 占位符=切「工作台」、media/compound=切「预览」；播放头在空白处（null）不动。
+ *     选择类信号（规则 1/2/3）与本规则同拍出现时以选择为准（先判）。
  */
+import type { RtcDoc, RtcSegment, RtcTrack } from "@/types/rtc";
 
 export type RtcCenterTab = "workbench" | "preview";
+
+/**
+ * 播放头下的主轨片段（主轨=第一条 video 轨，与 rtcScriptLane/占位入轨同定义；区间右开，
+ * 与字幕/原文车道同规）。无 doc/无主轨/落在空白处 = null。
+ */
+export function mainTrackSegAt(
+	doc: RtcDoc | null | undefined,
+	tUs: number,
+): { seg: RtcSegment; track: RtcTrack; segIndex: number } | null {
+	const track = doc?.tracks.find((t) => t.type === "video");
+	if (!track) return null;
+	for (let i = 0; i < track.segments.length; i++) {
+		const seg = track.segments[i];
+		if (tUs >= seg.targetStartUs && tUs < seg.targetStartUs + seg.targetDurationUs) {
+			return { seg, track, segIndex: i };
+		}
+	}
+	return null;
+}
 
 export const CENTER_TABS: readonly { id: RtcCenterTab; label: string }[] = [
 	{ id: "workbench", label: "AI 工作台" },
 	{ id: "preview", label: "预览" },
 ];
 
-/** 规则 4：初始页签（docHasPlayable = doc 是否已有任何 media/compound 片段——有可预览的内容才默认预览） */
-export function initialCenterTab(docHasPlayable: boolean): RtcCenterTab {
+/** 规则 4：初始页签——优先按播放头下主轨片段（占位=工作台/有结果=预览，补充3）；
+ *  空白处按 docHasPlayable 兜底（doc 是否已有任何 media/compound 片段）。 */
+export function initialCenterTab(docHasPlayable: boolean, phSegKind?: string | null): RtcCenterTab {
+	if (phSegKind) return phSegKind === "placeholder" ? "workbench" : "preview";
 	return docHasPlayable ? "preview" : "workbench";
 }
 
@@ -35,6 +61,10 @@ export interface CenterSelSnapshot {
 	assetKey: string | null;
 	/** 左栏媒体卡选中键（素材页 视频/音频/图片 卡；无=null） */
 	mediaKey: string | null;
+	/** 播放头下主轨片段 id（空白处/无主轨=null；规则 6 播放头跟随用，补充3） */
+	phSegId: string | null;
+	/** 播放头下主轨片段 kind（无=null） */
+	phSegKind: string | null;
 }
 
 /**
@@ -55,6 +85,11 @@ export function centerTabAutoSwitch(prev: CenterSelSnapshot, next: CenterSelSnap
 		(next.mediaKey !== null && next.mediaKey !== prev.mediaKey)
 	) {
 		return "preview";
+	}
+	// 规则 6（补充3）：播放头跟随——播放头下主轨片段变化（进入新片段/同片段占位→成片）：
+	// 占位符（这个时间点没有结果）→ 工作台；media/compound（有结果）→ 预览；空白处不动。
+	if (next.phSegId !== null && (next.phSegId !== prev.phSegId || next.phSegKind !== prev.phSegKind)) {
+		return next.phSegKind === "placeholder" ? "workbench" : "preview";
 	}
 	return null;
 }

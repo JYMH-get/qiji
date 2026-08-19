@@ -6,6 +6,7 @@
 import { useMemo } from "react";
 import { activeRtcDoc, useRtcStore } from "@/store/rtcStore";
 import { useProjectStore } from "@/store/projectStore";
+import { mainTrackSegAt } from "./rtcCenterTabCore";
 import type { RtcSegment, RtcTrack } from "@/types/rtc";
 import type { StoryboardShot, VideoEpisode } from "@/services/projectFile";
 
@@ -30,6 +31,30 @@ export function useRtcSelected(): RtcSelected | null {
 		}
 		return null;
 	}, [doc, selection]);
+}
+
+/**
+ * 中栏「AI 工作台」的绑定目标（第240轮补充3 用户定稿「默认显示当前时间的 ai 界面」）：
+ * 显式选中的占位符片段优先；无选中（或选中的不是占位符）→ 回退**播放头下主轨的占位符**——
+ * 播放头停在待生成片段上时工作台直接绑定它（三栏常显，不再出现「未选中」引导黑屏）。
+ * ⚠ 播放头选择器只返回 doc 里的稳定 seg 引用（帧级 playheadUs 变化下结果不变=不重渲染）。
+ */
+export function useWorkbenchTarget(): RtcSelected | null {
+	const sel = useRtcSelected();
+	const doc = useRtcStore(activeRtcDoc);
+	const phSeg = useRtcStore((s) => {
+		const m = mainTrackSegAt(activeRtcDoc(s), s.playheadUs);
+		return m && m.seg.kind === "placeholder" ? m.seg : null;
+	});
+	return useMemo(() => {
+		if (sel && sel.seg.kind === "placeholder") return sel;
+		if (!doc || !phSeg) return null;
+		for (const track of doc.tracks) {
+			const segIndex = track.segments.findIndex((s) => s.id === phSeg.id);
+			if (segIndex >= 0) return { seg: track.segments[segIndex], track, segIndex };
+		}
+		return null;
+	}, [sel, doc, phSeg]);
 }
 
 /** 占位符片段 shotRef → 关联的分集/分镜（实时订阅 projectStore；分镜被删=shot undefined） */

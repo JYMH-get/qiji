@@ -4,12 +4,14 @@
  * 与分集切换器并排挂载，本文件只按 rtcCenterTabStore 渲染对应页正文，不再自渲染页签行）：
  *   - 「预览」页 = 原单一预览视口：底层时间指针预览（RtcSequencePlayer）+ 左栏素材选中时的
  *     素材预览叠层（AssetPreviewLayer，五类资产带右缘「生成历史」缩略条）；
- *   - 「AI 工作台」页 = 不透明叠层覆盖视口：选中**分镜占位符**（placeholder+shotRef）或无选中
- *     → RtcShotAiWorkbench（其内部自己处理 shot/引导）；选中**自由结果占位**（placeholder 无
- *     shotRef，第240轮）→ RtcFreeGenWorkbench（提示词/垫素材编辑，右栏只留 AI 设置）；
+ *   - 「AI 工作台」页 = 不透明叠层覆盖视口：绑定 useWorkbenchTarget（**选中占位符优先、
+ *     无选中回退播放头下主轨占位符**——补充3 用户定稿「默认显示当前时间的 ai 界面…不要黑屏」）：
+ *     分镜占位（shotRef）→ RtcShotAiWorkbench；自由结果占位（无 shotRef）→ RtcFreeGenWorkbench
+ *     （提示词/垫素材编辑，右栏只留 AI 设置）；两处都无目标才显示引导；
  *   - 页签自动切换（rtcCenterTabCore 纯函数，配单测）：新选中任何占位符→工作台；新选中左栏
- *     素材/资产预览→预览；占位符被成片替换（同 segId placeholder→media）→预览；初始页签=
- *     doc 有可播片段? 预览:工作台；手动点页签永远生效。
+ *     素材/资产预览→预览；占位符被成片替换（同 segId placeholder→media）→预览；**播放头进入
+ *     新片段（或所在占位被成片替换）→ 占位=工作台/有结果=预览（补充3 播放头跟随）**；初始页签=
+ *     播放头处片段定，空白按 doc 有无可播片段兜底；手动点页签永远生效。
  *
  * ⚠ 播放不中断（勿回退）：RtcSequencePlayer 常驻挂载在视口列里，「AI 工作台」与素材预览的显隐
  * 都是**叠层覆盖/条件渲染叠层**（绝不条件卸载播放器）——切页签/切素材选中不打断播放。
@@ -17,20 +19,21 @@
 import { useEffect, useRef, useState } from "react";
 import { Music } from "lucide-react";
 import { useProjectStore } from "@/store/projectStore";
-import { useRtcStore } from "@/store/rtcStore";
+import { activeRtcDoc, useRtcStore } from "@/store/rtcStore";
 import { useAssetFormStore } from "@/store/assetFormStore";
 import { openLightbox } from "@/store/lightboxStore";
 import { RtcSequencePlayer } from "./RtcSequencePlayer";
 import { docHasAnySegment } from "./rtcPlayback";
 import { useRtcAssetSelStore } from "./rtcAssetSelStore";
 import { collectProjectImageItems } from "./asset/rtcAssetData";
-import { useRtcSelected } from "./panel/useRtcSelected";
+import { useRtcSelected, useWorkbenchTarget } from "./panel/useRtcSelected";
 import { RtcShotAiWorkbench } from "./panel/RtcShotAiWorkbench";
 import { RtcFreeGenWorkbench } from "./panel/RtcFreeGenWorkbench";
 import {
 	type CenterSelSnapshot,
 	centerTabAutoSwitch,
 	initialCenterTab,
+	mainTrackSegAt,
 } from "./panel/rtcCenterTabCore";
 import { useRtcCenterTabStore } from "./panel/rtcCenterTabStore";
 
@@ -174,30 +177,35 @@ function useCenterTabAutoSwitch() {
 	const sel = useRtcSelected();
 	const assetSel = useRtcAssetSelStore((s) => s.selected);
 	const mediaSel = useRtcAssetSelStore((s) => s.mediaSel);
+	// 规则 6（补充3 播放头跟随）：播放头下主轨片段的 id/kind——标量选择器，
+	// 帧级 playheadUs 变化下结果不变=不重渲染；进入新片段/占位被成片替换才触发。
+	const phSegId = useRtcStore((s) => mainTrackSegAt(activeRtcDoc(s), s.playheadUs)?.seg.id ?? null);
+	const phSegKind = useRtcStore((s) => mainTrackSegAt(activeRtcDoc(s), s.playheadUs)?.seg.kind ?? null);
 	const segId = sel?.seg.id ?? null;
 	const segKind = sel?.seg.kind ?? null;
 	const assetKey = assetSel ? `${assetSel.cat}:${assetSel.id}` : null;
 	const mediaKey = mediaSel?.key ?? null;
-	const snapRef = useRef<CenterSelSnapshot>({ segId, segKind, assetKey, mediaKey });
+	const snapRef = useRef<CenterSelSnapshot>({ segId, segKind, assetKey, mediaKey, phSegId, phSegKind });
 	useEffect(() => {
 		const prev = snapRef.current;
-		const next: CenterSelSnapshot = { segId, segKind, assetKey, mediaKey };
+		const next: CenterSelSnapshot = { segId, segKind, assetKey, mediaKey, phSegId, phSegKind };
 		snapRef.current = next;
 		const to = centerTabAutoSwitch(prev, next);
 		if (to) useRtcCenterTabStore.getState().setTab(to);
-	}, [segId, segKind, assetKey, mediaKey]);
+	}, [segId, segKind, assetKey, mediaKey, phSegId, phSegKind]);
 }
 
 /**
- * 「AI 工作台」页正文分派（第240轮）：选中片段是 placeholder 且**无 shotRef**（时间轴空白右键
- * 新建的自由结果占位）→ RtcFreeGenWorkbench；其余（分镜占位/无选中/普通片段）→ RtcShotAiWorkbench
- * （其内部自己处理 shot 绑定与引导，勿在这里重复它的判定）。key=segId：换选中即重置本地编辑态。
+ * 「AI 工作台」页正文分派（第240轮；补充3 改绑 useWorkbenchTarget=选中占位符优先、
+ * 无选中回退**播放头下主轨占位符**——播放头停在待生成片段上时工作台直接绑定它，不再黑屏引导）：
+ * 目标是 placeholder 且**无 shotRef**（时间轴空白右键新建的自由结果占位）→ RtcFreeGenWorkbench；
+ * 其余（分镜占位/无目标）→ RtcShotAiWorkbench（其内部同一 useWorkbenchTarget 解析 shot 绑定与引导）。
+ * key=segId：换目标即重置本地编辑态。
  */
 function WorkbenchBody() {
-	const sel = useRtcSelected();
-	const isFreePlaceholder = !!(sel && sel.seg.kind === "placeholder" && !sel.seg.shotRef);
-	if (isFreePlaceholder) {
-		return <RtcFreeGenWorkbench key={sel!.seg.id} seg={sel!.seg} track={sel!.track} segIndex={sel!.segIndex} />;
+	const target = useWorkbenchTarget();
+	if (target && !target.seg.shotRef) {
+		return <RtcFreeGenWorkbench key={target.seg.id} seg={target.seg} track={target.track} segIndex={target.segIndex} />;
 	}
 	return <RtcShotAiWorkbench />;
 }
@@ -205,11 +213,14 @@ function WorkbenchBody() {
 export function RtcCenterStage() {
 	const tab = useRtcCenterTabStore((s) => s.tab);
 	useCenterTabAutoSwitch();
-	// 初始页签（规则 4，会话首次挂载定一次）：doc 已有可播片段（media/compound）=预览，否则=AI 工作台
+	// 初始页签（规则 4，会话首次挂载定一次；补充3：优先按播放头下主轨片段——占位=工作台/有结果=预览，
+	// 空白处按 doc 是否已有可播片段兜底）
 	useEffect(() => {
-		const doc = useRtcStore.getState().doc;
+		const st = useRtcStore.getState();
+		const doc = st.doc;
 		const hasPlayable = !!doc && doc.tracks.some((t) => t.segments.some((sg) => sg.kind !== "placeholder"));
-		useRtcCenterTabStore.getState().initTab(initialCenterTab(hasPlayable));
+		const ph = mainTrackSegAt(doc, st.playheadUs);
+		useRtcCenterTabStore.getState().initTab(initialCenterTab(hasPlayable, ph?.seg.kind ?? null));
 	}, []);
 
 	return (
