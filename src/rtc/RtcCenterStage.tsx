@@ -1,12 +1,15 @@
 /**
- * 实时剪辑 · 中央区（双页签改版定稿：**顶部「AI 工作台 / 预览」双模式切换**）：
+ * 实时剪辑 · 中央区（双页签「AI 工作台 / 预览」；第240轮：页签行收进中栏标题栏——
+ * 切换控件是 [RtcCenterTabSwitch](./panel/RtcCenterTabSwitch.tsx)，经 FrameEditor 的 headerExtra
+ * 与分集切换器并排挂载，本文件只按 rtcCenterTabStore 渲染对应页正文，不再自渲染页签行）：
  *   - 「预览」页 = 原单一预览视口：底层时间指针预览（RtcSequencePlayer）+ 左栏素材选中时的
  *     素材预览叠层（AssetPreviewLayer，五类资产带右缘「生成历史」缩略条）；
- *   - 「AI 工作台」页 = 不透明叠层覆盖视口（RtcShotAiWorkbench）：绑定时间轴选中的分镜占位符，
- *     三栏布局（故事板预览 / 原文对照·右键编辑 / 提示词工作区+垫图+生成动作）；
- *   - 页签自动切换（rtcCenterTabCore 纯函数，配单测）：新选中占位符→工作台；新选中左栏素材/资产
- *     预览→预览；占位符被成片替换（同 segId placeholder→media）→预览；初始页签=doc 有可播片段?
- *     预览:工作台；手动点页签永远生效。
+ *   - 「AI 工作台」页 = 不透明叠层覆盖视口：选中**分镜占位符**（placeholder+shotRef）或无选中
+ *     → RtcShotAiWorkbench（其内部自己处理 shot/引导）；选中**自由结果占位**（placeholder 无
+ *     shotRef，第240轮）→ RtcFreeGenWorkbench（提示词/垫素材编辑，右栏只留 AI 设置）；
+ *   - 页签自动切换（rtcCenterTabCore 纯函数，配单测）：新选中任何占位符→工作台；新选中左栏
+ *     素材/资产预览→预览；占位符被成片替换（同 segId placeholder→media）→预览；初始页签=
+ *     doc 有可播片段? 预览:工作台；手动点页签永远生效。
  *
  * ⚠ 播放不中断（勿回退）：RtcSequencePlayer 常驻挂载在视口列里，「AI 工作台」与素材预览的显隐
  * 都是**叠层覆盖/条件渲染叠层**（绝不条件卸载播放器）——切页签/切素材选中不打断播放。
@@ -23,8 +26,8 @@ import { useRtcAssetSelStore } from "./rtcAssetSelStore";
 import { collectProjectImageItems } from "./asset/rtcAssetData";
 import { useRtcSelected } from "./panel/useRtcSelected";
 import { RtcShotAiWorkbench } from "./panel/RtcShotAiWorkbench";
+import { RtcFreeGenWorkbench } from "./panel/RtcFreeGenWorkbench";
 import {
-	CENTER_TABS,
 	type CenterSelSnapshot,
 	centerTabAutoSwitch,
 	initialCenterTab,
@@ -173,17 +176,30 @@ function useCenterTabAutoSwitch() {
 	const mediaSel = useRtcAssetSelStore((s) => s.mediaSel);
 	const segId = sel?.seg.id ?? null;
 	const segKind = sel?.seg.kind ?? null;
-	const isShotPlaceholder = !!(sel && sel.seg.kind === "placeholder" && sel.seg.shotRef);
 	const assetKey = assetSel ? `${assetSel.cat}:${assetSel.id}` : null;
 	const mediaKey = mediaSel?.key ?? null;
-	const snapRef = useRef<CenterSelSnapshot>({ segId, segKind, isShotPlaceholder, assetKey, mediaKey });
+	const snapRef = useRef<CenterSelSnapshot>({ segId, segKind, assetKey, mediaKey });
 	useEffect(() => {
 		const prev = snapRef.current;
-		const next: CenterSelSnapshot = { segId, segKind, isShotPlaceholder, assetKey, mediaKey };
+		const next: CenterSelSnapshot = { segId, segKind, assetKey, mediaKey };
 		snapRef.current = next;
 		const to = centerTabAutoSwitch(prev, next);
 		if (to) useRtcCenterTabStore.getState().setTab(to);
-	}, [segId, segKind, isShotPlaceholder, assetKey, mediaKey]);
+	}, [segId, segKind, assetKey, mediaKey]);
+}
+
+/**
+ * 「AI 工作台」页正文分派（第240轮）：选中片段是 placeholder 且**无 shotRef**（时间轴空白右键
+ * 新建的自由结果占位）→ RtcFreeGenWorkbench；其余（分镜占位/无选中/普通片段）→ RtcShotAiWorkbench
+ * （其内部自己处理 shot 绑定与引导，勿在这里重复它的判定）。key=segId：换选中即重置本地编辑态。
+ */
+function WorkbenchBody() {
+	const sel = useRtcSelected();
+	const isFreePlaceholder = !!(sel && sel.seg.kind === "placeholder" && !sel.seg.shotRef);
+	if (isFreePlaceholder) {
+		return <RtcFreeGenWorkbench key={sel!.seg.id} seg={sel!.seg} track={sel!.track} segIndex={sel!.segIndex} />;
+	}
+	return <RtcShotAiWorkbench />;
 }
 
 export function RtcCenterStage() {
@@ -198,26 +214,7 @@ export function RtcCenterStage() {
 
 	return (
 		<main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
-			{/* ── 顶部双页签（观感对齐 RtcPropertyPanel 三页签 nav） ── */}
-			<nav className="h-8 shrink-0 flex items-stretch border-b border-white/8 select-none">
-				{CENTER_TABS.map((t) => {
-					const active = t.id === tab;
-					return (
-						<button
-							key={t.id}
-							type="button"
-							onClick={() => useRtcCenterTabStore.getState().setTab(t.id)}
-							className={`flex-1 text-[12px] transition-colors border-b-2 ${
-								active
-									? "border-[#a78bfa] text-white bg-white/5"
-									: "border-transparent text-white/50 hover:text-white/85 hover:bg-white/5"
-							}`}
-						>
-							{t.label}
-						</button>
-					);
-				})}
-			</nav>
+			{/* 页签行已收进中栏标题栏（RtcCenterTabSwitch 经 FrameEditor headerExtra 挂载，第240轮） */}
 			{/* ── 视口：底层=顺序播放器（⚠ 常驻挂载勿条件卸载），预览页素材叠层 / 工作台页不透明叠层 ── */}
 			<div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden" style={{ position: "relative" }}>
 				<SequencePreviewSlot />
@@ -225,7 +222,7 @@ export function RtcCenterStage() {
 				{tab === "preview" && <AssetPreviewLayer />}
 				{tab === "workbench" && (
 					<div style={{ position: "absolute", inset: 0, zIndex: 7, background: "#101018", display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
-						<RtcShotAiWorkbench />
+						<WorkbenchBody />
 					</div>
 				)}
 			</div>

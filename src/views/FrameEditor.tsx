@@ -12,6 +12,7 @@
 import { useState } from "react";
 import { RtcAssetPanel } from "@/rtc/RtcAssetPanel";
 import { RtcEpisodeSwitcher } from "@/rtc/RtcEpisodeSwitcher";
+import { RtcCenterTabSwitch } from "@/rtc/panel/RtcCenterTabSwitch";
 import { RtcCenterStage } from "@/rtc/RtcCenterStage";
 import { RtcPropertyPanel } from "@/rtc/RtcPropertyPanel";
 import { RtcToolbar } from "@/rtc/RtcToolbar";
@@ -69,7 +70,14 @@ const FrameEditor = () => {
 					flex
 					onSwap={onSwap}
 					onResetLayout={() => useRtcLayoutStore.getState().resetLayout()}
-					headerExtra={<RtcEpisodeSwitcher />}
+					headerExtra={
+						/* 分集切换器 + 「AI 工作台/预览」页签并排（第240轮页签收进标题栏；两组件内部
+						   自带 draggable=false + mousedown 不冒泡，不影响标题栏拖拽换位） */
+						<>
+							<RtcEpisodeSwitcher />
+							<RtcCenterTabSwitch />
+						</>
+					}
 				>
 					<RtcCenterStage />
 				</RtcPanelFrame>

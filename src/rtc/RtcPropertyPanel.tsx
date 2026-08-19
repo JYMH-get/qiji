@@ -7,7 +7,8 @@
  *       placeholder + shotRef → RtcShotWorkbench（中栏双页签改版后收敛为「AI 生成属性」：
  *         生图/生视频要求+同源开关；提示词/垫图/生成动作在中栏「AI 工作台」页 RtcShotAiWorkbench）；
  *       media → RtcMediaProps（名称/轨道/时间码只读 + speed/volume/muted 编辑 + 素材源）；
- *       无 shotRef 的自由结果占位 → RtcFreeGenProps（提示词/垫素材/模型/生成·进度·重试）；
+ *       无 shotRef 的自由结果占位 → RtcFreeGenProps（第240轮收敛为 AI 设置：时间码/模型/生成·进度·重试；
+ *         提示词/垫素材在中栏「AI 工作台」页 RtcFreeGenWorkbench 编辑）；
  *     其次 rtcAssetSelStore（左栏选中的项目资产）→ RtcAssetProps（出图不切回资产模式）；
  *     两边都空 → 引导提示（含原「开始剪辑」四步说明）。
  *   - 剧本：四步工作台 ①剧本编辑 + ②剧集拆分 + ③资产拆分（RtcFlowScriptPage）。
@@ -93,7 +94,8 @@ function PropsPage({ sel, assetSel }: { sel: RtcSelected | null; assetSel: RtcAs
 		);
 	}
 	// 无 shotRef 的「自由结果占位」（时间轴空白右键新建 / 超分·去字幕的结果坑位）：
-	// 自带提示词 + 垫素材 + 模型 + 生成/进度/重试（生成走 runPurpose 唯一路径，见 freeGenActions）
+	// AI 设置视图（时间码/模型/生成·进度·重试，生成走 runPurpose 唯一路径见 freeGenActions）；
+	// 提示词/垫素材在中栏「AI 工作台」页 RtcFreeGenWorkbench 编辑（第240轮）
 	return <RtcFreeGenProps key={sel.seg.id} seg={sel.seg} track={sel.track} segIndex={sel.segIndex} />;
 }
 

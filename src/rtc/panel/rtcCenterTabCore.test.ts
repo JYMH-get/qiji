@@ -6,11 +6,10 @@ import {
 	initialCenterTab,
 } from "./rtcCenterTabCore";
 
-/** 快照工厂：缺省全空；isShotPlaceholder 缺省按 segKind==="placeholder" 推（测试便利） */
+/** 快照工厂：缺省全空 */
 const snap = (p: Partial<CenterSelSnapshot> = {}): CenterSelSnapshot => ({
 	segId: null,
 	segKind: null,
-	isShotPlaceholder: p.segKind === "placeholder",
 	assetKey: null,
 	mediaKey: null,
 	...p,
@@ -37,14 +36,31 @@ describe("rtcCenterTabCore", () => {
 		).toBe("workbench");
 	});
 
-	it("规则 1 边界：同一选中不重复切；取消选中不切；无 shotRef 的占位/普通片段不切", () => {
+	it("规则 1 边界：同一选中不重复切；取消选中不切；普通片段不切", () => {
 		const a = snap({ segId: "a", segKind: "placeholder" });
 		expect(centerTabAutoSwitch(a, a)).toBeNull();
 		expect(centerTabAutoSwitch(a, snap())).toBeNull();
-		// 自由结果占位（无 shotRef）：isShotPlaceholder=false，不进工作台
-		expect(centerTabAutoSwitch(snap(), snap({ segId: "f", segKind: "placeholder", isShotPlaceholder: false }))).toBeNull();
 		// 新选中 media 片段：既不是占位符也不是素材预览，不切
 		expect(centerTabAutoSwitch(snap(), snap({ segId: "m", segKind: "media" }))).toBeNull();
+	});
+
+	it("规则 1 扩展（第240轮）：自由结果占位（无 shotRef 的 placeholder）新选中同样进工作台，成片替换回预览", () => {
+		// 新选中自由占位 → 工作台（占位符一视同仁，不看 shotRef）
+		expect(centerTabAutoSwitch(snap(), snap({ segId: "f", segKind: "placeholder" }))).toBe("workbench");
+		// 分镜占位 → 自由占位（换选中）也是新选中占位符 → 工作台
+		expect(
+			centerTabAutoSwitch(
+				snap({ segId: "a", segKind: "placeholder" }),
+				snap({ segId: "f", segKind: "placeholder" }),
+			),
+		).toBe("workbench");
+		// 自由占位成片替换（同 segId placeholder→media，规则 3 覆盖）→ 预览
+		expect(
+			centerTabAutoSwitch(
+				snap({ segId: "f", segKind: "placeholder" }),
+				snap({ segId: "f", segKind: "media" }),
+			),
+		).toBe("preview");
 	});
 
 	it("规则 2：新选中左栏资产/媒体卡 → 预览（两通道各自比较）", () => {
