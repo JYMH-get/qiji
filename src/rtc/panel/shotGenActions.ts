@@ -23,8 +23,9 @@ import { SMART_INFER_SINGLE_TPL, SMART_INFER_UNIFIED_SINGLE_TPL } from "@/lib/sm
 import type { StoryboardShot } from "@/services/projectFile";
 import { armPlaceholderSwap } from "./placeholderSwap";
 
-// 图像「比例 × 分辨率」→ 出图 size（与 Frame161195 的 IMG_SIZE 同表——分镜行出图参数一把尺，勿改值）
-const IMG_SIZE: Record<string, Record<string, string>> = {
+// 图像「比例 × 分辨率」→ 出图 size（与 Frame161195 的 IMG_SIZE 同表——分镜行出图参数一把尺，勿改值；
+// 导出供右栏「AI 生成属性」视图取比例档位/size 提示，值域单一来源）
+export const IMG_SIZE: Record<string, Record<string, string>> = {
 	"16:9": { "1K": "1280x720", "2K": "2048x1152", "4K": "3840x2160" },
 	"9:16": { "1K": "720x1280", "2K": "1152x2048", "4K": "2160x3840" },
 	"1:1": { "1K": "1024x1024", "2K": "2048x2048", "4K": "4096x4096" },
