@@ -3,3 +3,4 @@ export { useCanvasViewport } from "./useCanvasViewport";
 export { useCanvasDrag, getGroupRelatedNodeIds } from "./useCanvasDrag";
 export { useCanvasConnect } from "./useCanvasConnect";
 export { useCanvasDrop } from "./useCanvasDrop";
+export { useCanvasPaste } from "./useCanvasPaste";

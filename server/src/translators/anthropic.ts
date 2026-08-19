@@ -11,7 +11,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { getSchema } from "../catalog.ts";
 import { maskToken } from "../store/logs.ts";
-import { buildPrompt } from "./prompt.ts";
+import { buildPrompt, collectImageUrls } from "./prompt.ts";
 import type { SyncResult, OnDelta, OnUpstream } from "./openai.ts";
 import type { Upstream } from "./upstream.ts";
 import type { GenerateRequest } from "../contract.ts";
@@ -35,6 +35,14 @@ export async function translateAnthropicText(req: GenerateRequest, up: Upstream,
 	const model = up.upstreamModel;
 	const prompt = buildPrompt(req);
 	const wantJson = req.output?.format === "json";
+	// 多模态：携带图片时用户消息内容用 [text + image(url)...] 块；无图则纯文本字符串
+	const imageUrls = collectImageUrls(req);
+	const userContent: Anthropic.MessageParam["content"] = imageUrls.length
+		? [
+				{ type: "text", text: prompt },
+				...imageUrls.map((u) => ({ type: "image" as const, source: { type: "url" as const, url: u } })),
+		  ]
+		: prompt;
 	onUpstream?.({ request: { baseUrl: up.baseUrl, method: "POST(SDK messages.stream)", headers: { Authorization: `Bearer ${maskToken(up.apiKey)}`, "anthropic-version": "(SDK 默认)" }, model, wantJson, schemaId: req.output?.schemaId, messages: [{ role: "user", content: prompt }] } });
 
 	try {
@@ -48,7 +56,7 @@ export async function translateAnthropicText(req: GenerateRequest, up: Upstream,
 			const stream = client.messages.stream({
 				model,
 				max_tokens: MAX_TOKENS,
-				messages: [{ role: "user", content: prompt }],
+				messages: [{ role: "user", content: userContent }],
 				tools: [
 					{
 						name: toolName,
@@ -72,7 +80,7 @@ export async function translateAnthropicText(req: GenerateRequest, up: Upstream,
 		const stream = client.messages.stream({
 			model,
 			max_tokens: MAX_TOKENS,
-			messages: [{ role: "user", content: prompt }],
+			messages: [{ role: "user", content: userContent }],
 		});
 		stream.on("text", (delta: string) => {
 			text += delta;

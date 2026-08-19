@@ -1,0 +1,23 @@
+# 构建服务端镜像时，构建上下文是仓库根目录。
+# 这里排除客户端的重型产物/依赖与一切密钥，避免传给 Docker 守护进程或打进镜像。
+
+# 客户端依赖与构建产物
+node_modules
+dist
+src-tauri/target
+src-tauri/gen
+
+# 服务端依赖/数据/密钥（数据走卷挂载，密钥走 env，绝不进镜像）
+server/node_modules
+server/data
+server/.env
+server/.env.*
+!server/.env.example
+
+# 杂项
+**/*.log
+.git
+.gitignore
+.vscode
+.idea
+docs

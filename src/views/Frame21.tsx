@@ -1,9 +1,11 @@
 import { useNavigate } from "react-router";
 import { useEffect, useState } from "react";
-import { useProjectStore } from "@/store/projectStore";
+import { Settings } from "lucide-react";
+import { useProjectStore, type RecentProject } from "@/store/projectStore";
 import { useSettingsStore } from "@/store/settingsStore";
 import { useUiStore } from "@/store/uiStore";
-import { withStopPropagation } from "@/utils/utils";
+import { withStopPropagation, restoreRouteAfterLoad } from "@/views/utils/utils";
+import { ProjectSettingsModal } from "@/components/ProjectSettingsModal";
 import "@/styles/Frame21.css";
 
 const Frame21 = () => {
@@ -13,13 +15,19 @@ const Frame21 = () => {
     const setTheme = useSettingsStore((s) => s.setTheme);
 
     const [searchQuery, setSearchQuery] = useState("");
+    // 项目设置弹窗（管理界面：改名/封面）当前编辑的项目
+    const [settingsProject, setSettingsProject] = useState<RecentProject | null>(null);
 
+    // 启动自动恢复项目后跳到上次停留的页面（快照）。订阅 store 字段而非一次性 window 标志：
+    // loadFromPath 异步完成可能晚于本组件挂载，响应式订阅能保证晚到的恢复也会触发跳转。
+    const loadedOnStartup = useProjectStore((s) => s.loadedOnStartup);
     useEffect(() => {
-        if ((window as any).__loaded_on_startup) {
-            (window as any).__loaded_on_startup = false;
-            navigate("/frame1693");
+        if (loadedOnStartup) {
+            useProjectStore.setState({ loadedOnStartup: false });
+            // 恢复到上次停留的页面（快照），无快照则默认剧本页
+            navigate(restoreRouteAfterLoad());
         }
-    }, [navigate]);
+    }, [loadedOnStartup, navigate]);
 
     const toggleTheme = () => {
         const newTheme = theme === "dark" ? "light" : "dark";
@@ -34,8 +42,15 @@ const Frame21 = () => {
     const handleEnterProject = async (path: string) => {
         const success = await useProjectStore.getState().loadFromPath(path);
         if (success) {
-            navigate("/frame1693");
+            // 进入项目后跳到该项目上次停留的页面（快照）
+            navigate(restoreRouteAfterLoad());
         }
+    };
+
+    // 导入已有项目（.Qiji）：新建项目并复制素材（源项目不动），成功即进入新项目
+    const handleImportProject = async () => {
+        const ok = await useProjectStore.getState().importProject();
+        if (ok) navigate(restoreRouteAfterLoad());
     };
 
     const handleRemoveRecent = (e: React.MouseEvent, path: string) => {
@@ -104,8 +119,14 @@ const Frame21 = () => {
                                     </div>
                                 </div>
                             </div>
-                            {/* User details */}
-                            <div id="2_20" className="Pixso-frame-2_20">
+                            {/* User details → 个人中心（积分/兑换/请求记录/授权） */}
+                            <div
+                                id="2_20"
+                                className="Pixso-frame-2_20 hover:bg-black/10 dark:hover:bg-white/10"
+                                onClick={() => useUiStore.getState().setPersonalCenterOpen(true)}
+                                style={{ cursor: "pointer" }}
+                                title="个人中心"
+                            >
                                 <div className="frame-content-2_20">
                                     <div id="2_21" className="Pixso-vector-2_21"></div>
                                 </div>
@@ -198,8 +219,8 @@ const Frame21 = () => {
                         {/* Project Cards Grid */}
                         <div id="2_56" className="Pixso-frame-2_56">
                             <div className="frame-content-2_56" style={{ display: "flex", flexWrap: "wrap", gap: "20px", height: "auto", overflow: "visible" }}>
-                                {/* Static "Create Project" Card */}
-                                <div id="2_57" className="stroke-wrapper-2_57">
+                                {/* Static "Create Project" Card（高度放开：底部多一行「导入已有项目」） */}
+                                <div id="2_57" className="stroke-wrapper-2_57" style={{ height: "auto", minHeight: 340 }}>
                                     <div className="Pixso-frame-2_57">
                                         <div className="frame-content-2_57">
                                             <div id="2_58" className="stroke-wrapper-2_58">
@@ -234,6 +255,22 @@ const Frame21 = () => {
                                                 </div>
                                                 <div className="stroke-2_64"></div>
                                             </div>
+                                            {/* 导入已有项目：新建项目并复制素材导入（源项目不动） */}
+                                            <div className="stroke-wrapper-2_64">
+                                                <div
+                                                    className="Pixso-frame-2_64"
+                                                    onClick={withStopPropagation(handleImportProject)}
+                                                    style={{ cursor: "pointer" }}
+                                                    title="选择 .Qiji 项目文件，复制为一个全新项目导入（不影响原项目）"
+                                                >
+                                                    <div className="frame-content-2_64">
+                                                        <p className="Pixso-paragraph-2_65">
+                                                            {"导入已有项目 (.Qiji)"}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                                <div className="stroke-2_64" style={{ borderStyle: "dashed" }}></div>
+                                            </div>
                                         </div>
                                     </div>
                                     <div className="stroke-2_57"></div>
@@ -242,6 +279,20 @@ const Frame21 = () => {
                                 {/* Dynamic Recent Projects Cards */}
                                 {filteredProjects.map((proj) => (
                                     <div key={proj.path} id="2_125" className="stroke-wrapper-2_125" style={{ position: "relative" }}>
+                                        {/* 项目设置（管理界面：改名/封面）——覆盖在卡片右上角，不触发进入项目 */}
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); setSettingsProject(proj); }}
+                                            title="项目设置（修改名称 / 封面）"
+                                            style={{
+                                                position: "absolute", top: 10, right: 10, zIndex: 5,
+                                                width: 30, height: 30, borderRadius: 8, border: "none",
+                                                background: "rgba(0,0,0,0.45)", color: "#fff", cursor: "pointer",
+                                                display: "flex", alignItems: "center", justifyContent: "center",
+                                                backdropFilter: "blur(2px)",
+                                            }}
+                                        >
+                                            <Settings size={15} />
+                                        </button>
                                         <div
                                             className="Pixso-frame-2_125"
                                             onClick={withStopPropagation(() => handleEnterProject(proj.path))}
@@ -336,6 +387,13 @@ const Frame21 = () => {
                     </div>
                 </div>
             </div>
+
+            {settingsProject && (
+                <ProjectSettingsModal
+                    project={settingsProject}
+                    onClose={() => setSettingsProject(null)}
+                />
+            )}
         </div>
     );
 };

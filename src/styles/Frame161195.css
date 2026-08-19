@@ -6021,3 +6021,72 @@ mix-blend-mode: normal;
   border-radius: 50%;
   object-fit: cover;
 }
+
+/* ── 提示词富文本编辑器（PromptMentionEditor）：@Image1 渲染为「@[缩略图]资产名」胶囊 ── */
+.qj-mention-editor:empty::before { content: ""; } /* 占位由组件 placeholder 层负责 */
+.qj-mention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px 1px 4px;
+  margin: 0 1px;
+  border-radius: 999px;
+  background: rgba(139, 92, 246, 0.16);
+  border: 1px solid rgba(139, 92, 246, 0.5);
+  color: #d6c9ff;
+  font-size: 11px;
+  line-height: 1.4;
+  vertical-align: middle;
+  white-space: nowrap;
+  user-select: none;
+  cursor: default;
+}
+.qj-mention-chip .qj-mention-at {
+  font-weight: 700;
+  opacity: 0.85;
+}
+.qj-mention-chip .qj-mention-thumb {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 700;
+  color: #fff;
+}
+.qj-mention-chip .qj-mention-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.qj-mention-chip .qj-mention-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* #4 推理后用户更改高亮：词级 diff 标出「确认更改」的部分用**纯黄色字体**（无底色、无描边），供检查。仍可继续编辑。 */
+.qj-mention-editor mark.qj-mention-diff {
+  background: transparent;
+  color: #fbbf24;
+  font-weight: 600;
+}
+/* 被改动的 @ 胶囊：只把胶囊文字（@ 与资产名）染黄，不再加描边/outline */
+.qj-mention-editor .qj-mention-chip.qj-mention-diff-chip,
+.qj-mention-editor .qj-mention-chip.qj-mention-diff-chip .qj-mention-name,
+.qj-mention-editor .qj-mention-chip.qj-mention-diff-chip .qj-mention-at {
+  color: #fbbf24;
+}
+
+/* 原文里「提取到的资产」高亮：HighlightEditable 真实文本着色的 <span>，纯绿色字体（无底纹、无描边、无加粗描边感）。 */
+.qj-orig-editor .qj-orig-hl,
+.qj-orig-hl { background: transparent; color: #4ade80; }
+
+/* 违规素材红色遮罩 ❗：鼠标悬停缩略图时淡出，方便用户辨认原素材（判断是哪一个）。 */
+.qj-mat-badmask { transition: opacity .12s ease; }
+.qj-mat-cell:hover .qj-mat-badmask { opacity: 0; }

@@ -1,0 +1,767 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.aiid.edu.kg/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# 创建视频（Seedance）
+
+> 该系列支持OpenAI视频生成格式（详见链接 [视频生成Sora兼容格式](/api-reference/cn/视频生成sora兼容格式/创建视频)）。
+
+用于创建视频生成任务，并通过任务 ID 查询状态与结果。
+
+创建任务核心字段：
+- `model`：必填，模型名称。
+- `prompt`：必填，视频生成主描述。
+- `content`：可选，火山方舟 content 数组，混排文本、图片、视频、音频素材。
+- `function_mode`：可选，常用于全能参考等高级模式。
+
+兼容入参：
+
+以下字段主要用于历史客户端和旧协议适配。新接入请尽量采用本页“请求示例”中的标准格式：文本与参考素材使用 `content` 数组，生成配置使用顶层 `duration`、`ratio`、`resolution`、`fps` 等字段。
+
+- `mode`：`t2v / i2v / i2v_first_last / reference_images / reference_material`
+- `image_url / image_urls / input_reference`
+- `end_image_url / last_image_url`
+- `video_urls / audio_urls`
+- `seconds / duration`
+- `aspect_ratio / ratio / size`
+- `quality / resolution`
+- `fps`
+- `generate_audio / watermark`
+
+调用细节：
+- 当 `mode=reference_material` 或 `function_mode=omni_reference` 时，建议通过 `content` 传递文本与参考素材。
+- `content` 文本项写法为 `{ "type": "text", "text": "测试文字" }`。
+- `content` 图片、视频、音频素材项分别使用 `image_url`、`video_url`、`audio_url` 对象写法，例如 `{ "type": "image_url", "image_url": { "url": "https://example.com/ref.png" }, "role": "reference_image", "name": "1" }`。
+- `role` 可标识素材用途，`name` 可供提示词中按名称引用。
+- `ratio`、`duration`、`resolution`、`fps` 会影响最终生成配置。
+
+Gemini Omni 调用：
+- `gemini-omni` 也可通过本 Seedance 任务接口调用。
+- `mode=t2v` 用于文生视频，`mode=r2v` 用于参考图/参考素材生成，`mode=edit` 用于视频编辑。
+- 文本可放在 `prompt` 或 `content` 的 `text` 项；图片可放在 `image_url / image_urls / reference_images / input_reference / content`；视频可放在 `video_urls / content`。
+- 时长字段可用 `duration` 或 `seconds`，会自动匹配到 4 / 6 / 8 / 10 秒档。
+
+查询结果关注字段：
+- `items[].status`
+- `items[].content.video_url` 或 `items[].video_url`
+- `items[].error`
+- `items[].progress`
+
+Error fields: `error.code`, `error.message`.
+
+```json
+{
+  "error": {
+    "code": "invalid_request_error",
+    "message": "requires at least one image in `images`"
+  }
+}
+```
+
+
+
+## OpenAPI
+
+````yaml api-reference/cn/openapi.json POST /api/v3/contents/generations/tasks
+openapi: 3.0.0
+info:
+  title: 出海营 API 参考文档
+  version: 1.0.0
+  description: Public AI Gateway API Reference
+servers:
+  - url: https://api.aiid.edu.kg
+security:
+  - BearerAuth: []
+tags:
+  - name: OpenAI格式(Chat)
+  - name: OpenAI格式(Responses)
+  - name: 图片生成Gemini格式
+  - name: 图片生成OpenAI DALL-E格式
+  - name: 获取模型列表
+  - name: 视频生成HappyHorse阿里
+  - name: 视频生成Kling格式
+  - name: 视频生成Omni与Veo格式
+  - name: 视频生成Seedance格式
+  - name: 视频生成Sora兼容格式
+  - name: 视频生成Vidu格式
+  - name: 音乐生成任务格式
+paths:
+  /api/v3/contents/generations/tasks:
+    post:
+      tags:
+        - 视频生成Seedance格式
+      summary: 创建视频（Seedance）
+      description: >-
+        该系列支持OpenAI视频生成格式（详见链接
+        [视频生成Sora兼容格式](/api-reference/cn/视频生成sora兼容格式/创建视频)）。
+
+
+        用于创建视频生成任务，并通过任务 ID 查询状态与结果。
+
+
+        创建任务核心字段：
+
+        - `model`：必填，模型名称。
+
+        - `prompt`：必填，视频生成主描述。
+
+        - `content`：可选，火山方舟 content 数组，混排文本、图片、视频、音频素材。
+
+        - `function_mode`：可选，常用于全能参考等高级模式。
+
+
+        兼容入参：
+
+
+        以下字段主要用于历史客户端和旧协议适配。新接入请尽量采用本页“请求示例”中的标准格式：文本与参考素材使用 `content`
+        数组，生成配置使用顶层 `duration`、`ratio`、`resolution`、`fps` 等字段。
+
+
+        - `mode`：`t2v / i2v / i2v_first_last / reference_images /
+        reference_material`
+
+        - `image_url / image_urls / input_reference`
+
+        - `end_image_url / last_image_url`
+
+        - `video_urls / audio_urls`
+
+        - `seconds / duration`
+
+        - `aspect_ratio / ratio / size`
+
+        - `quality / resolution`
+
+        - `fps`
+
+        - `generate_audio / watermark`
+
+
+        调用细节：
+
+        - 当 `mode=reference_material` 或 `function_mode=omni_reference` 时，建议通过
+        `content` 传递文本与参考素材。
+
+        - `content` 文本项写法为 `{ "type": "text", "text": "测试文字" }`。
+
+        - `content` 图片、视频、音频素材项分别使用 `image_url`、`video_url`、`audio_url` 对象写法，例如
+        `{ "type": "image_url", "image_url": { "url":
+        "https://example.com/ref.png" }, "role": "reference_image", "name": "1"
+        }`。
+
+        - `role` 可标识素材用途，`name` 可供提示词中按名称引用。
+
+        - `ratio`、`duration`、`resolution`、`fps` 会影响最终生成配置。
+
+
+        Gemini Omni 调用：
+
+        - `gemini-omni` 也可通过本 Seedance 任务接口调用。
+
+        - `mode=t2v` 用于文生视频，`mode=r2v` 用于参考图/参考素材生成，`mode=edit` 用于视频编辑。
+
+        - 文本可放在 `prompt` 或 `content` 的 `text` 项；图片可放在 `image_url / image_urls /
+        reference_images / input_reference / content`；视频可放在 `video_urls /
+        content`。
+
+        - 时长字段可用 `duration` 或 `seconds`，会自动匹配到 4 / 6 / 8 / 10 秒档。
+
+
+        查询结果关注字段：
+
+        - `items[].status`
+
+        - `items[].content.video_url` 或 `items[].video_url`
+
+        - `items[].error`
+
+        - `items[].progress`
+
+
+        Error fields: `error.code`, `error.message`.
+
+
+        ```json
+
+        {
+          "error": {
+            "code": "invalid_request_error",
+            "message": "requires at least one image in `images`"
+          }
+        }
+
+        ```
+      operationId: create__seedance__task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - model
+                - prompt
+              properties:
+                model:
+                  type: string
+                  example: doubao-seedance-2-0-260128
+                  description: 必填。模型名称。可传 Seedance 对外模型，也可传 `gemini-omni`。
+                  enum:
+                    - doubao-seedance-2-0-260128
+                    - doubao-seedance-2-0-fast-260128
+-doubao-seedance-2-0-260128-1080p
+-doubao-seedance-2-0-260128-4k
+-doubao-seedance-2-0-fast-260128-480p
+-doubao-seedance-2-0-mini-260615
+-sd-2-5
+-sd-2-5-480p
+                    - gemini-omni
+                prompt:
+                  type: string
+                  example: 参考素材生成一段剧情短视频
+                  description: 必填。视频生成主描述，不能为空。
+                content:
+                  type: array
+                  description: >-
+                    可选。火山方舟 content 数组，按顺序混排文本与素材项。文本项使用 `{ "type": "text",
+                    "text": "..." }`；图片、视频、音频项分别使用
+                    `image_url`、`video_url`、`audio_url` 对象并在其中放 `url`，可配合
+                    `role`（如
+                    `reference_image`、`reference_video`、`reference_audio`）和
+                    `name` 供文本引用。
+                  items:
+                    type: object
+                    required:
+                      - type
+                    properties:
+                      type:
+                        type: string
+                        enum:
+                          - text
+                          - image_url
+                          - video_url
+                          - audio_url
+                        description: 内容项类型。
+                      text:
+                        type: string
+                        description: 文本内容，仅 type=text 时使用。
+                      image_url:
+                        oneOf:
+                          - type: string
+                          - type: object
+                            properties:
+                              url:
+                                type: string
+                        description: 图片 URL，推荐对象写法：`{"url":"https://..."}`。
+                      video_url:
+                        oneOf:
+                          - type: string
+                          - type: object
+                            properties:
+                              url:
+                                type: string
+                        description: 视频 URL，推荐对象写法：`{"url":"https://..."}`。
+                      audio_url:
+                        oneOf:
+                          - type: string
+                          - type: object
+                            properties:
+                              url:
+                                type: string
+                        description: 音频 URL，推荐对象写法：`{"url":"https://..."}`。
+                      role:
+                        type: string
+                        description: >-
+                          素材用途标识，常见值如
+                          reference_image、reference_video、reference_audio。
+                      name:
+                        type: string
+                        description: 素材名称，可供文本提示词引用或区分多个素材。
+                function_mode:
+                  type: string
+                  description: 可选。高级功能模式，如 `omni_reference` 用于全能参考。
+                mode:
+                  type: string
+                  description: >-
+                    可选。兼容模式字段，如
+                    `t2v`、`i2v`、`i2v_first_last`、`reference_images`、`reference_material`；`gemini-omni`
+                    支持 `t2v`、`r2v`、`edit`。
+                image_url:
+                  type: string
+                  description: 可选。单张参考图 URL。
+                image_urls:
+                  type: array
+                  items:
+                    type: string
+                  description: 可选。多张参考图 URL 列表。
+                input_reference:
+                  type: string
+                  description: 可选。兼容参考输入字段。
+                end_image_url:
+                  type: string
+                  description: 可选。末帧参考图 URL。
+                last_image_url:
+                  type: string
+                  description: 可选。末帧参考图 URL 别名。
+                video_urls:
+                  type: array
+                  items:
+                    type: string
+                  description: 可选。参考视频 URL 列表。
+                audio_urls:
+                  type: array
+                  items:
+                    type: string
+                  description: 可选。参考音频 URL 列表。
+                seconds:
+                  oneOf:
+                    - type: number
+                    - type: string
+                  description: 可选。视频时长，秒；与 `duration` 兼容。
+                duration:
+                  oneOf:
+                    - type: number
+                    - type: string
+                  description: 可选。视频时长，秒；与 `seconds` 兼容。
+                aspect_ratio:
+                  type: string
+                  description: 可选。画幅比例，如 `16:9`。
+                ratio:
+                  type: string
+                  description: 可选。画幅比例别名，如 `16:9`。
+                size:
+                  type: string
+                  description: 可选。分辨率或尺寸兼容字段。
+                quality:
+                  type: string
+                  description: 可选。生成质量配置。
+                resolution:
+                  type: string
+                  description: 可选。输出分辨率。
+                fps:
+                  type: number
+                  description: 可选。帧率。
+                generate_audio:
+                  type: boolean
+                  description: 可选。是否生成音频。
+                watermark:
+                  type: boolean
+                  description: 可选。是否添加水印。
+            examples:
+              seedance_tasks_reference_material:
+                summary: Seedance content 任务
+                value:
+                  model: doubao-seedance-1-0-lite-i2v-250428
+                  mode: reference_material
+                  prompt: 测试文字
+                  content:
+                    - type: text
+                      text: 测试文字
+                    - type: image_url
+                      image_url:
+                        url: >-
+                          https://imageproxy.zhongzhuan.chat/api/proxy/image/9979f1a754b3571d5e8bdcc397eedf53.png
+                      role: reference_image
+                      name: '1'
+                    - type: video_url
+                      video_url:
+                        url: >-
+                          https://imageproxy.zhongzhuan.chat/api/proxy/video/1979f1a754b3571d5e8bdcc397eedf53.mp4
+                      role: reference_video
+                      name: '2'
+                    - type: audio_url
+                      audio_url:
+                        url: >-
+                          https://imageproxy.zhongzhuan.chat/api/proxy/video/3979f1a754b3571d5e8bdcc397eedf53.mp3
+                      role: reference_audio
+                      name: '3'
+                  duration: 5
+                  size: 1280x720
+              gemini_omni_seedance_t2v:
+                summary: Gemini Omni t2v
+                value:
+                  model: gemini-omni
+                  mode: t2v
+                  prompt: A cinematic product video with smooth camera motion
+                  duration: 8
+                  size: 1280x720
+              gemini_omni_seedance_r2v:
+                summary: Gemini Omni r2v
+                value:
+                  model: gemini-omni
+                  mode: r2v
+                  content:
+                    - type: text
+                      text: Keep the product consistent and create a short ad video
+                    - type: image_url
+                      image_url:
+                        url: https://example.com/product.jpg
+                  duration: 8
+                  size: 1280x720
+              gemini_omni_seedance_edit:
+                summary: Gemini Omni edit
+                value:
+                  model: gemini-omni
+                  mode: edit
+                  content:
+                    - type: text
+                      text: Change the outfit color while keeping the motion natural
+                    - type: video_url
+                      video_url:
+                        url: https://example.com/input.mp4
+                    - type: image_url
+                      image_url:
+                        url: https://example.com/style.jpg
+                  duration: 8
+                  size: 1280x720
+      responses:
+        '200':
+          description: 任务创建成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - id
+                properties:
+                  id:
+                    type: string
+                    example: task_xxx
+                    description: 任务 ID。
+                  status:
+                    type: string
+                    description: 任务状态。
+                    enum:
+                      - queued
+                      - running
+                      - succeeded
+                      - failed
+                  created_at:
+                    type: string
+                    description: 创建时间（Unix 秒）。
+                  items:
+                    type: string
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          description: 任务 ID。
+                        status:
+                          type: string
+                          description: 任务状态，常见为 `queued`、`running`、`succeeded`、`failed`。
+                        content:
+                          type: object
+                          properties:
+                            video_url:
+                              type: string
+                              description: 视频结果地址。
+                        video_url:
+                          type: string
+                          description: 视频结果地址。
+                        error:
+                          type: string
+                          description: 失败时的错误信息。
+                        progress:
+                          type: string
+                          description: 任务进度。
+      security:
+        - BearerAuth: []
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: |-
+        使用 Bearer Token 认证。
+        格式: `Authorization: Bearer sk-xxxxxx`
+
+````
+
+> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.aiid.edu.kg/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# 查询任务（Seedance）
+
+> 该系列支持OpenAI视频生成格式（详见链接 [视频生成Sora兼容格式](/api-reference/cn/视频生成sora兼容格式/创建视频)）。
+
+用于创建视频生成任务，并通过任务 ID 查询状态与结果。
+
+创建任务核心字段：
+- `model`：必填，模型名称。
+- `prompt`：必填，视频生成主描述。
+- `content`：可选，火山方舟 content 数组，混排文本、图片、视频、音频素材。
+- `function_mode`：可选，常用于全能参考等高级模式。
+
+兼容入参：
+
+以下字段主要用于历史客户端和旧协议适配。新接入请尽量采用本页“请求示例”中的标准格式：文本与参考素材使用 `content` 数组，生成配置使用顶层 `duration`、`ratio`、`resolution`、`fps` 等字段。
+
+- `mode`：`t2v / i2v / i2v_first_last / reference_images / reference_material`
+- `image_url / image_urls / input_reference`
+- `end_image_url / last_image_url`
+- `video_urls / audio_urls`
+- `seconds / duration`
+- `aspect_ratio / ratio / size`
+- `quality / resolution`
+- `fps`
+- `generate_audio / watermark`
+
+调用细节：
+- 当 `mode=reference_material` 或 `function_mode=omni_reference` 时，建议通过 `content` 传递文本与参考素材。
+- `content` 文本项写法为 `{ "type": "text", "text": "测试文字" }`。
+- `content` 图片、视频、音频素材项分别使用 `image_url`、`video_url`、`audio_url` 对象写法，例如 `{ "type": "image_url", "image_url": { "url": "https://example.com/ref.png" }, "role": "reference_image", "name": "1" }`。
+- `role` 可标识素材用途，`name` 可供提示词中按名称引用。
+- `ratio`、`duration`、`resolution`、`fps` 会影响最终生成配置。
+
+Gemini Omni 调用：
+- `gemini-omni` 也可通过本 Seedance 任务接口调用。
+- `mode=t2v` 用于文生视频，`mode=r2v` 用于参考图/参考素材生成，`mode=edit` 用于视频编辑。
+- 文本可放在 `prompt` 或 `content` 的 `text` 项；图片可放在 `image_url / image_urls / reference_images / input_reference / content`；视频可放在 `video_urls / content`。
+- 时长字段可用 `duration` 或 `seconds`，会自动匹配到 4 / 6 / 8 / 10 秒档。
+
+查询结果关注字段：
+- `items[].status`
+- `items[].content.video_url` 或 `items[].video_url`
+- `items[].error`
+- `items[].progress`
+
+Error fields: `error.code`, `error.message`.
+
+```json
+{
+  "error": {
+    "code": "invalid_request_error",
+    "message": "requires at least one image in `images`"
+  }
+}
+```
+
+
+
+## OpenAPI
+
+````yaml api-reference/cn/openapi.json GET /api/v3/contents/generations/tasks/{task_id}
+openapi: 3.0.0
+info:
+  title: 出海营 API 参考文档
+  version: 1.0.0
+  description: Public AI Gateway API Reference
+servers:
+  - url: https://api.aiid.edu.kg
+security:
+  - BearerAuth: []
+tags:
+  - name: OpenAI格式(Chat)
+  - name: OpenAI格式(Responses)
+  - name: 图片生成Gemini格式
+  - name: 图片生成OpenAI DALL-E格式
+  - name: 获取模型列表
+  - name: 视频生成HappyHorse阿里
+  - name: 视频生成Kling格式
+  - name: 视频生成Omni与Veo格式
+  - name: 视频生成Seedance格式
+  - name: 视频生成Sora兼容格式
+  - name: 视频生成Vidu格式
+  - name: 音乐生成任务格式
+paths:
+  /api/v3/contents/generations/tasks/{task_id}:
+    get:
+      tags:
+        - 视频生成Seedance格式
+      summary: 查询任务（Seedance）
+      description: >-
+        该系列支持OpenAI视频生成格式（详见链接
+        [视频生成Sora兼容格式](/api-reference/cn/视频生成sora兼容格式/创建视频)）。
+
+
+        用于创建视频生成任务，并通过任务 ID 查询状态与结果。
+
+
+        创建任务核心字段：
+
+        - `model`：必填，模型名称。
+
+        - `prompt`：必填，视频生成主描述。
+
+        - `content`：可选，火山方舟 content 数组，混排文本、图片、视频、音频素材。
+
+        - `function_mode`：可选，常用于全能参考等高级模式。
+
+
+        兼容入参：
+
+
+        以下字段主要用于历史客户端和旧协议适配。新接入请尽量采用本页“请求示例”中的标准格式：文本与参考素材使用 `content`
+        数组，生成配置使用顶层 `duration`、`ratio`、`resolution`、`fps` 等字段。
+
+
+        - `mode`：`t2v / i2v / i2v_first_last / reference_images /
+        reference_material`
+
+        - `image_url / image_urls / input_reference`
+
+        - `end_image_url / last_image_url`
+
+        - `video_urls / audio_urls`
+
+        - `seconds / duration`
+
+        - `aspect_ratio / ratio / size`
+
+        - `quality / resolution`
+
+        - `fps`
+
+        - `generate_audio / watermark`
+
+
+        调用细节：
+
+        - 当 `mode=reference_material` 或 `function_mode=omni_reference` 时，建议通过
+        `content` 传递文本与参考素材。
+
+        - `content` 文本项写法为 `{ "type": "text", "text": "测试文字" }`。
+
+        - `content` 图片、视频、音频素材项分别使用 `image_url`、`video_url`、`audio_url` 对象写法，例如
+        `{ "type": "image_url", "image_url": { "url":
+        "https://example.com/ref.png" }, "role": "reference_image", "name": "1"
+        }`。
+
+        - `role` 可标识素材用途，`name` 可供提示词中按名称引用。
+
+        - `ratio`、`duration`、`resolution`、`fps` 会影响最终生成配置。
+
+
+        Gemini Omni 调用：
+
+        - `gemini-omni` 也可通过本 Seedance 任务接口调用。
+
+        - `mode=t2v` 用于文生视频，`mode=r2v` 用于参考图/参考素材生成，`mode=edit` 用于视频编辑。
+
+        - 文本可放在 `prompt` 或 `content` 的 `text` 项；图片可放在 `image_url / image_urls /
+        reference_images / input_reference / content`；视频可放在 `video_urls /
+        content`。
+
+        - 时长字段可用 `duration` 或 `seconds`，会自动匹配到 4 / 6 / 8 / 10 秒档。
+
+
+        查询结果关注字段：
+
+        - `items[].status`
+
+        - `items[].content.video_url` 或 `items[].video_url`
+
+        - `items[].error`
+
+        - `items[].progress`
+
+
+        Error fields: `error.code`, `error.message`.
+
+
+        ```json
+
+        {
+          "error": {
+            "code": "invalid_request_error",
+            "message": "requires at least one image in `images`"
+          }
+        }
+
+        ```
+      operationId: query__seedance__task
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Task ID
+      responses:
+        '200':
+          description: 查询成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    description: 任务 ID。
+                  model:
+                    type: string
+                  status:
+                    type: string
+                    description: 任务状态。
+                    enum:
+                      - queued
+                      - running
+                      - succeeded
+                      - failed
+                  error:
+                    type: object
+                    nullable: true
+                    properties:
+                      code:
+                        type: string
+                      message:
+                        type: string
+                  created_at:
+                    type: integer
+                    description: 创建时间（Unix 秒）。
+                  updated_at:
+                    type: integer
+                  content:
+                    type: object
+                    properties:
+                      video_url:
+                        type: string
+                      last_frame_url:
+                        type: string
+                  usage:
+                    type: object
+                    properties:
+                      completion_tokens:
+                        type: integer
+                      total_tokens:
+                        type: integer
+                  items:
+                    type: string
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          description: 任务 ID。
+                        status:
+                          type: string
+                          description: 任务状态，常见为 `queued`、`running`、`succeeded`、`failed`。
+                        content:
+                          type: object
+                          properties:
+                            video_url:
+                              type: string
+                              description: 视频结果地址。
+                        video_url:
+                          type: string
+                          description: 视频结果地址。
+                        error:
+                          type: string
+                          description: 失败时的错误信息。
+                        progress:
+                          type: string
+                          description: 任务进度。
+      security:
+        - BearerAuth: []
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: |-
+        使用 Bearer Token 认证。
+        格式: `Authorization: Bearer sk-xxxxxx`
+
+````

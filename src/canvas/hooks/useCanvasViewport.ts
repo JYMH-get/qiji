@@ -2,6 +2,7 @@ import { useCallback, useEffect } from "react";
 import { useReactFlow } from "@xyflow/react";
 import { useCanvasStore } from "@/store/canvasStore";
 import { useProjectStore } from "@/store/projectStore";
+import { setCanvasPanning } from "@/canvas/interaction";
 
 /** 视口同步 + 项目加载后恢复 */
 export function useCanvasViewport() {
@@ -9,7 +10,12 @@ export function useCanvasViewport() {
   const isProjectLoading = useProjectStore((s) => s.isProjectLoading);
   const savePath = useProjectStore((s) => s.savePath);
 
+  const onMoveStart = useCallback(() => {
+    setCanvasPanning(true); // 平移/缩放中：去抖保存推迟执行（保存大活撞交互=掉帧）
+  }, []);
+
   const onMoveEnd = useCallback(() => {
+    setCanvasPanning(false);
     useCanvasStore.getState().setViewport(getViewport());
     useProjectStore.getState().scheduleAutoSave("viewport");
   }, [getViewport]);
@@ -41,5 +47,5 @@ export function useCanvasViewport() {
     }
   }, [isProjectLoading, savePath, setViewport, getViewport, fitView]);
 
-  return { onMoveEnd, onMove };
+  return { onMoveStart, onMoveEnd, onMove };
 }

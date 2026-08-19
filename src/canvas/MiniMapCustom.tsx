@@ -67,14 +67,18 @@ export function MiniMapCustom() {
     return { left, top, width, height };
   }, [viewport, storeApi]);
 
-  // ── 3. 合并 bbox（节点 + 视口，留 VP_EXTRA 余量）────────────────────────
+  // ── 3. 总 bbox = 仅节点（+VP_EXTRA 余量）。
+  // 性能/观感关键：**不把视口并进 bbox**——否则平移时比例尺每帧变化，整张小地图的节点矩形
+  // 逐帧移动缩放（视觉上"游动/闪烁"）。现在平移时只有视口小框在动，节点矩形纹丝不动；
+  // 视口跑出节点区时其框被 SVG 裁掉（点击小地图任意处仍可跳转）。
   const totalBbox = useMemo(() => {
-    const minX = Math.min(nodeBbox.minX, vpRect.left)   - VP_EXTRA;
-    const minY = Math.min(nodeBbox.minY, vpRect.top)    - VP_EXTRA;
-    const maxX = Math.max(nodeBbox.maxX, vpRect.left + vpRect.width)  + VP_EXTRA;
-    const maxY = Math.max(nodeBbox.maxY, vpRect.top  + vpRect.height) + VP_EXTRA;
-    return { minX, minY, maxX, maxY };
-  }, [nodeBbox, vpRect]);
+    return {
+      minX: nodeBbox.minX - VP_EXTRA,
+      minY: nodeBbox.minY - VP_EXTRA,
+      maxX: nodeBbox.maxX + VP_EXTRA,
+      maxY: nodeBbox.maxY + VP_EXTRA,
+    };
+  }, [nodeBbox]);
 
   // ── 4. flow 坐标 → SVG 坐标的统一转换 ────────────────────────────────
   const miniScale = useMemo(() => {
@@ -161,6 +165,33 @@ export function MiniMapCustom() {
     dragRef.current.active = false;
   }, []);
 
+  // 节点缩略矩形：只依赖节点与比例尺（平移/缩放期间不变 → 每帧渲染时复用同一子树）
+  const nodeRects = useMemo(
+    () =>
+      nodes.map((n) => {
+        const { x, y } = toSvgCoord(n.x, n.y);
+        const sw = Math.max((n.w ?? 240) * miniScale, 4);
+        const sh = Math.max((n.h ?? 200) * miniScale, 3);
+        const color = NODE_COLORS[n.type] ?? "#5b8df6";
+        return (
+          <rect
+            key={n.id}
+            x={x}
+            y={y}
+            width={sw}
+            height={sh}
+            rx={2}
+            fill={color}
+            fillOpacity={0.4}
+            stroke={color}
+            strokeWidth={1.5}
+            strokeOpacity={0.95}
+          />
+        );
+      }),
+    [nodes, toSvgCoord, miniScale],
+  );
+
   return (
     <div className="minimap-custom">
       <svg
@@ -173,28 +204,8 @@ export function MiniMapCustom() {
         {/* 整体灰底 */}
         <rect x={0} y={0} width={MAP_W} height={MAP_H} fill="#1e2029" rx={7} />
 
-        {/* 节点缩略矩形 */}
-        {nodes.map((n) => {
-          const { x, y } = toSvgCoord(n.x, n.y);
-          const sw = Math.max((n.w ?? 240) * miniScale, 4);
-          const sh = Math.max((n.h ?? 200) * miniScale, 3);
-          const color = NODE_COLORS[n.type] ?? "#5b8df6";
-          return (
-            <rect
-              key={n.id}
-              x={x}
-              y={y}
-              width={sw}
-              height={sh}
-              rx={2}
-              fill={color}
-              fillOpacity={0.4}
-              stroke={color}
-              strokeWidth={1.5}
-              strokeOpacity={0.95}
-            />
-          );
-        })}
+        {/* 节点缩略矩形（useMemo：useViewport 每帧触发组件重渲染，矩形子树引用不变可整体跳过） */}
+        {nodeRects}
 
         {/* 当前视口框：可拖拽平移 */}
         <rect

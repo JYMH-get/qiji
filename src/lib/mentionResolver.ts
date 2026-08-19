@@ -48,6 +48,11 @@ function getNodeResultContent(nodeId: string): string {
 	const node = nodes[nodeId];
 	if (!node) return "";
 
+	// 文本类节点（资产拆分/分集/故事板/智能拆分/对话/文本种子）的产物在 resultText
+	if (typeof node.data.resultText === "string" && node.data.resultText.trim()) {
+		return node.data.resultText;
+	}
+
 	const assetId = node.data.resultAssetId;
 	if (!assetId) {
 		// 回退到 prompt 文本

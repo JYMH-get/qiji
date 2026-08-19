@@ -1,11 +1,15 @@
 import { useState, useEffect, useMemo } from "react";
+import { RefreshCw, ListPlus, User, Image as ImageIcon, Package, PawPrint, Users, Clapperboard } from "lucide-react";
 import EditorHeader from "@/components/EditorHeader";
 import EditorSidebar from "@/components/EditorSidebar";
 import { useProjectStore } from "@/store/projectStore";
+import { confirmDialog } from "@/lib/confirmDialog";
 import { useCatalogStore } from "@/store/catalogStore";
 import { runPurpose } from "@/services/purposeRunner";
 import { trackTask } from "@/services/taskCenter";
 import ModelPicker, { effectiveModelKey } from "@/components/ModelPicker";
+import { mergeExtraction, mergeApply, type ExtractBuckets } from "@/lib/assetMerge";
+import { attachSplitPresets } from "@/lib/splitPresetAttach";
 import "@/styles/Frame1693.css";
 
 // 提示词正文已全量交由管理端（catalog 模板）拼接；用户端只发 templateId + 变量(原文/素材) + 模型 + 参数。
@@ -121,7 +125,7 @@ function extractVisualBible(text: string, root: any | null): VisualBible {
     };
 }
 
-type ParsedAsset = { id: string; name: string; features: string; philosophy: string; prompt: string; image?: string; variants: any[] };
+type ParsedAsset = { id: string; name: string; features: string; philosophy: string; prompt: string; image?: string; variants: any[]; code?: string; inheritsFrom?: string; variantPayload?: any };
 
 // 解析资产提取 LLM 输出（asset.extract.v1）：按 C/A/G/M/S/P 编号前缀分流到 角色/场景/生物/物品，变体折叠进父资产。
 // 兼容两种结构：扁平 assets[]（带 id/type/prompt）与嵌套 characters[]/scenes[]/creatures[]/props[]。
@@ -203,6 +207,7 @@ function parseAssetExtraction(text: string): {
             prompt: String(a.prompt || a.imagePrompt || a.image_prompt || "").trim(),
             image: undefined,
             variants: [],
+            code: code || undefined,
         };
         buckets[bucketOf(a)].push(asset);
         if (code) byCode[parentCode(code).toUpperCase()] = asset;
@@ -222,7 +227,9 @@ function parseAssetExtraction(text: string): {
         };
         const parent = byCode[pcode];
         if (parent) parent.variants.push(variant);
-        else buckets[bucketOf(a)].push({ id: variant.id, name: variant.name || code, features: variant.description, philosophy: "", prompt: variant.prompt, image: undefined, variants: [] });
+        // 父资产不在本轮结果里（典型：「继续提取」时父在上一轮）——保留父编号 inheritsFrom + 变体原始载荷，
+        // 留待 mergeExtraction 按父编号回挂到已有资产的 variants；找不到父才退化为基础资产。
+        else buckets[bucketOf(a)].push({ id: variant.id, name: variant.name || code, features: variant.description, philosophy: "", prompt: variant.prompt, image: undefined, variants: [], code: code || undefined, inheritsFrom: pcode, variantPayload: variant });
     }
     // 截断时标注大概提取到哪个资产（flat 为文档顺序，末元素即最后一个完整资产）
     const lastRaw = flat[flat.length - 1];
@@ -232,88 +239,92 @@ function parseAssetExtraction(text: string): {
     return { ...buckets, visualBible, truncated, lastLabel };
 }
 
-// 松类型：store 端各类资产字段不一（场景/道具用 description、variants 可选），合并只依赖 name + variants
-type AnyAsset = { name: string; variants?: any[];[k: string]: any };
-type ExtractBuckets = { characters: AnyAsset[]; scenes: AnyAsset[]; items: AnyAsset[]; organisms: AnyAsset[]; crowds: AnyAsset[] };
+// 合并落库逻辑已抽到 @/lib/assetMerge（第85轮）：画布资产拆分节点与本页共用同一条入库链路。
 
-// 续提合并：把新一轮结果并入现有资产。按「名称」在各类内去重——
-// 同名视为同一资产、不重复加入；同名时把新变体（按 label/name）并进已有资产。返回合并结果 + 实际新增数。
-function mergeExtraction(cur: ExtractBuckets, add: ExtractBuckets): { merged: ExtractBuckets; addedCount: number } {
-    let added = 0;
-    const mergeCat = (a: AnyAsset[], b: AnyAsset[]): AnyAsset[] => {
-        const out = a.map((x) => ({ ...x, variants: [...(x.variants || [])] }));
-        const byName = new Map(out.map((x) => [String(x.name).trim(), x] as const));
-        for (const nb of b) {
-            const key0 = String(nb.name).trim();
-            const hit = byName.get(key0);
-            if (!hit) { const nbN = { ...nb, variants: [...(nb.variants || [])] }; out.push(nbN); byName.set(key0, nbN); added++; continue; }
-            const seen = new Set((hit.variants || []).map((v: any) => String(v.label || v.name).trim()));
-            for (const nv of nb.variants || []) {
-                const key = String(nv.label || nv.name).trim();
-                if (key && !seen.has(key)) { hit.variants.push(nv); seen.add(key); added++; }
-            }
+// 剧集拆分「快速拆分」选项 id（均不调用大模型，纯本地确定性切分）。
+const QUICK_SPLIT_ID = "__quick_split__";          // 按「第N集/章/回」标记
+const QUICK_BLANKLINE_ID = "__quick_blankline__";  // 按连续两次换行（空行）
+const QUICK_N1_ID = "__quick_n1__";                // n-1：按空行切大集，编号 1-1, 2-1, 3-1
+const QUICK_NN_ID = "__quick_nn__";                // n-n：大集(空行)内再按单换行切小集，编号 1-1,1-2,…,2-1,…（更细）
+
+// 按空行（连续两次及以上换行）切块
+function splitByBlankLines(scriptText: string): string[] {
+    return (scriptText || "").split(/\n\s*\n+/).map((b) => b.trim()).filter(Boolean);
+}
+// 连续两次换行拆分：每个空行块 = 一集（扁平编号 第N集）
+function splitEpisodesByBlankLine(scriptText: string): Array<{ title: string; scriptText: string }> {
+    return splitByBlankLines(scriptText).map((b, i) => ({ title: `第${i + 1}集`, scriptText: b }));
+}
+
+// 在剧本里找「主-副」编号标记（行首形如 1-1 / 2-3 / 1.2，或带「场」前缀的 场1-1 / 场2-3），
+// 返回 {major,minor,index(全局偏移),label}。容差「场」前缀：剧本若以「场n-n」格式分场，n-n/n-1 也能拆。
+function findShotMarkers(scriptText: string): Array<{ major: number; minor: number; index: number; label: string }> {
+    const lines = (scriptText || "").split(/\r?\n/);
+    const out: Array<{ major: number; minor: number; index: number; label: string }> = [];
+    let offset = 0;
+    for (const line of lines) {
+        const m = line.match(/^(\s*)(?:场\s*)?(\d+)\s*[-－—.·、:：]\s*(\d+)/);
+        if (m) {
+            const major = Number(m[2]), minor = Number(m[3]);
+            out.push({ major, minor, index: offset + (m[1] ? m[1].length : 0), label: `${major}-${minor}` });
         }
-        return out;
-    };
-    return {
-        merged: {
-            characters: mergeCat(cur.characters, add.characters),
-            scenes: mergeCat(cur.scenes, add.scenes),
-            items: mergeCat(cur.items, add.items),
-            organisms: mergeCat(cur.organisms, add.organisms),
-            crowds: mergeCat(cur.crowds, add.crowds),
-        },
-        addedCount: added,
-    };
+        offset += line.length + 1; // +1 为换行符
+    }
+    return out;
+}
+// 按边界索引切片；首个边界前的内容（若有）作「0-引言」
+function sliceByBoundaries(text: string, boundaries: Array<{ index: number; label: string }>): Array<{ title: string; scriptText: string }> {
+    const eps: Array<{ title: string; scriptText: string }> = [];
+    const firstIdx = boundaries.length ? boundaries[0].index : text.length;
+    const intro = text.slice(0, firstIdx).trim();
+    if (intro) eps.push({ title: "0-引言", scriptText: intro });
+    for (let i = 0; i < boundaries.length; i++) {
+        const start = boundaries[i].index;
+        const end = i + 1 < boundaries.length ? boundaries[i + 1].index : text.length;
+        const seg = text.slice(start, end).trim();
+        if (seg) eps.push({ title: boundaries[i].label, scriptText: seg });
+    }
+    return eps;
+}
+// n-n（逢数拆分）：每遇到一个编号标记就拆 → 1-1,1-2,1-3,2-1,2-2…（最细）
+function splitEpisodesNN(scriptText: string): Array<{ title: string; scriptText: string }> {
+    const markers = findShotMarkers(scriptText);
+    if (markers.length === 0) return [];
+    return sliceByBoundaries(scriptText, markers.map((m) => ({ index: m.index, label: m.label })));
+}
+// n-1（逢1拆分）：只在主编号变化处拆（副编号变化不拆）→ 每个主组首个标记为边界 1-1,2-1,3-1…
+function splitEpisodesN1(scriptText: string): Array<{ title: string; scriptText: string }> {
+    const markers = findShotMarkers(scriptText);
+    if (markers.length === 0) return [];
+    const boundaries: Array<{ index: number; label: string }> = [];
+    let prevMajor: number | null = null;
+    for (const m of markers) {
+        if (prevMajor === null || m.major !== prevMajor) { boundaries.push({ index: m.index, label: m.label }); prevMajor = m.major; }
+    }
+    return sliceByBoundaries(scriptText, boundaries);
 }
 
-// 解析「分集边界」LLM 输出（模型只返回每集 标题 + 起始锚点句，输出短不截断）。
-// 兼容 anchor/start/firstLine/scriptText 等字段；解析不到返回空，不编造。
-function parseEpisodeBoundaries(text: string): Array<{ title: string; anchor: string }> {
-    const t = text.trim();
-    const jsonStr = t.startsWith("[") || t.startsWith("{")
-        ? t
-        : (() => { const a = t.indexOf("["); const b = t.lastIndexOf("]"); return a >= 0 && b > a ? t.slice(a, b + 1) : ""; })();
-    if (!jsonStr) return [];
-    try {
-        const parsed = JSON.parse(jsonStr);
-        const list = Array.isArray(parsed) ? parsed : (parsed.episodes || []);
-        return (list as any[])
-            .map((e) => ({
-                title: String(e.title || e.name || "").trim(),
-                anchor: String(e.anchor || e.start || e.firstLine || e.startLine || e.scriptText || "").trim(),
-            }))
-            .filter((e) => e.title || e.anchor);
-    } catch {
-        return [];
+// 简单分集（确定性、无需 LLM）：按原文中的「第N集/章/回/话/幕」标题切分。
+// N 支持阿拉伯数字与中文数字；每集标题取标记所在整行。找不到任何标记则返回空（由调用方兜底为单集）。
+function splitEpisodesByMarkers(scriptText: string): Array<{ title: string; scriptText: string }> {
+    const text = scriptText || "";
+    const re = /第\s*[0-9一二三四五六七八九十百千零〇两]+\s*[集章回话幕]/g;
+    const marks: Array<{ index: number; title: string }> = [];
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+        const lineEnd = text.indexOf("\n", m.index);
+        const title = text.slice(m.index, lineEnd < 0 ? text.length : lineEnd).trim();
+        marks.push({ index: m.index, title });
     }
-}
-
-// 按锚点把原文确定性切成每集文本：在原文中依次定位每个 anchor，相邻 anchor 之间即一集（原文零损失）。
-function sliceEpisodesByAnchors(
-    scriptText: string,
-    boundaries: Array<{ title: string; anchor: string }>,
-): Array<{ title: string; scriptText: string }> {
-    if (boundaries.length === 0) return [];
-    // 找到每个 anchor 在原文中的位置（从上一集之后继续找，保证顺序、避免回跳）
-    const marks: Array<{ title: string; pos: number }> = [];
-    let cursor = 0;
-    for (const b of boundaries) {
-        let pos = b.anchor ? scriptText.indexOf(b.anchor, cursor) : -1;
-        if (pos < 0 && b.anchor) pos = scriptText.indexOf(b.anchor.slice(0, 12), cursor); // 锚点首段兜底
-        if (pos < 0) pos = cursor; // 仍找不到 → 紧接上一集（不丢内容）
-        marks.push({ title: b.title, pos });
-        cursor = pos + 1;
-    }
-    // 第一集从 0 开始（含锚点前的开场），其余从各自锚点起，到下一集锚点止
+    if (marks.length === 0) return [];
     const out: Array<{ title: string; scriptText: string }> = [];
     for (let i = 0; i < marks.length; i++) {
-        const start = i === 0 ? 0 : marks[i].pos;
-        const end = i + 1 < marks.length ? marks[i + 1].pos : scriptText.length;
-        const seg = scriptText.slice(start, end).trim();
-        out.push({ title: marks[i].title, scriptText: seg });
+        const start = marks[i].index;
+        const end = i + 1 < marks.length ? marks[i + 1].index : text.length;
+        const seg = text.slice(start, end).trim();
+        if (seg) out.push({ title: marks[i].title, scriptText: seg });
     }
-    return out.filter((e) => e.scriptText);
+    return out;
 }
 
 const Frame1693 = () => {
@@ -335,6 +346,8 @@ const Frame1693 = () => {
     const analysisProgress = useProjectStore((s) => s.analysisProgress);
     const setIsAnalyzing = useProjectStore((s) => s.setAnalysisRunning);
     const setAnalysisProgress = useProjectStore((s) => s.setAnalysisProgress);
+    // 剧集拆分独立运行态（与资产拆分解耦：点哪个跑哪个，互不禁用、互不显示对方进度）
+    const [episodeSplitting, setEpisodeSplitting] = useState(false);
 
     // 资产提取模板（管理端 catalog 下发，purpose=script.analyze；排除内部模板）
     const allTemplates = useCatalogStore((s) => s.catalog?.templates);
@@ -351,6 +364,13 @@ const Frame1693 = () => {
         }
     }, [extractTemplates, selectedTemplateId]);
 
+    // 剧集拆分模板：内置「快速拆分」(不调用大模型，按"第N集/章/回"标记确定性切) + catalog 剧集类模板。
+    const episodeTemplates = useMemo(
+        () => (allTemplates ?? []).filter((t) => t.category === "剧集"),
+        [allTemplates],
+    );
+    const [episodeTemplateId, setEpisodeTemplateId] = useState(QUICK_NN_ID); // 默认 n-n（第121轮用户定）
+
     const storeScriptText = useProjectStore((s) => s.scriptText);
     useEffect(() => {
         setScriptText(storeScriptText);
@@ -363,35 +383,36 @@ const Frame1693 = () => {
         if (!at) return;
         if (useProjectStore.getState().analysisRunning) return; // 同会话仍在跟踪，无需恢复
         let done = false;
+        // 归属校验基准：恢复发起时的项目实例（onUpdate 期间若用户切走了项目，停止写库防串台）
+        const owner = useProjectStore.getState().projectInstanceId;
         const s0 = useProjectStore.getState();
         s0.setAnalysisRunning(true);
         s0.setAnalysisProgress(40);
-        // 续提恢复需与现有资产合并，先快照当前资产
-        const cur = { characters: s0.characters, scenes: s0.scenes, items: s0.items, organisms: s0.organisms, crowds: s0.crowds };
         trackTask({
             taskId: at.taskId,
             adapterKey: at.adapterKey,
-            timeoutMs: 20 * 60 * 1000,
             onUpdate: (progress, status, resultUri, _err, _aid, partialText) => {
                 if (done) return;
+                // 用户已切到别的项目 → 停止跟踪、不写当前项目（原项目返回时会再次自恢复）
+                if (useProjectStore.getState().projectInstanceId !== owner) { done = true; return; }
                 const s = useProjectStore.getState();
                 if (status === "queued" || status === "running") {
                     s.setAnalysisProgress(Math.min(95, 40 + Math.round(progress * 0.5)));
-                    if (at.kind === "analyze" && partialText && partialText.length > 40) {
+                    if (partialText && partialText.length > 40) {
                         const live = parseAssetExtraction(partialText);
                         const t = live.characters.length + live.scenes.length + live.items.length + live.organisms.length + live.crowds.length;
-                        if (t > 0) s.setAnalysisResult({ characters: live.characters, scenes: live.scenes, items: live.items, organisms: live.organisms, crowds: live.crowds, visualBible: live.visualBible, time: "解析中…" });
+                        // 流式：合并保留（不整体替换），已生成的图与 id 不丢
+                        if (t > 0) mergeApply(owner, { characters: live.characters, scenes: live.scenes, items: live.items, organisms: live.organisms, crowds: live.crowds }, live.visualBible, "解析中…");
                     }
                     return;
                 }
                 done = true;
                 if (status === "success") {
                     const ex = parseAssetExtraction(resultUri || "");
-                    const buckets = { characters: ex.characters, scenes: ex.scenes, items: ex.items, organisms: ex.organisms, crowds: ex.crowds };
-                    const result = at.kind === "continue" ? mergeExtraction(cur, buckets).merged : buckets;
                     const now = new Date();
                     const ts = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, "0")}/${String(now.getDate()).padStart(2, "0")}   ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-                    s.setAnalysisResult({ ...result, visualBible: ex.visualBible, time: ts });
+                    // 最终结果：合并到**当前最新** store（含恢复期间生成的图），保留旧资产
+                    mergeApply(owner, { characters: ex.characters, scenes: ex.scenes, items: ex.items, organisms: ex.organisms, crowds: ex.crowds }, ex.visualBible, ts);
                 }
                 s.setAnalysisTask(null);
                 s.setAnalysisRunning(false);
@@ -403,17 +424,20 @@ const Frame1693 = () => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    const handleAnalyzeScript = async () => {
+    // 资产拆分：只提取角色/场景/物品/生物/群像（不再附带分集，分集由「剧集拆分」独立按键负责）
+    const handleExtractAssets = async () => {
         if (!scriptText.trim()) {
             alert("请输入剧本文本后再进行分析");
             return;
         }
         if (!selectedTemplateId) {
-            alert("请先选择资产提取模板（需先在管理端配置并连接）。");
+            alert("请先选择资产拆分模板（需先在管理端配置并连接）。");
             return;
         }
         setIsAnalyzing(true);
         setAnalysisProgress(10);
+        // 归属校验基准：本次分析归属于发起时的项目。回调/完成时若已切走，放弃落库防串台。
+        const owner = useProjectStore.getState().projectInstanceId;
 
         let truncationMsg = ""; // 非空 = 提取被截断，成功流程末尾提醒用户
 
@@ -444,22 +468,20 @@ const Frame1693 = () => {
                 params: { temperature: 0.7, maxTokens: 65535 },
                 // 落盘在途任务：关客户端后重开可凭 taskId 重连服务端取结果（见挂载时的断连恢复 useEffect）
                 onTaskId: (taskId, adapterKey) => {
+                    if (useProjectStore.getState().projectInstanceId !== owner) return; // 已切项目，不写当前项目
                     useProjectStore.getState().setAnalysisTask({ taskId, adapterKey, kind: "analyze", startedAt: Date.now() });
                 },
                 onProgress: (progress, status, partialText) => {
+                    if (useProjectStore.getState().projectInstanceId !== owner) return; // 已切项目，丢弃流式回调防串台
                     if (status === "running" || status === "queued") {
                         setAnalysisProgress(Math.min(95, 50 + Math.round(progress * 0.4)));
                     }
-                    // 流式：把目前已完整的资产/视觉圣经实时刷入 store（提取一个刷新一个）
+                    // 流式：合并保留刷入 store（提取一个并入一个；已生成的图与 id 不丢，见 mergeApply）
                     if (partialText && partialText.length > 40) {
                         const live = parseAssetExtraction(partialText);
                         const liveTotal = live.characters.length + live.scenes.length + live.items.length + live.organisms.length + live.crowds.length;
                         if (liveTotal > 0) {
-                            useProjectStore.getState().setAnalysisResult({
-                                characters: live.characters, scenes: live.scenes, items: live.items,
-                                organisms: live.organisms, crowds: live.crowds, visualBible: live.visualBible,
-                                time: "解析中…",
-                            });
+                            mergeApply(owner, { characters: live.characters, scenes: live.scenes, items: live.items, organisms: live.organisms, crowds: live.crowds }, live.visualBible, "解析中…");
                         } else if (live.visualBible.style || live.visualBible.colorSystem || live.visualBible.negativeGlobal) {
                             useProjectStore.getState().setVisualBible(live.visualBible);
                         }
@@ -467,12 +489,15 @@ const Frame1693 = () => {
                 },
             });
 
+            // 用户已切到别的项目：放弃落库（原项目的 analysisTask 已落盘，返回时断连恢复会重连取结果）
+            if (useProjectStore.getState().projectInstanceId !== owner) return;
+
             // 任务已终态：清掉在途记录（无论成败），避免下次启动误重连
             useProjectStore.getState().setAnalysisTask(null);
 
             // 无兜底：没有可用模型 / 失败 → 直接报错，绝不给假数据
             if (run.status === "no_model") {
-                throw new Error("未配置可用的文本模型，请先在「设置 → 模型」中选择文本模型后重试。");
+                throw new Error("无可用文本模型：请检查「设置 → 管理端」连接与目录拉取后重试。");
             }
             if (run.status === "failed") {
                 throw new Error(run.error || "LLM 提取失败");
@@ -495,55 +520,23 @@ const Frame1693 = () => {
             const now = new Date();
             const timeString = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, "0")}/${String(now.getDate()).padStart(2, "0")}   ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
-            useProjectStore.getState().setAnalysisResult({
+            // 最终结果：合并到当前最新 store（保留旧资产与拆分期间生成的图、稳定 id），而非整体替换
+            mergeApply(owner, {
                 characters: extracted.characters,
                 scenes: extracted.scenes,
                 items: extracted.items,
                 organisms: extracted.organisms,
                 crowds: extracted.crowds,
-                visualBible: extracted.visualBible,
-                time: timeString,
-            });
+            }, extracted.visualBible, timeString);
 
             // 截断提醒：模型输出过长被掐断，只抢救出部分资产 → 明确告知用户可能不完整、大概到哪里。
-            // 注意：setAnalysisResult 是整体替换而非合并，「重新分析」会重跑全部（仍可能再次截断），
-            // 不能靠它增量补；故引导用户精简/分批，或确认已调大上限后重试。
+            // 现在是合并保留（不删旧资产）：可点「继续提取」补全剩余、不重复、不覆盖已有。
             if (extracted.truncated) {
                 const total = extracted.characters.length + extracted.scenes.length + extracted.items.length + extracted.organisms.length + extracted.crowds.length;
                 truncationMsg =
                     `⚠ 模型输出过长被截断，仅抢救出 ${total} 个资产` +
                     (extracted.lastLabel ? `（约提取到「${extracted.lastLabel}」处）` : "") +
                     `。\n其后的资产可能未提取（本轮甚至可能尚未涉及场景/道具）。\n\n建议点击「继续提取」——它会把已提取的资产作为查重清单喂回模型，只补全剩余、不重复、不覆盖已有；可反复点击直到提示"无新增"。`;
-            }
-
-            // 自动分集（边界法）：模型只返回每集 标题+起始锚点句（输出短不截断），
-            // 客户端按锚点在原文里确定性切出每集文本（原文零损失）。写入 episodes 供「视频」界面。
-            // best-effort：失败不影响已提取的资产（视频界面仍可手动「新建分集」）。
-            try {
-                const epRun = await runPurpose("script.analyze", {
-                    templateId: "script.episodes.basic",
-                    variables: { 原文: scriptText },
-                    modelKey: effectiveModelKey("text") || undefined,
-                    params: { temperature: 0.3, maxTokens: 4096 }, // 仅边界，输出很短
-                });
-                if (epRun.status === "success" && epRun.resultUri) {
-                    const boundaries = parseEpisodeBoundaries(epRun.resultUri);
-                    const eps = sliceEpisodesByAnchors(scriptText, boundaries);
-                    if (eps.length > 0) {
-                        const baseTs = Date.now();
-                        useProjectStore.getState().setEpisodes(
-                            eps.map((e, i) => ({
-                                id: `ep-${baseTs}-${i}`,
-                                index: i + 1,
-                                title: `${String(i + 1).padStart(3, "0")}-${e.title || `第${i + 1}集`}`,
-                                scriptText: e.scriptText,
-                                shots: [],
-                            })),
-                        );
-                    }
-                }
-            } catch (epErr) {
-                console.warn("自动分集失败（可在视频界面手动新建分集）:", epErr);
             }
 
             // Auto-save project file
@@ -564,6 +557,79 @@ const Frame1693 = () => {
         }
     };
 
+    // 剧集拆分：把剧本切成多集，写入 episodes 供「视频」界面。
+    // 「快速拆分」= 不调用大模型，纯本地按「第N集/章/回」标记确定性切分（找不到标记 → 整篇为单集）。
+    // 选中 catalog 剧集模板时走 LLM 边界法（暂未提供该类模板，预留分支）。
+    const handleSplitEpisodes = async () => {
+        if (!scriptText.trim()) { alert("请输入剧本文本后再进行剧集拆分。"); return; }
+        if (episodeSplitting) return;
+        // 已有拆分成果（多集、或任一集带正文/分镜）→ 再次拆分=整体覆盖，须用户确认（新项目的单个空默认分集不算）。
+        // ⚠ 确认必须走 confirmDialog（Tauri 下 window.confirm 不弹窗直接放行，见 src/lib/confirmDialog.ts）
+        const existing = useProjectStore.getState().episodes;
+        const hasContent = existing.length > 1 || existing.some((e) => (e.shots?.length || 0) > 0 || !!e.scriptText?.trim());
+        if (hasContent) {
+            const shotCount = existing.reduce((s, e) => s + (e.shots?.length || 0), 0);
+            const ok = await confirmDialog(
+                `⚠ 再次拆分将覆盖现有 ${existing.length} 集分集${shotCount ? `及其全部 ${shotCount} 个分镜（含推理结果/故事板图/视频引用）` : ""}，覆盖后无法恢复。\n\n确定要重新拆分吗？`,
+            );
+            if (!ok) return;
+        }
+        setEpisodeSplitting(true);
+        let msg = "";
+        const owner = useProjectStore.getState().projectInstanceId;
+        try {
+            let eps: Array<{ title: string; scriptText: string }> = [];
+
+            if (episodeTemplateId === QUICK_SPLIT_ID) {
+                // 快速拆分：本地确定性切分（按「第N集/章/回」标记）
+                eps = splitEpisodesByMarkers(scriptText);
+                if (eps.length === 0) eps = [{ title: "第1集", scriptText: scriptText.trim() }];
+            } else if (episodeTemplateId === QUICK_BLANKLINE_ID) {
+                eps = splitEpisodesByBlankLine(scriptText);
+                if (eps.length === 0) eps = [{ title: "第1集", scriptText: scriptText.trim() }];
+            } else if (episodeTemplateId === QUICK_N1_ID) {
+                eps = splitEpisodesN1(scriptText);
+                if (eps.length === 0) throw new Error("未在原文找到「主-副」编号标记（如行首 1-1、2-3 或 场1-1、场2-3），无法用 n-1 拆分。请确认原文带编号，或改用其它拆分方式。");
+            } else if (episodeTemplateId === QUICK_NN_ID) {
+                eps = splitEpisodesNN(scriptText);
+                if (eps.length === 0) throw new Error("未在原文找到「主-副」编号标记（如行首 1-1、2-3 或 场1-1、场2-3），无法用 n-n 拆分。请确认原文带编号，或改用其它拆分方式。");
+            } else {
+                // LLM 模板分集（按所选 catalog 模板提交，输出按「第N集」标题正文）
+                const run = await runPurpose("script.analyze", {
+                    templateId: episodeTemplateId,
+                    variables: { 原文: scriptText },
+                    modelKey: effectiveModelKey("text") || undefined,
+                    params: { temperature: 0.3, maxTokens: 8192 },
+                });
+                if (run.status === "no_model") throw new Error("无可用文本模型：请检查「设置 → 管理端」连接与目录拉取后重试。");
+                if (run.status === "failed") throw new Error(run.error || "剧集拆分失败");
+                eps = splitEpisodesByMarkers(run.resultUri || "");
+                if (eps.length === 0) eps = [{ title: "第1集", scriptText: (run.resultUri || scriptText).trim() }];
+            }
+
+            // 已切到别的项目 → 放弃写 episodes，避免串台
+            if (useProjectStore.getState().projectInstanceId !== owner) { msg = ""; return; }
+            const baseTs = Date.now();
+            useProjectStore.getState().setEpisodes(
+                eps.map((e, i) => ({
+                    id: `ep-${baseTs}-${i}`,
+                    index: i + 1,
+                    title: `${String(i + 1).padStart(3, "0")}-${e.title || `第${i + 1}集`}`,
+                    scriptText: e.scriptText,
+                    shots: [],
+                })),
+            );
+            await useProjectStore.getState().save(true);
+            msg = `✅ 已拆分为 ${eps.length} 集（可在「视频」界面查看/编辑）。`;
+        } catch (err) {
+            console.error("Split episodes failed:", err);
+            msg = `剧集拆分失败：${err instanceof Error ? err.message : "未知错误"}`;
+        } finally {
+            setEpisodeSplitting(false);
+            if (msg) alert(msg);
+        }
+    };
+
     // 继续提取（分批续提，补全剩余资产）：
     // 把当前已提取资产作为「已设计资产库（查重用）」喂回模型（模板已内置该段），
     // 模型据此跳过已有、只产新增；结果与现有按名称合并（不覆盖、不重复）。可反复点击直到无新增。
@@ -574,9 +640,12 @@ const Frame1693 = () => {
         setIsAnalyzing(true);
         setAnalysisProgress(20);
         let msg = "";
+        // 归属校验基准（提到 try 外，供 finally 判断是否仍是原项目）
+        const owner = useProjectStore.getState().projectInstanceId;
         try {
+            // 提交时的资产快照（仅用于喂模型查重，不作合并基准）
             const st = useProjectStore.getState();
-            const cur: ExtractBuckets = {
+            const submitCur: ExtractBuckets = {
                 characters: st.characters || [], scenes: st.scenes || [], items: st.items || [],
                 organisms: st.organisms || [], crowds: st.crowds || [],
             };
@@ -585,10 +654,10 @@ const Frame1693 = () => {
                 视觉风格: visualStyle,
                 原文: scriptText,
                 // 已设计资产库（查重用）——紧凑身份清单，模型据此"勿重复设计"
-                角色列表: formatCharactersForTemplate([...cur.characters, ...cur.crowds]),
-                场景列表: formatScenesForTemplate(cur.scenes),
-                物品列表: formatItemsForTemplate(cur.items),
-                生物列表: formatOrganismsForTemplate(cur.organisms),
+                角色列表: formatCharactersForTemplate([...submitCur.characters, ...submitCur.crowds]),
+                场景列表: formatScenesForTemplate(submitCur.scenes),
+                物品列表: formatItemsForTemplate(submitCur.items),
+                生物列表: formatOrganismsForTemplate(submitCur.organisms),
                 当前时间: `${now0.getFullYear()}/${String(now0.getMonth() + 1).padStart(2, "0")}/${String(now0.getDate()).padStart(2, "0")} ${String(now0.getHours()).padStart(2, "0")}:${String(now0.getMinutes()).padStart(2, "0")}:${String(now0.getSeconds()).padStart(2, "0")}`,
             };
             setAnalysisProgress(40);
@@ -598,27 +667,37 @@ const Frame1693 = () => {
                 modelKey: effectiveModelKey("text") || undefined,
                 params: { temperature: 0.7, maxTokens: 65535 },
                 onTaskId: (taskId, adapterKey) => {
+                    if (useProjectStore.getState().projectInstanceId !== owner) return;
                     useProjectStore.getState().setAnalysisTask({ taskId, adapterKey, kind: "continue", startedAt: Date.now() });
                 },
                 onProgress: (progress, status) => {
+                    if (useProjectStore.getState().projectInstanceId !== owner) return;
                     if (status === "running" || status === "queued") {
                         setAnalysisProgress(Math.min(95, 40 + Math.round(progress * 0.5)));
                     }
                 },
             });
+            // 用户已切到别的项目：放弃落库（原项目 analysisTask 已落盘，返回时自恢复）
+            if (useProjectStore.getState().projectInstanceId !== owner) { msg = ""; return; }
             useProjectStore.getState().setAnalysisTask(null); // 任务已终态，清在途记录
-            if (run.status === "no_model") throw new Error("未配置可用的文本模型，请先在「设置 → 模型」中选择后重试。");
+            if (run.status === "no_model") throw new Error("无可用文本模型：请检查「设置 → 管理端」连接与目录拉取后重试。");
             if (run.status === "failed") throw new Error(run.error || "继续提取失败");
             const resultText = run.resultUri || "";
             if (!resultText.trim()) throw new Error("模型返回为空。");
 
             const add = parseAssetExtraction(resultText);
-            const { merged, addedCount } = mergeExtraction(cur, add);
+            // 合并基准 = **最新** store（含续提期间用户生成的图），而非提交时的陈旧快照——修「续提丢已生成资产」
+            const fresh = useProjectStore.getState();
+            const freshCur: ExtractBuckets = {
+                characters: fresh.characters || [], scenes: fresh.scenes || [], items: fresh.items || [],
+                organisms: fresh.organisms || [], crowds: fresh.crowds || [],
+            };
+            const { merged, addedCount } = mergeExtraction(freshCur, add, attachSplitPresets);
 
             const now = new Date();
             const timeString = `${now.getFullYear()}/${String(now.getMonth() + 1).padStart(2, "0")}/${String(now.getDate()).padStart(2, "0")}   ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-            st.setAnalysisResult({ ...merged, time: timeString });
-            await st.save(true);
+            fresh.setAnalysisResult({ ...merged, time: timeString });
+            await fresh.save(true);
 
             if (addedCount === 0) {
                 msg = add.truncated
@@ -634,11 +713,31 @@ const Frame1693 = () => {
             console.error("Continue extraction failed:", err);
             msg = `继续提取失败：${err instanceof Error ? err.message : "未知错误"}`;
         } finally {
-            setAnalysisProgress(100);
-            setTimeout(() => { setIsAnalyzing(false); setAnalysisProgress(0); }, 300);
+            // 仅当仍是原项目才重置进度/运行态，避免切走后误动新项目的 UI
+            if (useProjectStore.getState().projectInstanceId === owner) {
+                setAnalysisProgress(100);
+                setTimeout(() => { setIsAnalyzing(false); setAnalysisProgress(0); }, 300);
+            }
             if (msg) alert(msg);
         }
     };
+
+    // 配置区两列网格共用样式
+    const fieldLabelStyle: React.CSSProperties = { fontSize: 11, color: "rgba(255,255,255,0.55)", marginBottom: 4, display: "block" };
+    const fieldSelectStyle: React.CSSProperties = { width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, color: "#fff", padding: "8px 10px", fontSize: 12, outline: "none", cursor: "pointer", appearance: "none" };
+    // 次级操作按钮（重新分析 / 继续提取）——带可见图标
+    const headerBtnStyle = (disabled: boolean): React.CSSProperties => ({
+        display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0,
+        padding: "8px 14px", borderRadius: 8,
+        background: "rgba(139,92,246,0.14)", border: "1px solid rgba(139,92,246,0.45)",
+        color: "#c4b5fd", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", userSelect: "none",
+        cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.45 : 1,
+    });
+    const splitBtnStyle = (disabled: boolean): React.CSSProperties => ({
+        flex: 1, textAlign: "center", padding: "12px 0", borderRadius: 8,
+        background: "linear-gradient(90deg,#7c3aed,#8b5cf6)", color: "#fff", fontSize: 14, fontWeight: 600,
+        cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.55 : 1, userSelect: "none",
+    });
 
     return (
         <div className="scroll-container">
@@ -706,68 +805,6 @@ const Frame1693 = () => {
                                                 </div>
                                             </div>
 
-                                            {/* File Upload mock area */}
-                                            <div
-                                                id="16_188"
-                                                className="stroke-wrapper-16_188"
-                                            >
-                                                <div className="Pixso-frame-16_188">
-                                                    <div className="frame-content-16_188">
-                                                        <div
-                                                            id="16_189"
-                                                            className="Pixso-frame-16_189"
-                                                        >
-                                                            <div
-                                                                id="16_190"
-                                                                className="Pixso-vector-16_190"
-                                                            ></div>
-                                                            <p
-                                                                id="16_193"
-                                                                className="Pixso-paragraph-16_193"
-                                                            >
-                                                                {
-                                                                    "TXT / DOC / DOCX"
-                                                                }
-                                                            </p>
-                                                            <p
-                                                                id="16_194"
-                                                                className="Pixso-paragraph-16_194"
-                                                            >
-                                                                {
-                                                                    "≤ 200,000 字  拖拽或"
-                                                                }
-                                                            </p>
-                                                            <p
-                                                                id="16_195"
-                                                                className="Pixso-paragraph-16_195"
-                                                                style={{ cursor: "pointer", textDecoration: "underline" }}
-                                                                onClick={() => {
-                                                                    // Mock file selection
-                                                                    setScriptText("阎王殿废墟大厅里狂风大作，落叶纷飞。男主角白起（中青衣壮汉，身穿黑色长袍与斗篷）右手缓缓握紧腰间佩戴的古老青铜古剑柄，指节因用力微微发白。而在他面前，身材轻盈、身穿淡白水袖仙裙的姬如雪冷然站立，眼神中流露出清冷。殿外山峰峡谷之巅，镇国将军怒吼咆哮，似乎预示着一场绝战将临。");
-                                                                    useProjectStore.getState().setScriptText("阎王殿废墟大厅里狂风大作，落叶纷飞。男主角白起（中青衣壮汉，身穿黑色长袍与斗篷）右手缓缓握紧腰间佩戴的古老青铜古剑柄，指节因用力微微发白。而在他面前，身材轻盈、身穿淡白水袖仙裙的姬如雪冷然站立，眼神中流露出清冷。殿外山峰峡谷之巅，镇国将军怒吼咆哮，似乎预示着一场绝战将临。");
-                                                                }}
-                                                            >
-                                                                {"选择示例剧本"}
-                                                            </p>
-                                                        </div>
-                                                        <div
-                                                            id="16_196"
-                                                            className="Pixso-frame-16_196"
-                                                        >
-                                                            <div className="frame-content-16_196">
-                                                                <p
-                                                                    id="16_197"
-                                                                    className="Pixso-paragraph-16_197"
-                                                                >
-                                                                    {isAnalyzed ? "已导入" : "待分析"}
-                                                                </p>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                <div className="stroke-16_188"></div>
-                                            </div>
-
                                             {/* Textarea Input area */}
                                             <div
                                                 id="16_198"
@@ -808,166 +845,88 @@ const Frame1693 = () => {
                                                 <div className="stroke-16_198"></div>
                                             </div>
 
-                                            {/* Template Selection */}
-                                            <div
-                                                id="16_201"
-                                                className="Pixso-frame-16_201"
-                                            >
-                                                <div className="frame-content-16_201">
-                                                    <div
-                                                        id="16_202"
-                                                        className="Pixso-frame-16_202"
-                                                    >
-                                                        <div className="frame-content-16_202">
-                                                            <p
-                                                                id="16_203"
-                                                                className="Pixso-paragraph-16_203"
-                                                            >
-                                                                {
-                                                                    "共享模板（可选）"
-                                                                }
-                                                            </p>
-                                                            <p
-                                                                id="16_204"
-                                                                className="Pixso-paragraph-16_204"
-                                                            >
-                                                                {
-                                                                    "选定从 skills/ 文件夹加载的提示词模板"
-                                                                }
-                                                            </p>
-                                                        </div>
-                                                    </div>
-                                                    <div
-                                                        id="16_205"
-                                                        className="stroke-wrapper-16_205"
-                                                        style={{ position: "relative" }}
-                                                    >
-                                                        <div className="Pixso-frame-16_205" style={{ padding: "0 10px", display: "flex", alignItems: "center" }}>
-                                                            <select
-                                                                value={selectedTemplateId}
-                                                                onChange={(e) => setSelectedTemplateId(e.target.value)}
-                                                                style={{
-                                                                    width: "100%",
-                                                                    background: "transparent",
-                                                                    border: "none",
-                                                                    color: "#ffffff",
-                                                                    fontSize: "12px",
-                                                                    outline: "none",
-                                                                    cursor: "pointer",
-                                                                    appearance: "none",
-                                                                    paddingRight: "20px"
-                                                                }}
-                                                            >
-                                                                {extractTemplates.length === 0 && (
-                                                                    <option value="" style={{ background: "#1f1f2e", color: "#fff" }}>（未加载管理端模板）</option>
-                                                                )}
-                                                                {extractTemplates.map((t) => (
-                                                                    <option key={t.id} value={t.id} style={{ background: "#1f1f2e", color: "#fff" }}>
-                                                                        {t.name}
-                                                                    </option>
-                                                                ))}
-                                                            </select>
-                                                            <div
-                                                                id="16_209"
-                                                                className="Pixso-vector-16_209"
-                                                                style={{ pointerEvents: "none", position: "absolute", right: "12px" }}
-                                                            ></div>
-                                                        </div>
-                                                        <div className="stroke-16_205"></div>
-                                                    </div>
-                                                </div>
-                                            </div>
-
-                                            {/* Visual Style Selection */}
-                                            <div
-                                                id="16_201_style"
-                                                className="Pixso-frame-16_201"
-                                                style={{ marginTop: "12px" }}
-                                            >
-                                                <div className="frame-content-16_201">
-                                                    <div
-                                                        id="16_202_style"
-                                                        className="Pixso-frame-16_202"
-                                                    >
-                                                        <div className="frame-content-16_202">
-                                                            <p
-                                                                className="Pixso-paragraph-16_203"
-                                                            >
-                                                                {
-                                                                    "视觉风格（当前）"
-                                                                }
-                                                            </p>
-                                                            <p
-                                                                className="Pixso-paragraph-16_204"
-                                                            >
-                                                                {
-                                                                    "提取和生成角色时使用此风格描述"
-                                                                }
-                                                            </p>
-                                                        </div>
-                                                    </div>
-                                                    <div
-                                                        className="stroke-wrapper-16_205"
-                                                        style={{ position: "relative" }}
-                                                    >
-                                                        <div className="Pixso-frame-16_205" style={{ padding: "0 10px", display: "flex", alignItems: "center" }}>
-                                                            <select
-                                                                value={visualStyle}
-                                                                onChange={(e) => {
-                                                                    useProjectStore.getState().setVisualStyle(e.target.value);
-                                                                }}
-                                                                style={{
-                                                                    width: "100%",
-                                                                    background: "transparent",
-                                                                    border: "none",
-                                                                    color: "#ffffff",
-                                                                    fontSize: "12px",
-                                                                    outline: "none",
-                                                                    cursor: "pointer",
-                                                                    appearance: "none",
-                                                                    paddingRight: "20px"
-                                                                }}
-                                                            >
-                                                                <option value="国漫电影感" style={{ background: "#1f1f2e", color: "#fff" }}>国漫电影感</option>
-                                                                <option value="2D日漫剧场版" style={{ background: "#1f1f2e", color: "#fff" }}>2D日漫剧场版</option>
-                                                                <option value="3D国风动画" style={{ background: "#1f1f2e", color: "#fff" }}>3D国风动画</option>
-                                                                <option value="电影级写实" style={{ background: "#1f1f2e", color: "#fff" }}>电影级写实</option>
-                                                                <option value="玄幻仙侠国漫" style={{ background: "#1f1f2e", color: "#fff" }}>玄幻仙侠国漫</option>
-                                                                <option value="武侠写实国风" style={{ background: "#1f1f2e", color: "#fff" }}>武侠写实国风</option>
-                                                                <option value="暗黑修仙风" style={{ background: "#1f1f2e", color: "#fff" }}>暗黑修仙风</option>
-                                                                <option value="热血少年漫风" style={{ background: "#1f1f2e", color: "#fff" }}>热血少年漫风</option>
-                                                                <option value="红果短剧AI漫剧风格" style={{ background: "#1f1f2e", color: "#fff" }}>红果短剧AI漫剧风格</option>
-                                                            </select>
-                                                            <div
-                                                                className="Pixso-vector-16_209"
-                                                                style={{ pointerEvents: "none", position: "absolute", right: "12px" }}
-                                                            ></div>
-                                                        </div>
-                                                        <div className="stroke-16_205"></div>
-                                                    </div>
-                                                </div>
-                                            </div>
-
-                                            {/* 文本模型选择（剧本分析 / 自动分集 共用） */}
-                                            <div style={{ marginTop: "12px", padding: "0 2px" }}>
+                                            {/* 配置区：两行三列网格（撑满宽度）——
+                                                列1 模型/风格、列2 剧集模板/资产模板、列3 剧集拆分/资产拆分按键。
+                                                剧集拆分在上、资产拆分在下；两者运行态独立（点哪个跑哪个，互不禁用、互不显示对方进度）。 */}
+                                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 12, width: "100%", alignItems: "end" }}>
+                                                {/* 行1 列1：模型选择 */}
                                                 <ModelPicker cap="text" label="分析模型（文本）" />
-                                            </div>
 
-                                            {/* Action Button: Analyze Script */}
-                                            <div
-                                                id="16_211"
-                                                className="Pixso-frame-16_211"
-                                                onClick={(isAnalyzing || !selectedTemplateId) ? undefined : handleAnalyzeScript}
-                                                style={{ cursor: (isAnalyzing || !selectedTemplateId) ? "not-allowed" : "pointer", opacity: (isAnalyzing || !selectedTemplateId) ? 0.7 : 1 }}
-                                                title={!selectedTemplateId ? "请先选择资产提取模板（需连接管理端并加载模板）" : ""}
-                                            >
-                                                <div className="frame-content-16_211">
-                                                    <p
-                                                        id="16_212"
-                                                        className="Pixso-paragraph-16_212"
+                                                {/* 行1 列2：剧集拆分模板 */}
+                                                <label>
+                                                    <span style={fieldLabelStyle}>剧集拆分模板</span>
+                                                    <select
+                                                        value={episodeTemplateId}
+                                                        onChange={(e) => setEpisodeTemplateId(e.target.value)}
+                                                        style={fieldSelectStyle}
                                                     >
-                                                        {isAnalyzing ? `正在分析中 (${analysisProgress}%)` : (selectedTemplateId ? "分析剧本" : "请先选择模板")}
-                                                    </p>
+                                                        <option value={QUICK_SPLIT_ID} style={{ background: "#1f1f2e" }}>快速·按「第N集」标记</option>
+                                                        <option value={QUICK_BLANKLINE_ID} style={{ background: "#1f1f2e" }}>快速·按连续两次换行（空行）</option>
+                                                        <option value={QUICK_N1_ID} style={{ background: "#1f1f2e" }}>快速·n-1（逢主编号拆分 1-1,2-1,3-1；兼容 场1-1）</option>
+                                                        <option value={QUICK_NN_ID} style={{ background: "#1f1f2e" }}>快速·n-n（逢编号拆分 1-1,1-2,2-1，更细；兼容 场1-1）</option>
+                                                        {episodeTemplates.map((t) => (
+                                                            <option key={t.id} value={t.id} style={{ background: "#1f1f2e" }}>
+                                                                {t.name}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                </label>
+
+                                                {/* 行1 列3：剧集拆分按键（独立运行态 episodeSplitting） */}
+                                                <div
+                                                    onClick={episodeSplitting ? undefined : handleSplitEpisodes}
+                                                    style={splitBtnStyle(episodeSplitting)}
+                                                    title="把剧本切分为多集（快速拆分不调用大模型）；与资产拆分独立，点哪个跑哪个"
+                                                >
+                                                    {episodeSplitting ? "拆分中…" : "剧集拆分"}
+                                                </div>
+
+                                                {/* 行2 列1：风格选择 */}
+                                                <label>
+                                                    <span style={fieldLabelStyle}>视觉风格</span>
+                                                    <select
+                                                        value={visualStyle}
+                                                        onChange={(e) => useProjectStore.getState().setVisualStyle(e.target.value)}
+                                                        style={fieldSelectStyle}
+                                                    >
+                                                        <option value="国漫电影感" style={{ background: "#1f1f2e" }}>国漫电影感</option>
+                                                        <option value="2D日漫剧场版" style={{ background: "#1f1f2e" }}>2D日漫剧场版</option>
+                                                        <option value="3D国风动画" style={{ background: "#1f1f2e" }}>3D国风动画</option>
+                                                        <option value="电影级写实" style={{ background: "#1f1f2e" }}>电影级写实</option>
+                                                        <option value="玄幻仙侠国漫" style={{ background: "#1f1f2e" }}>玄幻仙侠国漫</option>
+                                                        <option value="武侠写实国风" style={{ background: "#1f1f2e" }}>武侠写实国风</option>
+                                                        <option value="暗黑修仙风" style={{ background: "#1f1f2e" }}>暗黑修仙风</option>
+                                                        <option value="热血少年漫风" style={{ background: "#1f1f2e" }}>热血少年漫风</option>
+                                                        <option value="红果短剧AI漫剧风格" style={{ background: "#1f1f2e" }}>红果短剧AI漫剧风格</option>
+                                                    </select>
+                                                </label>
+
+                                                {/* 行2 列2：资产拆分模板 */}
+                                                <label>
+                                                    <span style={fieldLabelStyle}>资产拆分模板</span>
+                                                    <select
+                                                        value={selectedTemplateId}
+                                                        onChange={(e) => setSelectedTemplateId(e.target.value)}
+                                                        style={fieldSelectStyle}
+                                                    >
+                                                        {extractTemplates.length === 0 && (
+                                                            <option value="" style={{ background: "#1f1f2e" }}>（未加载管理端模板）</option>
+                                                        )}
+                                                        {extractTemplates.map((t) => (
+                                                            <option key={t.id} value={t.id} style={{ background: "#1f1f2e" }}>
+                                                                {t.name}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                </label>
+
+                                                {/* 行2 列3：资产拆分按键（独立运行态 isAnalyzing） */}
+                                                <div
+                                                    onClick={(isAnalyzing || !selectedTemplateId) ? undefined : handleExtractAssets}
+                                                    style={splitBtnStyle(isAnalyzing || !selectedTemplateId)}
+                                                    title={!selectedTemplateId ? "请先选择资产拆分模板（需连接管理端并加载模板）" : ""}
+                                                >
+                                                    {isAnalyzing ? `处理中 (${analysisProgress}%)` : (selectedTemplateId ? "资产拆分" : "请先选择模板")}
                                                 </div>
                                             </div>
                                         </div>
@@ -1000,56 +959,23 @@ const Frame1693 = () => {
                                                         }
                                                     </p>
                                                 </div>
-                                                <div style={{ display: "flex", gap: 8 }}>
-                                                    {/* 继续提取：把已提取资产作查重清单喂回模型，只补全剩余、不重复不覆盖 */}
-                                                    <div
-                                                        className="stroke-wrapper-16_218"
-                                                        style={{ cursor: (isAnalyzing || !isAnalyzed) ? "not-allowed" : "pointer", opacity: (isAnalyzing || !isAnalyzed) ? 0.45 : 1 }}
-                                                        title="把已提取的资产作为查重清单喂回模型，只补全剩余资产（不重复、不覆盖已有），可反复点击直到无新增"
-                                                        onClick={(isAnalyzing || !isAnalyzed) ? undefined : handleContinueExtraction}
-                                                    >
-                                                        <div className="Pixso-frame-16_218">
-                                                            <div className="frame-content-16_218">
-                                                                <div className="Pixso-frame-16_219"></div>
-                                                                <p className="Pixso-paragraph-16_220">
-                                                                    {"继续提取"}
-                                                                </p>
-                                                            </div>
-                                                        </div>
-                                                        <div className="stroke-16_218"></div>
-                                                    </div>
-                                                    <div
-                                                        id="16_218"
-                                                        className="stroke-wrapper-16_218"
-                                                        style={{ cursor: isAnalyzing ? "not-allowed" : "pointer", opacity: isAnalyzing ? 0.45 : 1 }}
-                                                        onClick={isAnalyzing ? undefined : handleAnalyzeScript}
-                                                    >
-                                                        <div className="Pixso-frame-16_218">
-                                                            <div className="frame-content-16_218">
-                                                                <div
-                                                                    id="16_219"
-                                                                    className="Pixso-frame-16_219"
-                                                                ></div>
-                                                                <p
-                                                                    id="16_220"
-                                                                    className="Pixso-paragraph-16_220"
-                                                                >
-                                                                    {"重新分析"}
-                                                                </p>
-                                                            </div>
-                                                        </div>
-                                                        <div className="stroke-16_218"></div>
-                                                    </div>
-                                                </div>
                                             </div>
                                         </div>
 
-                                        {/* Status and Progress summary bar */}
+                                        {/* Status bar（最近分析时间）——重新分析置于容器右上角，与「继续提取」对应 */}
                                         <div
                                             id="16_221"
                                             className="stroke-wrapper-16_221"
                                         >
                                             <div className="Pixso-frame-16_221" style={{ position: "relative", overflow: "hidden" }}>
+                                                {/* 重新分析：容器右上角 */}
+                                                <div
+                                                    onClick={isAnalyzing ? undefined : handleExtractAssets}
+                                                    style={{ ...headerBtnStyle(isAnalyzing), position: "absolute", top: 14, right: 14, zIndex: 2 }}
+                                                    title="重新运行资产拆分（整体替换当前资产）"
+                                                >
+                                                    <RefreshCw size={15} /> 重新分析
+                                                </div>
                                                 {/* Visual progress bar highlight */}
                                                 <div style={{
                                                     position: "absolute",
@@ -1102,12 +1028,23 @@ const Frame1693 = () => {
                                         >
                                             <div className="Pixso-frame-16_226">
                                                 <div className="frame-content-16_226">
-                                                    <p
-                                                        id="16_227"
-                                                        className="Pixso-paragraph-16_227"
-                                                    >
-                                                        {isAnalyzing ? "正在提取资产实体..." : (isAnalyzed ? "资产提取完成" : "尚未分析")}
-                                                    </p>
+                                                    {/* 标题行：资产提取完成（左） + 继续提取（右，对齐右边） */}
+                                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, width: "100%" }}>
+                                                        <p
+                                                            id="16_227"
+                                                            className="Pixso-paragraph-16_227"
+                                                        >
+                                                            {isAnalyzing ? "正在提取资产实体..." : (isAnalyzed ? "资产提取完成" : "尚未分析")}
+                                                        </p>
+                                                        {/* 继续提取：把已提取资产作查重清单喂回模型，只补全剩余、不重复不覆盖 */}
+                                                        <div
+                                                            onClick={(isAnalyzing || !isAnalyzed) ? undefined : handleContinueExtraction}
+                                                            style={headerBtnStyle(isAnalyzing || !isAnalyzed)}
+                                                            title="把已提取的资产作为查重清单喂回模型，只补全剩余资产（不重复、不覆盖已有），可反复点击直到无新增"
+                                                        >
+                                                            <ListPlus size={15} /> 继续提取
+                                                        </div>
+                                                    </div>
                                                     <p
                                                         id="16_228"
                                                         className="Pixso-paragraph-16_228"
@@ -1119,230 +1056,30 @@ const Frame1693 = () => {
                                                                 : "系统会在检查剧本后自动识别角色、场景、物品等实体。")}
                                                     </p>
 
-                                                    {/* Entity Counts Cards（6 项 2 行 3 列：角色/场景/物品/生物/群像/分集） */}
-                                                    <div
-                                                        id="16_229"
-                                                        className="Pixso-frame-16_229"
-                                                    >
-                                                        <div className="frame-content-16_229" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, alignItems: "stretch" }}>
-                                                            {/* 1. Characters Card */}
-                                                            <div
-                                                                id="16_230"
-                                                                className="stroke-wrapper-16_230"
-                                                            >
-                                                                <div className="Pixso-frame-16_230">
-                                                                    <div className="frame-content-16_230">
-                                                                        <div
-                                                                            id="16_231"
-                                                                            className="Pixso-frame-16_231"
-                                                                        >
-                                                                            <div
-                                                                                id="16_232"
-                                                                                className="Pixso-vector-16_232"
-                                                                            ></div>
-                                                                            <p
-                                                                                id="16_237"
-                                                                                className="Pixso-paragraph-16_237"
-                                                                            >
-                                                                                {
-                                                                                    "角色"
-                                                                                }
-                                                                            </p>
-                                                                        </div>
-                                                                        <p
-                                                                            id="16_238"
-                                                                            className="Pixso-paragraph-16_238"
-                                                                        >
-                                                                            {characters.length}
-                                                                        </p>
-                                                                        <p
-                                                                            id="16_239"
-                                                                            className="Pixso-paragraph-16_239"
-                                                                        >
-                                                                            {
-                                                                                isAnalyzed ? "源于剧本自动识别" : "未源于角色自动识别"
-                                                                            }
-                                                                        </p>
+                                                    {/* 实体统计卡（6 项 2 行 3 列：大号数字 + 右侧大图标填充空白） */}
+                                                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16, marginTop: 12, width: "100%" }}>
+                                                        {([
+                                                            { label: "角色", count: characters.length, desc: isAnalyzed ? "源于剧本自动识别" : "未识别角色", Icon: User, accent: "#a78bfa" },
+                                                            { label: "场景", count: scenes.length, desc: "覆盖的场景数量", Icon: ImageIcon, accent: "#60a5fa" },
+                                                            { label: "物品", count: items.length, desc: "关键道具数量", Icon: Package, accent: "#f5c451" },
+                                                            { label: "生物", count: organisms.length, desc: "涉及的动物/生物", Icon: PawPrint, accent: "#34d399" },
+                                                            { label: "群像", count: crowds.length, desc: isAnalyzed ? "阵营/群体数量" : "未识别群像", Icon: Users, accent: "#f472b6" },
+                                                            { label: "分集", count: episodes.length, desc: isAnalyzed ? "脚本可识别的分集总量" : "未分集", Icon: Clapperboard, accent: "#22d3ee" },
+                                                        ] as const).map((c) => {
+                                                            const BigIcon = c.Icon;
+                                                            return (
+                                                                <div key={c.label} style={{ position: "relative", overflow: "hidden", padding: "16px 18px", borderRadius: 12, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)" }}>
+                                                                    {/* 右侧大号装饰图标，填充原本空旷的右半区 */}
+                                                                    <BigIcon size={66} color={c.accent} strokeWidth={1.5} style={{ position: "absolute", right: -6, bottom: -8, opacity: 0.14, pointerEvents: "none" }} />
+                                                                    <div style={{ display: "flex", alignItems: "center", gap: 8, position: "relative", zIndex: 1 }}>
+                                                                        <BigIcon size={16} color={c.accent} />
+                                                                        <span style={{ fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.85)" }}>{c.label}</span>
                                                                     </div>
+                                                                    <div style={{ fontSize: 34, fontWeight: 800, lineHeight: 1.1, color: "#fff", margin: "10px 0 4px", position: "relative", zIndex: 1 }}>{c.count}</div>
+                                                                    <div style={{ fontSize: 11, color: "rgba(255,255,255,0.45)", position: "relative", zIndex: 1 }}>{c.desc}</div>
                                                                 </div>
-                                                                <div className="stroke-16_230"></div>
-                                                            </div>
-
-                                                            {/* 2. Scenes Card */}
-                                                            <div
-                                                                id="16_240"
-                                                                className="stroke-wrapper-16_240"
-                                                            >
-                                                                <div className="Pixso-frame-16_240">
-                                                                    <div className="frame-content-16_240">
-                                                                        <div
-                                                                            id="16_241"
-                                                                            className="Pixso-frame-16_241"
-                                                                        >
-                                                                            <div
-                                                                                id="16_242"
-                                                                                className="Pixso-frame-16_242"
-                                                                            >
-                                                                                <div
-                                                                                    id="16_243"
-                                                                                    className="stroke-wrapper-16_243"
-                                                                                >
-                                                                                    <div className="Pixso-rectangle-16_243"></div>
-                                                                                    <div className="stroke-16_243"></div>
-                                                                                </div>
-                                                                                <div
-                                                                                    id="16_244"
-                                                                                    className="Pixso-vector-16_244"
-                                                                                ></div>
-                                                                                <div
-                                                                                    id="16_245"
-                                                                                    className="Pixso-vector-16_245"
-                                                                                ></div>
-                                                                            </div>
-                                                                            <p
-                                                                                id="16_246"
-                                                                                className="Pixso-paragraph-16_246"
-                                                                            >
-                                                                                {
-                                                                                    "场景"
-                                                                                }
-                                                                            </p>
-                                                                        </div>
-                                                                        <p
-                                                                            id="16_247"
-                                                                            className="Pixso-paragraph-16_247"
-                                                                        >
-                                                                            {scenes.length}
-                                                                        </p>
-                                                                        <p
-                                                                            id="16_248"
-                                                                            className="Pixso-paragraph-16_248"
-                                                                        >
-                                                                            {
-                                                                                "覆盖的场景数量"
-                                                                            }
-                                                                        </p>
-                                                                    </div>
-                                                                </div>
-                                                                <div className="stroke-16_240"></div>
-                                                            </div>
-
-                                                            {/* 3. Items Card */}
-                                                            <div
-                                                                id="16_249"
-                                                                className="stroke-wrapper-16_249"
-                                                            >
-                                                                <div className="Pixso-frame-16_249">
-                                                                    <div className="frame-content-16_249">
-                                                                        <div
-                                                                            id="16_250"
-                                                                            className="Pixso-frame-16_250"
-                                                                        >
-                                                                            <div
-                                                                                id="16_251"
-                                                                                className="Pixso-vector-16_251"
-                                                                            ></div>
-                                                                            <p
-                                                                                id="16_256"
-                                                                                className="Pixso-paragraph-16_256"
-                                                                            >
-                                                                                {
-                                                                                    "物品"
-                                                                                }
-                                                                            </p>
-                                                                        </div>
-                                                                        <p
-                                                                            id="16_257"
-                                                                            className="Pixso-paragraph-16_257"
-                                                                        >
-                                                                            {items.length}
-                                                                        </p>
-                                                                        <p
-                                                                            id="16_258"
-                                                                            className="Pixso-paragraph-16_258"
-                                                                        >
-                                                                            {
-                                                                                "关键道具数量"
-                                                                            }
-                                                                        </p>
-                                                                    </div>
-                                                                </div>
-                                                                <div className="stroke-16_249"></div>
-                                                            </div>
-
-                                                            {/* 4. Organisms Card */}
-                                                            <div
-                                                                id="16_259"
-                                                                className="stroke-wrapper-16_259"
-                                                            >
-                                                                <div className="Pixso-frame-16_259">
-                                                                    <div className="frame-content-16_259">
-                                                                        <div
-                                                                            id="16_260"
-                                                                            className="Pixso-frame-16_260"
-                                                                        >
-                                                                            <div
-                                                                                id="16_261"
-                                                                                className="Pixso-vector-16_261"
-                                                                            ></div>
-                                                                            <p
-                                                                                id="16_264"
-                                                                                className="Pixso-paragraph-16_264"
-                                                                            >
-                                                                                {
-                                                                                    "生物"
-                                                                                }
-                                                                            </p>
-                                                                        </div>
-                                                                        <p
-                                                                            id="16_265"
-                                                                            className="Pixso-paragraph-16_265"
-                                                                        >
-                                                                            {organisms.length}
-                                                                        </p>
-                                                                        <p
-                                                                            id="16_266"
-                                                                            className="Pixso-paragraph-16_266"
-                                                                        >
-                                                                            {
-                                                                                "涉及的动物/生物"
-                                                                            }
-                                                                        </p>
-                                                                    </div>
-                                                                </div>
-                                                                <div className="stroke-16_259"></div>
-                                                            </div>
-
-                                                            {/* 5. Crowds Card */}
-                                                            <div className="stroke-wrapper-16_230">
-                                                                <div className="Pixso-frame-16_230">
-                                                                    <div className="frame-content-16_230">
-                                                                        <div className="Pixso-frame-16_231">
-                                                                            <div className="Pixso-vector-16_232"></div>
-                                                                            <p className="Pixso-paragraph-16_237">{"群像"}</p>
-                                                                        </div>
-                                                                        <p className="Pixso-paragraph-16_238">{crowds.length}</p>
-                                                                        <p className="Pixso-paragraph-16_239">{isAnalyzed ? "阵营/群体数量" : "未识别群像"}</p>
-                                                                    </div>
-                                                                </div>
-                                                                <div className="stroke-16_230"></div>
-                                                            </div>
-
-                                                            {/* 6. Episodes Card（分集并入实体卡） */}
-                                                            <div className="stroke-wrapper-16_230">
-                                                                <div className="Pixso-frame-16_230">
-                                                                    <div className="frame-content-16_230">
-                                                                        <div className="Pixso-frame-16_231">
-                                                                            <div className="Pixso-vector-16_232"></div>
-                                                                            <p className="Pixso-paragraph-16_237">{"分集"}</p>
-                                                                        </div>
-                                                                        <p className="Pixso-paragraph-16_238">{episodes.length}</p>
-                                                                        <p className="Pixso-paragraph-16_239">{isAnalyzed ? "脚本可识别的分集总量" : "未分集"}</p>
-                                                                    </div>
-                                                                </div>
-                                                                <div className="stroke-16_230"></div>
-                                                            </div>
-                                                        </div>
+                                                            );
+                                                        })}
                                                     </div>
                                                 </div>
                                             </div>
@@ -1350,24 +1087,30 @@ const Frame1693 = () => {
                                         </div>
 
                                         {/* 项目视觉圣经：全局风格 / 全局色调 / 全局反向提示词（资产提取产出，三栏布局，可编辑） */}
-                                        <div style={{ marginBottom: 16, padding: 16, borderRadius: 12, background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)" }}>
-                                            <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
-                                                <span style={{ fontSize: 14, fontWeight: 600, color: "#fff" }}>项目视觉圣经</span>
-                                                <span style={{ fontSize: 11, color: "rgba(255,255,255,0.45)" }}>全局锚点 · 所有资产继承，禁止漂移</span>
+                                        <div style={{ width: "100%", boxSizing: "border-box", marginBottom: 16, padding: 18, borderRadius: 14, background: "linear-gradient(135deg, rgba(139,92,246,0.10) 0%, rgba(255,255,255,0.03) 45%)", border: "1px solid rgba(139,92,246,0.22)", boxShadow: "0 6px 24px rgba(0,0,0,0.18)" }}>
+                                            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                                                <span style={{ width: 6, height: 18, borderRadius: 3, background: "linear-gradient(180deg, #a78bfa, #8b5cf6)", flexShrink: 0 }} />
+                                                <span style={{ fontSize: 15, fontWeight: 700, color: "#fff", letterSpacing: 0.3 }}>项目视觉圣经</span>
+                                                <span style={{ fontSize: 11, color: "rgba(167,139,250,0.9)", background: "rgba(139,92,246,0.14)", border: "1px solid rgba(139,92,246,0.28)", padding: "2px 9px", borderRadius: 999 }}>全局锚点·所有资产继承，禁止漂移</span>
                                             </div>
-                                            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+                                            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
                                                 {([
-                                                    { key: "style", label: "全局风格", ph: "如：3D国风动画，院线级非真人化次世代国漫…" },
-                                                    { key: "colorSystem", label: "全局色调", ph: "如：主色青铜绿、阴煞黑、符箓金…" },
-                                                    { key: "negativeGlobal", label: "全局反向提示词", ph: "如：禁止真人写实、照片级毛孔、UE5真人扫描脸…" },
+                                                    { key: "style", label: "全局风格", accent: "#a78bfa", ph: "如：3D国风动画，院线级非真人化次世代国漫…" },
+                                                    { key: "colorSystem", label: "全局色调", accent: "#f5c451", ph: "如：主色青铜绿、阴煞黑、符箓金…" },
+                                                    { key: "negativeGlobal", label: "全局反向提示词", accent: "#f87171", ph: "如：禁止真人写实、照片级毛孔、UE5真人扫描脸…" },
                                                 ] as const).map((f) => (
-                                                    <div key={f.key} style={{ display: "flex", flexDirection: "column" }}>
-                                                        <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>{f.label}</div>
+                                                    <div key={f.key} style={{ display: "flex", flexDirection: "column", padding: 12, borderRadius: 10, background: "rgba(0,0,0,0.22)", border: `1px solid ${f.accent}33` }}>
+                                                        <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 8 }}>
+                                                            <span style={{ width: 7, height: 7, borderRadius: "50%", background: f.accent, boxShadow: `0 0 6px ${f.accent}99`, flexShrink: 0 }} />
+                                                            <span style={{ fontSize: 12.5, fontWeight: 600, color: "rgba(255,255,255,0.92)" }}>{f.label}</span>
+                                                        </div>
                                                         <textarea
                                                             value={visualBible[f.key] || ""}
                                                             onChange={(e) => setVisualBibleStore({ [f.key]: e.target.value })}
                                                             placeholder={f.ph}
-                                                            style={{ width: "100%", minHeight: 120, resize: "vertical", boxSizing: "border-box", padding: "8px 10px", borderRadius: 8, background: "rgba(0,0,0,0.25)", border: "1px solid rgba(255,255,255,0.1)", color: "#fff", fontSize: 12, lineHeight: 1.5, outline: "none" }}
+                                                            onFocus={(e) => { e.currentTarget.style.borderColor = `${f.accent}99`; e.currentTarget.style.boxShadow = `0 0 0 2px ${f.accent}22`; }}
+                                                            onBlur={(e) => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.08)"; e.currentTarget.style.boxShadow = "none"; }}
+                                                            style={{ width: "100%", minHeight: 132, resize: "vertical", boxSizing: "border-box", padding: "9px 11px", borderRadius: 8, background: "rgba(0,0,0,0.35)", border: "1px solid rgba(255,255,255,0.08)", color: "#fff", fontSize: 12, lineHeight: 1.6, outline: "none", transition: "border-color 0.15s, box-shadow 0.15s" }}
                                                         />
                                                     </div>
                                                 ))}

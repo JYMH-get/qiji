@@ -8,7 +8,7 @@ const Frame161000 = () => {
     return (
         <div className="scroll-container">
             <div id="16_285" className="Pixso-frame-16_285">
-                <EditorHeader title="道具配置" />
+                <EditorHeader title="道具配置" showAssetCheck />
                 <div id="16_309" className="Pixso-frame-16_309">
                     <div className="frame-content-16_309" style={{ display: "flex", height: "100%" }}>
                         <EditorSidebar activeTab="物品" />

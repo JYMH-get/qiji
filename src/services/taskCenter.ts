@@ -5,8 +5,6 @@
  * 二者都经唯一一条提交路径 runPurpose → 本中心。所有进行中的单任务共用一个定时器、
  * 一份超时/抖动策略；每个任务注册自己的 onUpdate 回调（画布→写节点运行态+落资产，
  * 表格→resolve Promise），按 taskId 分发。
- *
- * （批量路径 nodes/batchExecutor 仍为独立的批量协调器，不走此中心。）
  */
 
 import { TaskTracker } from "./taskTracker";
@@ -18,6 +16,8 @@ export type TaskUpdate = (
 	error?: string,
 	assetId?: string,
 	partialText?: string,
+	/** 服务端未转存的原始时效直链结果（meta.rehosted=false）——调用方需本机下载+上传转存（第158轮） */
+	rawLink?: boolean,
 ) => void;
 
 /** taskId → 该任务的更新回调 */
@@ -28,28 +28,28 @@ let _tracker: TaskTracker | null = null;
 function getTracker(): TaskTracker {
 	if (_tracker) return _tracker;
 	// TaskTracker 的 nodeId 形参在此用作关联 id（= taskId），用于回查 handler
-	_tracker = new TaskTracker((corrId, progress, status, resultUri, error, assetId, partialText) => {
+	_tracker = new TaskTracker((corrId, progress, status, resultUri, error, assetId, partialText, rawLink) => {
 		const h = handlers.get(corrId);
 		if (!h) return;
-		h(progress, status, resultUri, error, assetId, partialText);
-		if (status === "success" || status === "failed") handlers.delete(corrId);
+		h(progress, status, resultUri, error, assetId, partialText, rawLink);
+		if (status === "success" || status === "failed" || status === "lost") handlers.delete(corrId);
 	});
 	return _tracker;
 }
 
-/** 注册并开始跟踪一个单任务；到达 success/failed 后自动注销 handler */
+/**
+ * 注册并开始跟踪一个单任务；到达 success/failed 后自动注销 handler。
+ * 客户端不做超时——只要任务在跟踪就持续轮询，终态由服务端决定（见 taskTracker）。
+ */
 export function trackTask(opts: {
 	taskId: string;
 	adapterKey: string;
 	onUpdate: TaskUpdate;
-	/** 轮询超时（ms）；长文本(20w字)可传更大值，缺省走 TaskTracker 默认 */
-	timeoutMs?: number;
 }): void {
 	handlers.set(opts.taskId, opts.onUpdate);
 	getTracker().track({
 		taskId: opts.taskId,
 		nodeId: opts.taskId, // 关联 id = taskId
 		adapterKey: opts.adapterKey,
-		timeoutMs: opts.timeoutMs,
 	});
 }

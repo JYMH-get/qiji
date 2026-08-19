@@ -28,13 +28,17 @@ export interface SubmitResult {
 }
 
 export interface PollResult {
-  status: "queued" | "running" | "success" | "failed";
+  /** lost：服务端可达但找不到该任务（多因服务端重启丢了内存任务）——终态，但可凭原 taskId 重连找回 */
+  status: "queued" | "running" | "success" | "failed" | "lost";
   progress: number;
   resultUri?: string;
   /** 管理端分配的资产 id（图像/视频成功时；用于三元映射与本地落盘） */
   assetId?: string;
   /** 进行中任务的部分正文（文本流式：服务端 partialText 经 task.result.text 透出，供边收边解析） */
   partialText?: string;
+  /** 服务端未能转存结果（meta.rehosted=false，resultUri=上游原始时效直链）——
+   *  客户端应自行下载（本机网络）并经 POST /v1/assets 上传回服务端落 OSS 替换成永久直链（第158轮） */
+  rawLink?: boolean;
   error?: string;
 }
 
@@ -45,6 +49,8 @@ export interface ModelAdapter {
   /** 该模型可服务的节点类型 */
   nodeTypes: NodeType[];
   modes: CapabilityMode[];
+  /** 参数表单以 mode.paramsSchema 为准（第三方本地渠道：参数按第三方要求，覆盖节点 spec 的固定参数） */
+  paramsFromMode?: boolean;
   /** 基准积分（单次/单位） */
   baseCost: number;
   estimateCost(modeKey: string, params: Record<string, unknown>): number;

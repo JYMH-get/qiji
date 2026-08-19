@@ -47,8 +47,7 @@ export function useDragToCanvas() {
       if (item.type === "sidebar") {
         tempNode = makeNode(item.nodeType, nodeX, nodeY);
       } else {
-        const nodeType = `file_${item.kind === "script" ? "document" : item.kind}`;
-        tempNode = makeNode(nodeType, nodeX, nodeY);
+        tempNode = makeNode("upload", nodeX, nodeY);
         tempNode.data.resultAssetId = item.assetId;
       }
       createdNodeId = tempNode.id;
@@ -109,8 +108,7 @@ export function useDragToCanvas() {
           const screenCenterX = window.innerWidth / 2;
           const screenCenterY = window.innerHeight / 2;
           const flowPos = screenToFlowPosition({ x: screenCenterX, y: screenCenterY });
-          const nodeType = `file_${item.kind === "script" ? "document" : item.kind}`;
-          const newNode = makeNode(nodeType, flowPos.x - NODE_W / 2, flowPos.y - NODE_H / 2);
+          const newNode = makeNode("upload", flowPos.x - NODE_W / 2, flowPos.y - NODE_H / 2);
           newNode.data.resultAssetId = item.assetId;
           dispatchCommand({ type: "addNode", node: newNode });
         }

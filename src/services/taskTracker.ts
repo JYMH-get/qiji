@@ -10,10 +10,6 @@ export interface TrackedTask {
 	taskId: string;
 	nodeId: string;
 	adapterKey: string;
-	/** 入队时间戳（ms）；用于超时判定 */
-	startedAt: number;
-	/** 超时阈值（ms）；超过则置为 failed */
-	timeoutMs: number;
 }
 
 export type ProgressCallback = (
@@ -24,23 +20,22 @@ export type ProgressCallback = (
 	error?: string,
 	assetId?: string,
 	partialText?: string,
+	/** 服务端未转存的原始时效直链结果（meta.rehosted=false）——调用方需本机下载+上传转存（第158轮） */
+	rawLink?: boolean,
 ) => void;
-
-const DEFAULT_TIMEOUT_MS = 4 * 60 * 1000;
 
 export class TaskTracker {
 	private tasks = new Map<string, TrackedTask>();
 	private timer: ReturnType<typeof setTimeout> | null = null;
-	// 1s 轮询：文本流式时「提取一个刷新一个」更细腻（部分正文每秒刷新一次）；图/视频长任务也仍可接受
-	private intervalMs = 1000;
+	// 常规 5s 轮询：减轻管理端轮询压力。
+	private intervalMs = 5000;
+	// 文本流式快轮询：某任务仍 running 且已返回部分正文（partialText）时，下一轮用此更短间隔，
+	// 让智能推理 / 智能拆分等文本流式「边出边填」更顺滑；图片/视频任务无 partialText，仍走 5s。
+	private streamIntervalMs = 1500;
 	constructor(private onProgress: ProgressCallback) {}
 
-	track(task: Omit<TrackedTask, "startedAt" | "timeoutMs"> & { timeoutMs?: number }): void {
-		this.tasks.set(task.taskId, {
-			...task,
-			startedAt: Date.now(),
-			timeoutMs: task.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-		});
+	track(task: TrackedTask): void {
+		this.tasks.set(task.taskId, { ...task });
 		this.ensureRunning();
 	}
 
@@ -57,14 +52,12 @@ export class TaskTracker {
 		if (this.timer || this.tasks.size === 0) return;
 		const tick = async () => {
 			this.timer = null;
+			let streaming = false; // 本轮是否有「仍在 running 且已出部分正文」的文本任务 → 下轮快轮询
 			await Promise.all(
 				[...this.tasks.values()].map(async (t) => {
-					// 超时保护
-					if (Date.now() - t.startedAt > t.timeoutMs) {
-						this.finish(t.taskId);
-						this.onProgress(t.nodeId, 100, "failed", undefined, "生成超时，已取消");
-						return;
-					}
+					// 客户端**不做超时**：超时是服务端的职责（服务端对图/视频等有自己的超时，
+					// 到点会把任务置为 failed）。客户端只要任务还在跟踪，就持续向服务端取结果，
+					// 只认服务端的 success/failed 两个终态；网络/网关抖动当作仍在进行、下轮重试。
 					const adapter = getAdapter(t.adapterKey);
 					if (!adapter) {
 						this.finish(t.taskId);
@@ -73,17 +66,20 @@ export class TaskTracker {
 					}
 					try {
 						const res = await adapter.poll(t.taskId);
-						if (res.status === "success" || res.status === "failed") this.finish(t.taskId);
-						this.onProgress(t.nodeId, res.progress, res.status, res.resultUri, res.error, res.assetId, res.partialText);
+						// success/failed/lost 均为终态：停止轮询（lost=服务端丢任务，由上层提示+提供重连）
+						if (res.status === "success" || res.status === "failed" || res.status === "lost") this.finish(t.taskId);
+						else if (res.status === "running" && res.partialText) streaming = true; // 文本流式中 → 下轮快轮询
+						this.onProgress(t.nodeId, res.progress, res.status, res.resultUri, res.error, res.assetId, res.partialText, res.rawLink);
 					} catch (err) {
 						// 网络/网关抖动：保留任务，下一轮继续（不立即失败）
 						this.onProgress(t.nodeId, 50, "running", undefined, (err as Error).message);
 					}
 				}),
 			);
-			if (this.tasks.size) this.timer = setTimeout(tick, this.intervalMs);
+			// 有文本流式任务在跑 → 下轮快轮询(1.5s) 让部分正文更顺滑；否则常规 5s
+			if (this.tasks.size) this.timer = setTimeout(tick, streaming ? this.streamIntervalMs : this.intervalMs);
 		};
-		// 首轮稍快触发，改善同步结果的呈现延迟
-		this.timer = setTimeout(tick, 400);
+		// 首轮 2s 触发，之后按是否流式自适应（1.5s / 5s）
+		this.timer = setTimeout(tick, 2000);
 	}
 }

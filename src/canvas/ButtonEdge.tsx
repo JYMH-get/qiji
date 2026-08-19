@@ -11,8 +11,11 @@ export function ButtonEdge({
   sourcePosition,
   targetPosition,
   style = {},
+  data,
 }: EdgeProps) {
   const [hovered, setHovered] = useState(false);
+  // 选中节点的上下游连线高亮发光（data.active 由 Canvas 按选中节点标注）
+  const active = Boolean((data as { active?: boolean } | undefined)?.active);
 
   const [edgePath] = getBezierPath({
     sourceX,
@@ -56,10 +59,12 @@ export function ButtonEdge({
         style={{
           ...style,
           filter: hovered
-            ? "drop-shadow(0 0 6px rgba(160,180,220,0.65))"
-            : undefined,
-          stroke: hovered ? "rgba(160,180,220,0.9)" : style.stroke,
-          strokeWidth: hovered ? 2.5 : 1.5,
+            ? "drop-shadow(0 0 7px rgba(180,200,255,0.75))"
+            : active
+              ? "drop-shadow(0 0 7px rgba(122,168,255,0.85))"
+              : undefined,
+          stroke: hovered ? "rgba(190,210,255,0.95)" : active ? "#8fb4ff" : style.stroke,
+          strokeWidth: hovered ? 2.8 : active ? 2.6 : 1.8,
         }}
       />
     </g>

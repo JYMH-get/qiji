@@ -1,54 +1,49 @@
 import { useState, useEffect } from "react";
-import { useSettingsStore } from "@/store/settingsStore";
+import { useSettingsStore, DEFAULT_TIDY_ROW_GAP } from "@/store/settingsStore";
 import { useConnectionStore } from "@/store/connectionStore";
 import { useCatalogStore } from "@/store/catalogStore";
 import { useUiStore } from "@/store/uiStore";
 import {
-  getChannelModelsForNodeType,
-  getModelsForCapability,
-  type ModelOption,
-} from "@/services/adapters/channelAdapter";
-import type { Capability } from "@/contract";
-import {
   X, FolderOpen, Settings, RotateCcw, Cloud, Loader2,
-  CheckCircle, XCircle, ChevronDown, RefreshCw, Server,
+  CheckCircle, XCircle, RefreshCw, Server, Keyboard,
+  LayoutGrid, Plus, Trash2,
 } from "lucide-react";
-import { MultiSelectDropdown } from "@/components/ui/MultiSelectDropdown";
+import { PRESET_CATEGORY } from "@/lib/presetSchemes";
+import { versionLabel } from "@/lib/appVersion";
+import {
+  KEYMAP_ACTIONS, FIXED_KEYS, RESERVED_COMBOS,
+  comboFromEvent, comboLabel, effectiveBinding,
+} from "@/canvas/keymap";
 
-type TabKey = "connection" | "models" | "preferences" | "webdav";
+// 第132轮删「模型」页（用户定）：模型全量默认可用、无勾选子集、无全局默认模型
+//（未显式选择时自动取该能力第一个可用模型，选择在各生成界面的模型下拉里做、随项目落盘）。
+type TabKey = "connection" | "presets" | "preferences" | "keymap" | "webdav";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "connection", label: "管理端" },
-  { key: "models", label: "模型" },
+  { key: "presets", label: "预设方案" },
   { key: "preferences", label: "生成偏好" },
+  { key: "keymap", label: "快捷键" },
   { key: "webdav", label: "WebDAV" },
 ];
-
-const CAT_LABELS: Record<string, string> = {
-  image: "生图",
-  video: "视频",
-  text: "文本",
-  audio: "音频",
-};
 
 export function SettingsModal() {
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen);
   const [activeTab, setActiveTab] = useState<TabKey>("connection");
 
+  // 「无可用模型」入口经 openModelSettings 打开时定位到指定页签（消费后清空，手动打开不受影响）
+  const settingsTab = useUiStore((s) => s.settingsTab);
+  useEffect(() => {
+    if (settingsTab) {
+      setActiveTab(settingsTab);
+      useUiStore.setState({ settingsTab: null });
+    }
+  }, [settingsTab]);
+
   // ── 基础 ──
   const userDataDir = useSettingsStore((s) => s.userDataDir);
   const setUserDataDir = useSettingsStore((s) => s.setUserDataDir);
   const [activeDir, setActiveDir] = useState("");
-
-  // ── 默认模型 ─
-  const imageDefaults = useSettingsStore((s) => s.imageDefaults);
-  const videoDefaults = useSettingsStore((s) => s.videoDefaults);
-  const textDefaults = useSettingsStore((s) => s.textDefaults);
-  const audioDefaults = useSettingsStore((s) => s.audioDefaults);
-  const setImageDefaults = useSettingsStore((s) => s.setImageDefaults);
-  const setVideoDefaults = useSettingsStore((s) => s.setVideoDefaults);
-  const setTextDefaults = useSettingsStore((s) => s.setTextDefaults);
-  const setAudioDefaults = useSettingsStore((s) => s.setAudioDefaults);
 
   // ── WebDAV ──
   const enableCloudSync = useSettingsStore((s) => s.enableCloudSync);
@@ -138,18 +133,7 @@ export function SettingsModal() {
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-6 py-5 Qiji-scroll-thin text-[11px]">
           {activeTab === "connection" && <ConnectionTab />}
-          {activeTab === "models" && (
-            <ModelsTab
-              imageDefaults={imageDefaults}
-              videoDefaults={videoDefaults}
-              textDefaults={textDefaults}
-              audioDefaults={audioDefaults}
-              setImageDefaults={setImageDefaults}
-              setVideoDefaults={setVideoDefaults}
-              setTextDefaults={setTextDefaults}
-              setAudioDefaults={setAudioDefaults}
-            />
-          )}
+          {activeTab === "presets" && <PresetsTab />}
           {activeTab === "preferences" && (
             <PreferencesTab
               activeDir={activeDir}
@@ -158,6 +142,7 @@ export function SettingsModal() {
               setUserDataDir={setUserDataDir}
             />
           )}
+          {activeTab === "keymap" && <KeymapTab />}
           {activeTab === "webdav" && (
             <WebdavTab
               enableCloudSync={enableCloudSync}
@@ -177,8 +162,11 @@ export function SettingsModal() {
           )}
         </div>
 
-        {/* Footer */}
-        <div className="flex justify-end gap-2 px-6 py-4 border-t border-border/40">
+        {/* Footer：左=客户端版本标识（排查构建用），右=完成 */}
+        <div className="flex items-center justify-between gap-2 px-6 py-4 border-t border-border/40">
+          <span className="text-[10px] text-muted-foreground/70 select-text" title="客户端版本 · 构建时间（区分新旧构建）">
+            {versionLabel()}
+          </span>
           <button
             onClick={() => setSettingsOpen(false)}
             className="px-5 py-2 rounded-lg bg-secondary text-foreground hover:bg-secondary/80 font-semibold cursor-pointer transition-colors text-xs"
@@ -274,159 +262,161 @@ function ConnectionTab() {
 }
 
 // ═══════════════════════════════════════════
-// Tab 2: 模型（来自管理端 catalog）
+// Tab: 预设方案（自定义出图预设——本地，与服务端预设并列出现在图片节点预设下拉/胶囊）
 // ═══════════════════════════════════════════
 
-function ModelsTab({
-  imageDefaults, videoDefaults, textDefaults, audioDefaults,
-  setImageDefaults, setVideoDefaults, setTextDefaults, setAudioDefaults,
-}: {
-  imageDefaults: { defaultModelId: string };
-  videoDefaults: { defaultModelId: string };
-  textDefaults: { defaultModelId: string };
-  audioDefaults: { defaultModelId: string };
-  setImageDefaults: (d: { defaultModelId: string }) => void;
-  setVideoDefaults: (d: { defaultModelId: string }) => void;
-  setTextDefaults: (d: { defaultModelId: string }) => void;
-  setAudioDefaults: (d: { defaultModelId: string }) => void;
-}) {
-  const toggleSelectedModel = useSettingsStore((s) => s.toggleSelectedModel);
-  const selectedModels = useSettingsStore((s) => s.selectedModels);
-  // 订阅 catalog 变化以在拉取目录后刷新列表
+function PresetsTab() {
+  const customPresets = useSettingsStore((s) => s.customPresets);
+  const addCustomPreset = useSettingsStore((s) => s.addCustomPreset);
+  const updateCustomPreset = useSettingsStore((s) => s.updateCustomPreset);
+  const removeCustomPreset = useSettingsStore((s) => s.removeCustomPreset);
+  // 服务端「预设方案」模板（只读展示，由管理端维护）
   const catalogVersion = useCatalogStore((s) => s.catalog?.version);
+  const serverPresets = catalogVersion
+    ? useCatalogStore.getState().templatesByCategory(PRESET_CATEGORY).filter((t) => (t.body ?? t.bodyPreview ?? "").trim())
+    : [];
 
-  // 打开/目录更新时，清理设置里已失效的旧"已选模型"id（防止计数虚高）
-  useEffect(() => {
-    const models = useCatalogStore.getState().catalog?.models;
-    if (!models?.length) return;
-    const byCap: Record<string, string[]> = {};
-    for (const m of models) (byCap[m.capability] ??= []).push(m.id);
-    useSettingsStore.getState().pruneSelectedModels(byCap);
-  }, [catalogVersion]);
-
-  // 各能力的全部 catalog 模型（多选器选项）
-  const allByCap: Record<Capability, ModelOption[]> = {
-    image: getModelsForCapability("image"),
-    video: getModelsForCapability("video"),
-    text: getModelsForCapability("text"),
-    audio: getModelsForCapability("audio"),
+  const [name, setName] = useState("");
+  const [body, setBody] = useState("");
+  const [group, setGroup] = useState("");
+  const [position, setPosition] = useState<"prefix" | "suffix">("prefix");
+  const add = () => {
+    if (!body.trim()) return;
+    addCustomPreset(name, body, group, position);
+    setName("");
+    setBody("");
+    setGroup("");
+    setPosition("prefix");
   };
-
-  // 已启用的模型（默认模型下拉用）
-  const enabledModels: Record<string, ModelOption[]> = {
-    image: getChannelModelsForNodeType("image"),
-    video: getChannelModelsForNodeType("video"),
-    text: getChannelModelsForNodeType("text"),
-    audio: getChannelModelsForNodeType("audio"),
-  };
-
-  const catGroups: { cat: Capability; selected: string[] }[] = [
-    { cat: "image", selected: selectedModels.image ?? [] },
-    { cat: "video", selected: selectedModels.video ?? [] },
-    { cat: "text", selected: selectedModels.text ?? [] },
-    { cat: "audio", selected: selectedModels.audio ?? [] },
-  ];
-
-  const defaultsMap: Record<string, { defaults: { defaultModelId: string }; setter: (d: { defaultModelId: string }) => void; models: ModelOption[] }> = {
-    image: { defaults: imageDefaults, setter: setImageDefaults, models: enabledModels.image },
-    video: { defaults: videoDefaults, setter: setVideoDefaults, models: enabledModels.video },
-    text: { defaults: textDefaults, setter: setTextDefaults, models: enabledModels.text },
-    audio: { defaults: audioDefaults, setter: setAudioDefaults, models: enabledModels.audio },
-  };
-
-  const totalAvailable = allByCap.image.length + allByCap.video.length + allByCap.text.length + allByCap.audio.length;
 
   return (
     <div className="flex flex-col gap-4">
       <div className="bg-secondary/30 border border-border/30 rounded-lg p-3">
-        <div className="text-xs font-semibold text-foreground mb-1">模型分类与默认选择</div>
-        <div className="text-[10px] text-muted-foreground">
-          下列模型由管理端 catalog 下发。勾选需要启用的模型，它们会出现在节点面板的模型下拉框中；
-          未勾选某类时，该类默认展示全部可用模型。管理端共下发 {totalAvailable} 个模型。
+        <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground mb-1">
+          <LayoutGrid className="h-3.5 w-3.5 text-primary" /> 出图预设方案
+        </div>
+        <div className="text-[10px] text-muted-foreground leading-relaxed">
+          在画布图片节点的功能栏「▦ 预设方案」下拉里插入预设胶囊，提交时替换为完整预设词；<b>双击胶囊</b>可就地展开为可编辑正文。
+          下方可添加你自己的常用预设（保存在本地），与管理端下发的预设一同出现。
+          <br />可给预设设「互斥组」——同组预设不能同时出现（内置 <b>4/6/9 宫格</b>已互斥，插入其一会移除同组另一个）。
         </div>
       </div>
 
-      {/* 上半区：每类一个下拉多选 + 已选标签区 */}
-      <div className="grid grid-cols-2 gap-4">
-        {catGroups.map(({ cat, selected }) => (
-          <div key={cat} className="flex flex-col gap-1.5">
-            <label className="text-[10px] font-semibold text-muted-foreground">
-              {CAT_LABELS[cat]}模型
-              <span className="ml-1 text-muted-foreground/60 font-normal">({selected.length})</span>
-            </label>
-
-            <MultiSelectDropdown
-              groups={[
-                {
-                  label: "管理端",
-                  items: allByCap[cat].map((m) => ({
-                    id: m.id,
-                    label: m.modelName,
-                    selected: selected.includes(m.id),
-                  })),
-                },
-              ].filter((g) => g.items.length > 0)}
-              selectedIds={selected}
-              onToggle={(id) => toggleSelectedModel(cat, id)}
-              placeholder="选择模型..."
-            />
-
-            <div className="flex flex-wrap gap-1 min-h-[24px]">
-              {selected.length === 0 ? (
-                <span className="text-[10px] text-muted-foreground italic">未勾选（展示全部）</span>
-              ) : (
-                selected.map((id) => {
-                  const model = allByCap[cat].find((m) => m.id === id);
-                  if (!model) return null;
-                  return (
-                    <span
-                      key={id}
-                      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-primary/20 border border-primary/50 text-[10px] text-foreground"
-                    >
-                      <span>{model.modelName}</span>
-                      <button
-                        onClick={() => toggleSelectedModel(cat, id)}
-                        className="text-muted-foreground hover:text-destructive cursor-pointer ml-0.5"
-                      >
-                        ×
-                      </button>
-                    </span>
-                  );
-                })
-              )}
-            </div>
-          </div>
-        ))}
+      {/* 新增自定义预设 */}
+      <div className="flex flex-col gap-2 rounded-lg border border-border/30 p-3">
+        <div className="text-[10px] font-semibold text-muted-foreground">新增自定义预设</div>
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="预设名称（如：6宫格电影故事板）"
+          className="bg-secondary/60 border border-border/40 rounded-lg px-3 py-2 text-foreground text-[11px] focus:outline-none focus:border-primary w-full"
+        />
+        <textarea
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          placeholder="预设提示词正文……（插入胶囊后，提交时会替换成这段文本）"
+          rows={4}
+          className="bg-secondary/60 border border-border/40 rounded-lg px-3 py-2 text-foreground text-[11px] leading-relaxed focus:outline-none focus:border-primary w-full resize-y Qiji-scroll-thin"
+        />
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-muted-foreground shrink-0">互斥组（规则）</span>
+          <input
+            type="text"
+            value={group}
+            onChange={(e) => setGroup(e.target.value)}
+            placeholder="留空=无互斥；填「宫格」= 与 4/6/9 宫格预设互斥（同组只能存在一个）"
+            className="flex-1 min-w-0 bg-secondary/60 border border-border/40 rounded-lg px-3 py-1.5 text-foreground text-[10px] focus:outline-none focus:border-primary"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-muted-foreground shrink-0">插入位置</span>
+          <select
+            value={position}
+            onChange={(e) => setPosition(e.target.value === "suffix" ? "suffix" : "prefix")}
+            className="bg-secondary/60 border border-border/40 rounded-lg px-3 py-1.5 text-foreground text-[10px] focus:outline-none focus:border-primary"
+          >
+            <option value="prefix">前缀（用户输入前）</option>
+            <option value="suffix">后缀（用户输入后）</option>
+          </select>
+        </div>
+        <div className="flex justify-end">
+          <button
+            onClick={add}
+            disabled={!body.trim()}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground font-semibold hover:bg-primary/90 transition-colors cursor-pointer text-[10px] disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Plus className="h-3.5 w-3.5" /> 添加预设
+          </button>
+        </div>
       </div>
 
-      {/* 下半区：每类默认模型 */}
-      <div className="grid grid-cols-4 gap-3">
-        {(["image", "video", "text", "audio"] as const).map((cat) => {
-          const { defaults: d, setter, models } = defaultsMap[cat];
-          return (
-            <div key={cat} className="flex flex-col gap-1">
-              <label className="text-[10px] font-semibold text-muted-foreground">默认{CAT_LABELS[cat]}模型</label>
-              <div className="relative">
-                <select
-                  value={d.defaultModelId}
-                  onChange={(e) => setter({ defaultModelId: e.target.value })}
-                  className="w-full bg-secondary/60 border border-border/40 rounded-lg px-2 py-1.5 text-foreground text-[10px] focus:outline-none focus:border-primary cursor-pointer truncate appearance-none"
+      {/* 自定义预设列表（可编辑/删除） */}
+      <div className="flex flex-col gap-2">
+        <div className="text-[10px] font-semibold text-muted-foreground">我的预设（{customPresets.length}）</div>
+        {customPresets.length === 0 ? (
+          <div className="text-[10px] text-muted-foreground italic px-1">还没有自定义预设。</div>
+        ) : (
+          customPresets.map((p) => (
+            <div key={p.id} className="flex flex-col gap-1.5 rounded-lg border border-border/30 p-2.5">
+              <div className="flex items-center gap-2">
+                <span className="text-amber-300 text-xs shrink-0">▦</span>
+                <input
+                  type="text"
+                  value={p.name}
+                  onChange={(e) => updateCustomPreset(p.id, { name: e.target.value })}
+                  placeholder="预设名称"
+                  className="flex-1 min-w-0 bg-secondary/60 border border-border/40 rounded-md px-2 py-1 text-foreground text-[11px] font-semibold focus:outline-none focus:border-primary"
+                />
+                <button
+                  onClick={() => removeCustomPreset(p.id)}
+                  title="删除该预设"
+                  className="shrink-0 text-muted-foreground hover:text-destructive cursor-pointer p-1"
                 >
-                  <option value="">请选择</option>
-                  {models.map((m) => (
-                    <option key={m.id} value={m.id}>{m.modelName}</option>
-                  ))}
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <textarea
+                value={p.body}
+                onChange={(e) => updateCustomPreset(p.id, { body: e.target.value })}
+                rows={3}
+                className="bg-secondary/60 border border-border/40 rounded-md px-2 py-1.5 text-foreground text-[11px] leading-relaxed focus:outline-none focus:border-primary w-full resize-y Qiji-scroll-thin"
+              />
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-muted-foreground shrink-0">互斥组</span>
+                <input
+                  type="text"
+                  value={p.group ?? ""}
+                  onChange={(e) => updateCustomPreset(p.id, { group: e.target.value })}
+                  placeholder="留空=无互斥；「宫格」= 与宫格预设互斥"
+                  className="flex-1 min-w-0 bg-secondary/60 border border-border/40 rounded-md px-2 py-1 text-foreground text-[10px] focus:outline-none focus:border-primary"
+                />
+                <span className="text-[10px] text-muted-foreground shrink-0">位置</span>
+                <select
+                  value={p.position === "suffix" ? "suffix" : "prefix"}
+                  onChange={(e) => updateCustomPreset(p.id, { position: e.target.value === "suffix" ? "suffix" : "prefix" })}
+                  className="shrink-0 bg-secondary/60 border border-border/40 rounded-md px-2 py-1 text-foreground text-[10px] focus:outline-none focus:border-primary"
+                >
+                  <option value="prefix">前缀</option>
+                  <option value="suffix">后缀</option>
                 </select>
-                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 pointer-events-none" style={{ opacity: 0.6, color: "var(--muted-foreground)" }} />
               </div>
             </div>
-          );
-        })}
+          ))
+        )}
       </div>
 
-      {totalAvailable === 0 && (
-        <div className="text-center py-6 text-muted-foreground text-xs">
-          暂无可用模型。请先在「管理端」Tab 配置服务器地址并拉取目录{catalogVersion ? "" : ""}。
+      {/* 服务端预设（只读，由管理端维护） */}
+      {serverPresets.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <div className="text-[10px] font-semibold text-muted-foreground">管理端预设（只读，共 {serverPresets.length}）</div>
+          <div className="flex flex-wrap gap-1.5">
+            {serverPresets.map((t) => (
+              <span key={t.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-400/15 border border-amber-400/40 text-[10px] text-amber-200" title={t.body ?? t.bodyPreview ?? ""}>
+                ▦ {t.name}
+              </span>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -450,9 +440,59 @@ function PreferencesTab({
   const serverUrl = useConnectionStore((s) => s.serverUrl);
   const catalog = useCatalogStore((s) => s.catalog);
   const modelCount = catalog?.models?.length ?? 0;
+  const depthGpu = useSettingsStore((s) => s.depthGpu);
+  const setDepthGpu = useSettingsStore((s) => s.setDepthGpu);
+  const depthVideoSmooth = useSettingsStore((s) => s.depthVideoSmooth);
+  const setDepthVideoSmooth = useSettingsStore((s) => s.setDepthVideoSmooth);
+  const gpuAvailable = typeof navigator !== "undefined" && !!(navigator as { gpu?: unknown }).gpu;
 
   return (
     <div className="flex flex-col gap-5">
+      {/* 本地推理 GPU 加速（转深度；第202轮：模型已完全内置客户端，零网络零服务端依赖） */}
+      <div className="flex flex-col gap-2">
+        <label className="text-xs font-semibold text-foreground">本地推理（转深度）</label>
+        <div className="bg-secondary/40 border border-border/30 rounded-lg p-3 flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="depthGpu"
+              checked={depthGpu}
+              onChange={(e) => setDepthGpu(e.target.checked)}
+              className="h-3.5 w-3.5 rounded accent-[var(--primary)]"
+            />
+            <label htmlFor="depthGpu" className="text-foreground text-[11px] cursor-pointer">
+              启用 GPU 加速（WebGPU）
+            </label>
+            <span className={`text-[9px] px-1.5 py-0.5 rounded ${gpuAvailable ? "bg-green-500/15 text-green-400" : "bg-secondary text-muted-foreground"}`}>
+              {gpuAvailable ? "本机支持 WebGPU" : "本机未检测到 WebGPU"}
+            </span>
+          </div>
+          <p className="text-[10px] text-muted-foreground leading-normal">
+            转深度模型已内置在客户端，无需联网、无需连接服务端即可使用。开启 GPU 用核显/独显推理
+            （约 0.2–0.5 秒）；关闭或本机不支持时自动改用 CPU 推理（约 1–3 秒，兼容性最好）。
+            切换后对下一次转深度生效。
+          </p>
+          <div className="h-px bg-white/8" />
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="depthVideoSmooth"
+              checked={depthVideoSmooth}
+              onChange={(e) => setDepthVideoSmooth(e.target.checked)}
+              className="h-3.5 w-3.5 rounded accent-[var(--primary)]"
+            />
+            <label htmlFor="depthVideoSmooth" className="text-foreground text-[11px] cursor-pointer">
+              视频转深度：时间平滑归一化（防闪烁）
+            </label>
+          </div>
+          <p className="text-[10px] text-muted-foreground leading-normal">
+            视频转深度逐帧推理，每帧独立标定远近范围会产生可见闪烁。开启后相邻帧的标定范围做指数平滑，
+            单镜头画面稳定（转场处约半秒渐变适应）；关闭则每帧独立归一化（与图片转深度同逻辑）。
+            切换后对下一次视频转深度生效。
+          </p>
+        </div>
+      </div>
+
       {/* 存储目录 */}
       <div className="flex flex-col gap-2">
         <label className="text-xs font-semibold text-foreground">用户数据存储目录</label>
@@ -625,6 +665,200 @@ function WebdavTab({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+// Tab: 快捷键（画布模式）——注册表见 src/canvas/keymap.ts
+// ═══════════════════════════════════════════
+
+function KeymapTab() {
+  const canvasKeymap = useSettingsStore((s) => s.canvasKeymap);
+  const setKeymapBinding = useSettingsStore((s) => s.setKeymapBinding);
+  const resetKeymap = useSettingsStore((s) => s.resetKeymap);
+  const tidyRowGap = useSettingsStore((s) => s.tidyRowGap);
+  const setTidyRowGap = useSettingsStore((s) => s.setTidyRowGap);
+  const [recordingId, setRecordingId] = useState<string | null>(null);
+  const [recordErr, setRecordErr] = useState("");
+  // 整理间距输入草稿（失焦/回车才提交，提交时收敛到 0~400 整数）
+  const [gapDraft, setGapDraft] = useState(String(tidyRowGap));
+  useEffect(() => { setGapDraft(String(tidyRowGap)); }, [tidyRowGap]);
+  const commitGap = () => {
+    const n = Number(gapDraft);
+    if (!Number.isFinite(n)) { setGapDraft(String(tidyRowGap)); return; }
+    setTidyRowGap(n); // store 内归一化；useEffect 回填收敛后的值
+  };
+
+  // 录制模式：capture 抢在全局快捷键（画布/Ctrl+S 等）之前吃掉下一次按键
+  useEffect(() => {
+    if (!recordingId) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        setRecordingId(null);
+        setRecordErr("");
+        return;
+      }
+      const combo = comboFromEvent(e);
+      if (!combo) return; // 纯修饰键：继续等主键
+      if (RESERVED_COMBOS.has(combo)) {
+        setRecordErr(`「${comboLabel(combo)}」为固定功能/系统保留，请换一个`);
+        return;
+      }
+      const overrides = useSettingsStore.getState().canvasKeymap;
+      const clash = KEYMAP_ACTIONS.find(
+        (a) => a.id !== recordingId && effectiveBinding(a.id, overrides) === combo,
+      );
+      if (clash) {
+        setRecordErr(`「${comboLabel(combo)}」已被「${clash.label}」占用，请换一个或先改绑对方`);
+        return;
+      }
+      const act = KEYMAP_ACTIONS.find((a) => a.id === recordingId);
+      setKeymapBinding(recordingId, combo === act?.def ? "" : combo); // 录回默认键=清除覆盖
+      setRecordingId(null);
+      setRecordErr("");
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [recordingId, setKeymapBinding]);
+
+  // 分类保序去重
+  const cats: string[] = [];
+  for (const a of KEYMAP_ACTIONS) if (!cats.includes(a.category)) cats.push(a.category);
+  const hasOverrides = Object.keys(canvasKeymap).length > 0;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="bg-secondary/30 border border-border/30 rounded-lg p-3">
+        <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground mb-1">
+          <Keyboard className="h-3.5 w-3.5 text-primary" /> 画布快捷键
+        </div>
+        <div className="text-[10px] text-muted-foreground leading-relaxed">
+          点击键位胶囊后按下新组合键即可改绑（Esc 取消录制）；仅画布模式生效，输入文字时自动让位。
+        </div>
+      </div>
+
+      {recordErr && (
+        <div className="flex items-center gap-1 text-[10px] text-destructive -mt-2">
+          <XCircle className="h-3 w-3 shrink-0" /> {recordErr}
+        </div>
+      )}
+
+      {/* 画布「整理」布局设置 */}
+      <div className="flex flex-col gap-1">
+        <div className="text-[10px] font-semibold text-muted-foreground">画布整理</div>
+        <div className="flex flex-col rounded-lg border border-border/30 overflow-hidden">
+          <div className="flex items-center gap-2 px-3 py-2">
+            <span className="text-[11px] text-foreground">节点间距（高度）</span>
+            <span className="text-[9px] text-muted-foreground/70 truncate flex-1 min-w-0">
+              点「整理」时上下相邻节点之间的间距（px，0~400，默认 {DEFAULT_TIDY_ROW_GAP}）
+            </span>
+            {tidyRowGap !== DEFAULT_TIDY_ROW_GAP && (
+              <button
+                onClick={() => setTidyRowGap(DEFAULT_TIDY_ROW_GAP)}
+                title={`恢复默认（${DEFAULT_TIDY_ROW_GAP}px）`}
+                className="text-muted-foreground hover:text-foreground cursor-pointer shrink-0"
+              >
+                <RotateCcw className="h-3 w-3" />
+              </button>
+            )}
+            <input
+              type="number"
+              min={0}
+              max={400}
+              step={4}
+              value={gapDraft}
+              onChange={(e) => setGapDraft(e.target.value)}
+              onBlur={commitGap}
+              onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+              className={`shrink-0 w-[90px] rounded-md border px-2.5 py-1 text-[10px] font-mono text-center bg-secondary/60 text-foreground outline-none transition-colors focus:border-primary ${
+                tidyRowGap !== DEFAULT_TIDY_ROW_GAP ? "border-primary/50" : "border-border/40"
+              }`}
+              title="失焦或回车生效"
+            />
+          </div>
+        </div>
+      </div>
+
+      {cats.map((cat) => (
+        <div key={cat} className="flex flex-col gap-1">
+          <div className="text-[10px] font-semibold text-muted-foreground">{cat}</div>
+          <div className="flex flex-col rounded-lg border border-border/30 overflow-hidden">
+            {KEYMAP_ACTIONS.filter((a) => a.category === cat).map((a, i) => {
+              const bound = effectiveBinding(a.id, canvasKeymap);
+              const overridden = canvasKeymap[a.id] !== undefined && canvasKeymap[a.id] !== a.def;
+              const recording = recordingId === a.id;
+              return (
+                <div
+                  key={a.id}
+                  className={`flex items-center gap-2 px-3 py-2 ${i > 0 ? "border-t border-border/20" : ""}`}
+                >
+                  <span className="text-[11px] text-foreground" title={a.desc}>{a.label}</span>
+                  {a.desc && (
+                    <span className="text-[9px] text-muted-foreground/70 truncate flex-1 min-w-0" title={a.desc}>
+                      {a.desc}
+                    </span>
+                  )}
+                  {!a.desc && <span className="flex-1" />}
+                  {overridden && (
+                    <button
+                      onClick={() => { setKeymapBinding(a.id, ""); setRecordErr(""); }}
+                      title={`恢复默认（${comboLabel(a.def)}）`}
+                      className="text-muted-foreground hover:text-foreground cursor-pointer shrink-0"
+                    >
+                      <RotateCcw className="h-3 w-3" />
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      setRecordErr("");
+                      setRecordingId(recording ? null : a.id);
+                    }}
+                    className={`shrink-0 min-w-[90px] rounded-md border px-2.5 py-1 text-[10px] font-mono transition-colors cursor-pointer text-center ${
+                      recording
+                        ? "border-primary text-primary bg-primary/10 animate-pulse"
+                        : overridden
+                          ? "border-primary/50 text-foreground bg-secondary/60 hover:border-primary"
+                          : "border-border/40 text-foreground bg-secondary/60 hover:border-primary"
+                    }`}
+                    title={recording ? "按下新组合键（Esc 取消）" : "点击改绑"}
+                  >
+                    {recording ? "按下新键…" : comboLabel(bound)}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] text-muted-foreground">改动即时生效并随设置持久化</span>
+        <button
+          onClick={() => { resetKeymap(); setRecordingId(null); setRecordErr(""); }}
+          disabled={!hasOverrides}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary text-foreground hover:bg-secondary/80 font-semibold cursor-pointer transition-colors text-[10px] disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <RotateCcw className="h-3 w-3" /> 全部恢复默认
+        </button>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <div className="text-[10px] font-semibold text-muted-foreground">固定键（不可自定义）</div>
+        <div className="flex flex-col rounded-lg border border-border/30 overflow-hidden">
+          {FIXED_KEYS.map((f, i) => (
+            <div
+              key={f.keys}
+              className={`flex items-center gap-2 px-3 py-1.5 ${i > 0 ? "border-t border-border/20" : ""}`}
+            >
+              <span className="shrink-0 min-w-[110px] text-[10px] font-mono text-muted-foreground">{f.keys}</span>
+              <span className="text-[10px] text-muted-foreground/80">{f.label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

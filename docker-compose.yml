@@ -1,0 +1,23 @@
+# Qiji 管理端网关 —— 1Panel / docker compose 部署
+#
+# 用法：把仓库（至少含 server/ 与 src/contract.ts）放到服务器某目录，
+# 在该目录执行：docker compose up -d --build
+#
+# 注意：
+#  - 端口只绑 127.0.0.1，外部一律走 1Panel「网站→反向代理」+ HTTPS 访问，不直接暴露。
+#  - data 目录用卷持久化（users/models/templates/logs），删容器不丢数据。
+#  - 真 key 写在同目录 server/.env，绝不进镜像/仓库。
+services:
+  qiji-server:
+    build:
+      context: .                 # 仓库根目录（含 server/ 与 src/contract.ts）
+      dockerfile: server/Dockerfile
+    image: qiji-server:latest
+    container_name: qiji-server
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"    # 仅本机暴露；公网经反向代理
+    env_file:
+      - ./server/.env
+    volumes:
+      - ./server/data:/app/server/data

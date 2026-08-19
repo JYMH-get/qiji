@@ -2,6 +2,7 @@ import { useRef, useEffect, useMemo, useCallback } from "react";
 
 import { extractMentions, getMentionSuggestions } from "@/lib/mentionResolver";
 import { useCanvasStore } from "@/store/canvasStore";
+import { mediaFilesFromClipboard } from "@/lib/clipboardMedia";
 
 /**
  * PromptComposer — textarea + 高亮覆盖层
@@ -15,6 +16,7 @@ export function PromptComposer({
   prompt,
   onChange,
   onKeyDown,
+  onPasteMedia,
   placeholder,
   minHeight = 100,
   maxHeight = 290,
@@ -23,6 +25,8 @@ export function PromptComposer({
   prompt: string;
   onChange: (value: string) => void;
   onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+  /** 在提示词框粘贴图片/视频/音频文件 → 上层加入素材区（不当文本插入） */
+  onPasteMedia?: (files: File[]) => void;
   placeholder?: string;
   minHeight?: number;
   maxHeight?: number;
@@ -96,6 +100,11 @@ export function PromptComposer({
         value={prompt}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={onKeyDown}
+        onPaste={(e) => {
+          if (!onPasteMedia) return;
+          const media = mediaFilesFromClipboard(e);
+          if (media.length) { e.preventDefault(); onPasteMedia(media); }
+        }}
         onScroll={handleScroll}
         placeholder={placeholder ?? "输入提示词（输入 @ 引用上游素材）…"}
         spellCheck={false}

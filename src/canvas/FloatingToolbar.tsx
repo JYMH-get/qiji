@@ -1,14 +1,15 @@
 import type { CSSProperties } from "react";
-import { Layers, Settings, Terminal } from "lucide-react";
+import { Layers, Settings } from "lucide-react";
 import { listPlugins } from "@/nodes/pluginRegistry";
 import { dispatchCommand } from "@/command/dispatch";
 import { makeNode, NODE_W, NODE_H } from "./nodeFactory";
+import { pickFileToUploadNode } from "./nodeUpload";
 import type { NodeType } from "@/types";
 import { useUiStore } from "@/store/uiStore";
 import { useDragToCanvas } from "./useDragToCanvas";
 import { useReactFlow } from "@xyflow/react";
 
-/** 左侧浮动工具 dock：五类节点。拖入画布或点击在视口中心新建。 */
+/** 左侧浮动工具 dock：业务节点。拖入画布或点击在视口中心新建。 */
 export function FloatingToolbar() {
 	const startDragToCanvas = useDragToCanvas();
 	const { screenToFlowPosition } = useReactFlow();
@@ -19,10 +20,13 @@ export function FloatingToolbar() {
 		const flowPos = screenToFlowPosition({ x: screenCenterX, y: screenCenterY });
 		const x = flowPos.x - NODE_W / 2;
 		const y = flowPos.y - NODE_H / 2;
-		dispatchCommand({ type: "addNode", node: makeNode(type, x, y) });
+		const node = makeNode(type, x, y);
+		dispatchCommand({ type: "addNode", node });
+		// 「上传本地」节点：创建后立即弹文件选择器
+		if (type === "upload") pickFileToUploadNode(node.id);
 	};
 
-	const plugins = listPlugins().filter((p) => !p.type.startsWith("file_") && p.isActive !== false && p.isDeleted !== true);
+	const plugins = listPlugins().filter((p) => p.inPalette !== false && p.isActive !== false && p.isDeleted !== true);
 
 	return (
 		<div className="Qiji-toolbar pointer-events-auto absolute left-4 top-1/2 z-[10100] flex -translate-y-1/2 flex-col gap-1 rounded-2xl p-1.5">
@@ -61,15 +65,6 @@ export function FloatingToolbar() {
 			>
 				<Settings className="h-4.5 w-4.5" />
 				<span className="text-[9px]">设置</span>
-			</button>
-
-			<button
-				onClick={() => useUiStore.getState().setBlackboxOpen(true)}
-				title="任务黑匣子"
-				className="group flex h-11 w-11 cursor-pointer flex-col items-center justify-center gap-0.5 rounded-xl text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-			>
-				<Terminal className="h-4.5 w-4.5" />
-				<span className="text-[9px]">日志</span>
 			</button>
 		</div>
 	);

@@ -1,0 +1,16 @@
+{
+  "name": "image-relay",
+  "version": "1.0.0",
+  "description": "境外取件节点：下载上游图片直链并转存到自有 OSS",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ali-oss": "^6.20.0"
+  }
+}

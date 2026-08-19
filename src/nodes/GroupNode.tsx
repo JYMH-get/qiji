@@ -30,7 +30,7 @@ export function GroupNode({
         }}
       />
       <div className="absolute bottom-full left-0.5 mb-1.5 font-mono text-[9px] font-bold uppercase tracking-wider text-[#98a2b3] select-none nodrag">
-        分组 · GROUP
+        分组·GROUP
       </div>
     </div>
   );

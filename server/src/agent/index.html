@@ -1,0 +1,1507 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>灵创工场 · 渠道商控制台</title>
+<link rel="icon" type="image/png" href="data:image/png;base64,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" />
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0c0e13; --panel: #12151d; --panel2: #181c27; --panel3: #1f2433;
+    --line: #232939; --line2: #2d3448;
+    --text: #e7eaf3; --mut: #8a91a6; --faint: #59607a;
+    --acc: #5aa7f0; --acc-deep: #3a6fd0; --acc-dim: rgba(90,167,240,.14);
+    --ok: #41d392; --ok-dim: rgba(65,211,146,.13);
+    --warn: #f3b74f; --warn-dim: rgba(243,183,79,.13);
+    --bad: #f26d8d; --bad-dim: rgba(242,109,141,.12);
+    --info: #8b7cf7; --info-dim: rgba(139,124,247,.13);
+    --r-lg: 12px; --r-md: 9px; --r-sm: 6px;
+    --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.55 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+  :focus-visible { outline: 2px solid var(--acc); outline-offset: 1px; border-radius: 4px; }
+  .hide { display: none !important; }
+  .mono { font-family: var(--mono); font-size: 12px; }
+  td.mono, td .mono { white-space: nowrap; }
+  .mut { color: var(--mut); } .faint { color: var(--faint); }
+  .ok-t { color: var(--ok); } .bad-t { color: var(--bad); }
+
+  .shell { display: flex; min-height: 100vh; }
+  .side { width: 212px; flex: none; background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 18px 16px 12px; }
+  .brand .logo { width: 30px; height: 30px; border-radius: 8px; flex: none; background: #fff; display: grid; place-items: center; overflow: hidden; }
+  .brand .logo img { width: 76%; height: 76%; object-fit: contain; display: block; }
+  .brand b { font-size: 15px; font-weight: 600; }
+  .brand .env { margin-left: auto; font-size: 10.5px; color: var(--acc); border: 1px solid rgba(90,167,240,.35); border-radius: 999px; padding: 1px 7px; }
+  .nav { flex: 1; overflow-y: auto; padding: 2px 10px 10px; }
+  .nav .grp { font-size: 11px; color: var(--faint); letter-spacing: 2px; padding: 13px 10px 4px; }
+  .nav a { display: flex; align-items: center; gap: 9px; padding: 7px 10px; margin: 1px 0; border-radius: var(--r-md); color: var(--mut); text-decoration: none; cursor: pointer; border: 1px solid transparent; transition: background .12s, color .12s; }
+  .nav a:hover { background: var(--panel2); color: var(--text); }
+  .nav a.on { background: var(--acc-dim); color: #bcd8f6; border-color: rgba(90,167,240,.22); }
+  .nav a svg { width: 15px; height: 15px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .nav a .n { font-size: 13.5px; }
+  .nav a .cnt { margin-left: auto; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .side .me { border-top: 1px solid var(--line); padding: 11px 14px; display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--mut); }
+  .side .me .dot { width: 7px; height: 7px; border-radius: 99px; background: var(--ok); flex: none; }
+  .side .me button { margin-left: auto; }
+
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .top { display: flex; align-items: center; gap: 14px; padding: 12px 24px; border-bottom: 1px solid var(--line); background: rgba(12,14,19,.86); backdrop-filter: blur(6px); position: sticky; top: 0; z-index: 20; }
+  .top h1 { font-size: 16px; font-weight: 600; margin: 0; }
+  .top .sp { flex: 1; }
+  .balance { display: flex; align-items: baseline; gap: 8px; border: 1px solid var(--line2); border-radius: 999px; padding: 5px 15px; }
+  .balance .k { font-size: 11.5px; color: var(--mut); }
+  .balance .v { font-size: 16px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .views { padding: 20px 24px 60px; }
+
+  button, .btn { font: inherit; font-size: 13px; color: var(--text); cursor: pointer; background: var(--panel2); border: 1px solid var(--line2); border-radius: var(--r-md); padding: 6px 13px; transition: background .12s, border-color .12s; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  button:hover { background: var(--panel3); }
+  button.pri { background: var(--acc-deep); border-color: var(--acc-deep); color: #fff; font-weight: 500; }
+  button.pri:hover { background: var(--acc); border-color: var(--acc); }
+  button.ghost { background: none; border-color: transparent; color: var(--mut); }
+  button.ghost:hover { background: var(--panel2); color: var(--text); }
+  button.danger { background: var(--bad-dim); border-color: rgba(242,109,141,.35); color: var(--bad); }
+  button.danger:hover { background: rgba(242,109,141,.2); }
+  button.sm { padding: 3px 9px; font-size: 12px; border-radius: var(--r-sm); }
+  button.icon { padding: 5px 7px; }
+  button svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  button:disabled { opacity: .45; cursor: default; }
+
+  input[type=text], input[type=number], input[type=password], input[type=date], select, textarea {
+    font: inherit; font-size: 13px; color: var(--text); background: var(--bg); border: 1px solid var(--line2); border-radius: var(--r-md); padding: 6px 10px;
+  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--acc); box-shadow: 0 0 0 3px rgba(90,167,240,.15); }
+  input::placeholder { color: var(--faint); }
+  td input[type=text], td input[type=number], td select { padding: 3px 7px; font-size: 12.5px; background: transparent; border-color: transparent; border-radius: var(--r-sm); }
+  td input:hover, td select:hover { border-color: var(--line2); background: var(--bg); }
+  td input:focus { border-color: var(--acc); background: var(--bg); box-shadow: none; }
+  td input[type=checkbox] { accent-color: var(--acc-deep); }
+
+  .search { position: relative; }
+  .search svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; stroke: var(--faint); fill: none; stroke-width: 1.8; }
+  .search input { padding-left: 32px; width: 250px; }
+
+  .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; border-radius: 999px; padding: 2px 9px; border: 1px solid var(--line2); color: var(--mut); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .badge::before { content: ""; width: 6px; height: 6px; border-radius: 99px; background: currentColor; }
+  .badge.ok { color: var(--ok); background: var(--ok-dim); border-color: rgba(65,211,146,.3); }
+  .badge.run { color: var(--warn); background: var(--warn-dim); border-color: rgba(243,183,79,.3); }
+  .badge.bad { color: var(--bad); background: var(--bad-dim); border-color: rgba(242,109,141,.3); }
+  .badge.plain::before { display: none; }
+  .badge.info { color: var(--acc); background: rgba(91,140,255,.12); border-color: rgba(91,140,255,.3); }
+  .badge.info::before { display: none; }
+
+  .chip { font-size: 12px; padding: 4px 12px; border-radius: 999px; cursor: pointer; color: var(--mut); background: none; border: 1px solid var(--line); user-select: none; }
+  .chip:hover { color: var(--text); background: var(--panel2); }
+  .chip.on { color: #bcd8f6; background: var(--acc-dim); border-color: rgba(90,167,240,.35); }
+
+  .sw { position: relative; display: inline-block; width: 32px; height: 18px; flex: none; }
+  .sw input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .sw i { position: absolute; inset: 0; border-radius: 999px; background: var(--panel3); border: 1px solid var(--line2); transition: background .15s; cursor: pointer; }
+  .sw i::after { content: ""; position: absolute; width: 12px; height: 12px; border-radius: 99px; background: var(--mut); top: 2px; left: 2px; transition: transform .15s, background .15s; }
+  .sw input:checked + i { background: var(--acc-deep); border-color: var(--acc-deep); }
+  .sw input:checked + i::after { transform: translateX(14px); background: #fff; }
+
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 13px 16px; }
+  .kpi .k { font-size: 12px; color: var(--mut); }
+  .kpi .v { font-size: 23px; font-weight: 650; margin-top: 2px; font-variant-numeric: tabular-nums; letter-spacing: -.3px; }
+  .kpi .d { font-size: 11.5px; margin-top: 2px; color: var(--faint); }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); margin-bottom: 14px; }
+  .card .hd { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .card .hd h3 { font-size: 13.5px; font-weight: 600; margin: 0; }
+  .card .hd .sp { flex: 1; }
+  .card .bd { padding: 14px 18px; }
+
+  .toolbar { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 13px; }
+  .toolbar .sp { flex: 1; }
+
+  .tblwrap { overflow-x: auto; border-radius: var(--r-lg); border: 1px solid var(--line); background: var(--panel); margin-bottom: 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-size: 11.5px; font-weight: 500; color: var(--faint); letter-spacing: .6px; padding: 9px 12px; border-bottom: 1px solid var(--line); background: var(--panel); white-space: nowrap; }
+  td { padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; font-variant-numeric: tabular-nums; }
+  tbody tr { transition: background .1s; }
+  tbody tr:hover { background: var(--panel2); }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr.clk { cursor: pointer; }
+  tr.grphead td { background: var(--panel2); font-size: 12px; font-weight: 600; color: var(--acc); padding: 6px 12px; }
+  tbody tr.grphead:hover { background: var(--panel2); }
+  th.sorth { cursor: pointer; user-select: none; }
+  th.sorth:hover { color: var(--text); }
+  th.sorth.on { color: var(--acc); }
+  td .sub { font-size: 11.5px; color: var(--faint); margin-top: 1px; }
+  .tfoot { display: flex; align-items: center; gap: 8px; padding: 9px 14px; font-size: 12px; color: var(--mut); }
+  .tfoot .sp { flex: 1; }
+  .avatar { width: 28px; height: 28px; border-radius: 8px; flex: none; display: grid; place-items: center; font-size: 12px; font-weight: 600; background: var(--acc-dim); color: #bcd8f6; }
+  .ucell { display: flex; align-items: center; gap: 10px; }
+  .modechips { display: flex; gap: 5px; }
+  .mchip { font-size: 11px; border-radius: var(--r-sm); padding: 1px 7px; border: 1px solid var(--line2); color: var(--mut); cursor: pointer; user-select: none; white-space: nowrap; transition: border-color .12s; }
+  .mchip:hover { border-color: var(--acc); }
+  .mchip.on { color: var(--ok); border-color: rgba(65,211,146,.35); background: var(--ok-dim); }
+  .mchip.off { color: var(--faint); text-decoration: line-through; }
+
+  .fgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 11px; }
+  .fld { display: flex; flex-direction: column; gap: 4px; }
+  .fld > span { font-size: 11.5px; color: var(--mut); }
+  .fld.full { grid-column: 1 / -1; }
+  .consume { font-size: 12.5px; padding: 9px 12px; background: var(--acc-dim); border: 1px solid rgba(90,167,240,.22); border-radius: var(--r-md); }
+  .consume.bad { background: var(--bad-dim); border-color: rgba(242,109,141,.3); }
+
+  .scrim { position: fixed; inset: 0; background: rgba(5,6,10,.55); z-index: 40; opacity: 0; pointer-events: none; transition: opacity .18s; }
+  .scrim.on { opacity: 1; pointer-events: auto; }
+  .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 460px; max-width: 94vw; z-index: 41; background: var(--panel); border-left: 1px solid var(--line2); transform: translateX(102%); transition: transform .22s cubic-bezier(.3,.9,.3,1); display: flex; flex-direction: column; box-shadow: -18px 0 50px rgba(0,0,0,.4); }
+  .drawer.on { transform: none; }
+  .drawer .dh { display: flex; align-items: center; gap: 12px; padding: 15px 20px; border-bottom: 1px solid var(--line); }
+  .drawer .dh h2 { font-size: 15px; margin: 0; font-weight: 600; }
+  .drawer .db { flex: 1; overflow-y: auto; padding: 16px 20px 30px; }
+  .dsec { margin-bottom: 20px; }
+  .dsec > .t { font-size: 11px; color: var(--faint); letter-spacing: 1.5px; margin-bottom: 8px; }
+  .frow { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+  .frow > label { width: 78px; flex: none; font-size: 12.5px; color: var(--mut); }
+  .frow input[type=text], .frow input[type=number] { flex: 1; min-width: 0; }
+  .frow .val { flex: 1; min-width: 0; }
+  .frow .val.mono { white-space: normal; word-break: break-all; }
+  .swrow { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--line); }
+  .swrow:last-child { border-bottom: none; }
+  .swrow .nm { font-size: 13px; } .swrow .ds { font-size: 11.5px; color: var(--faint); } .swrow .sp { flex: 1; }
+  .dangerzone { border: 1px solid rgba(242,109,141,.3); border-radius: var(--r-md); padding: 11px 14px; background: var(--bad-dim); display: flex; align-items: center; gap: 10px; }
+  .dangerzone .tx { font-size: 12.5px; color: var(--mut); flex: 1; }
+
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line2); border-radius: 14px; max-width: 640px; width: 92vw; padding: 0; box-shadow: 0 26px 70px rgba(0,0,0,.5); }
+  dialog.wide { max-width: 1100px; }
+  dialog.slim { max-width: 480px; }
+  dialog::backdrop { background: rgba(5,6,10,.55); }
+  dialog .mh { display: flex; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line); }
+  dialog .mh h2 { font-size: 15px; margin: 0; font-weight: 600; }
+  dialog .mh .sp { flex: 1; }
+  dialog .mb { padding: 16px 20px; max-height: 76vh; overflow: auto; }
+  dialog .mf { display: flex; justify-content: flex-end; gap: 9px; padding: 13px 20px; border-top: 1px solid var(--line); }
+
+  #toasts { position: fixed; right: 22px; bottom: 22px; z-index: 90; display: flex; flex-direction: column; gap: 8px; }
+  .toast { display: flex; align-items: center; gap: 9px; background: var(--panel3); border: 1px solid var(--line2); border-radius: var(--r-md); padding: 10px 15px; font-size: 13px; box-shadow: 0 10px 30px rgba(0,0,0,.4); animation: tin .18s ease-out; max-width: 420px; }
+  .toast.ok { border-color: rgba(65,211,146,.4); } .toast.ok::before { content: "✓"; color: var(--ok); font-weight: 700; }
+  .toast.bad { border-color: rgba(242,109,141,.4); } .toast.bad::before { content: "✕"; color: var(--bad); font-weight: 700; }
+  @keyframes tin { from { opacity: 0; transform: translateY(8px); } }
+
+  .filterbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 10px 14px; margin-bottom: 13px; }
+  .filterbar .div { width: 1px; height: 20px; background: var(--line); margin: 0 3px; }
+  .seg { display: flex; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
+  .seg button { border: none; border-radius: 0; background: none; padding: 5px 11px; font-size: 12px; color: var(--mut); }
+  .seg button.on { background: var(--acc-dim); color: #bcd8f6; }
+  .logtabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+  .logtabs button { border: none; background: none; border-radius: 6px 6px 0 0; padding: 8px 14px; font-size: 12.5px; color: var(--mut); border-bottom: 2px solid transparent; }
+  .logtabs button.on { color: var(--text); border-bottom-color: var(--acc); }
+  .jsonbox { background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px 14px; font-family: var(--mono); font-size: 12px; line-height: 1.6; overflow: auto; max-height: 52vh; position: relative; white-space: pre-wrap; word-break: break-all; }
+  .copyfab { position: absolute; top: 8px; right: 8px; }
+  .metagrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .metagrid .k { font-size: 11px; color: var(--faint); }
+  .metagrid .v { font-size: 13px; margin-top: 1px; word-break: break-all; }
+
+  /* 统计（纯文字，无图表） */
+  .statlists { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 13px; margin-bottom: 16px; }
+  .statlist { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 12px 14px; }
+  .statlist h4 { margin: 0 0 8px; font-size: 12.5px; color: var(--mut); font-weight: 600; }
+  .statlist .row { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; font-size: 12.5px; border-top: 1px solid var(--line); }
+  .statlist .row:first-of-type { border-top: none; }
+  .statlist .row .lb { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .statlist .row .vl { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--faint); flex: none; }
+  .statlist .empty { font-size: 12px; color: var(--faint); padding: 4px 0; }
+
+  /* 提示词模板双栏 */
+  .tpl { display: grid; grid-template-columns: 300px 1fr; gap: 15px; align-items: stretch; height: calc(100vh - 116px); }
+  @media (max-width: 1080px) { .tpl { grid-template-columns: 1fr; height: auto; } }
+  .tpllist { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+  .tpllist .lh { padding: 11px 12px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; flex: none; }
+  .tpllist .lh input { flex: 1; min-width: 0; }
+  .tpllist .lbody { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 8px; }
+  .tpllist .grp { font-size: 11px; color: var(--faint); letter-spacing: 1px; padding: 12px 14px 4px; }
+  .tpllist .it { padding: 7px 14px; cursor: pointer; border-left: 2px solid transparent; }
+  .tpllist .it:hover { background: var(--panel2); }
+  .tpllist .it.on { background: var(--acc-dim); border-left-color: var(--acc); }
+  .tpllist .it.dis { opacity: .5; }
+  .tpllist .it .nm { font-size: 13px; }
+  .tpllist .it .id { font-size: 11px; color: var(--faint); font-family: var(--mono); }
+  .tpled { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); overflow-y: auto; min-height: 0; }
+  .tpled .hd { position: sticky; top: 0; z-index: 2; background: var(--panel); border-radius: var(--r-lg) var(--r-lg) 0 0; }
+  .bodyed { width: 100%; min-height: 52vh; font-family: var(--mono); font-size: 12.5px; line-height: 1.7; resize: vertical; }
+  .varchips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .varchip { font-size: 11.5px; font-family: var(--mono); background: var(--panel3); border: 1px solid var(--line2); border-radius: var(--r-sm); padding: 2px 8px; color: #bcd8f6; cursor: pointer; }
+  .loggrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .logcell { min-width: 0; }
+  .logcell .lc-t { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--faint); margin-bottom: 5px; }
+  .logcell pre { margin: 0; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 12px; font-family: var(--mono); font-size: 11.5px; line-height: 1.55; max-height: 40vh; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+  @media (max-width: 900px) { .loggrid { grid-template-columns: 1fr; } }
+
+  #login { min-height: 100vh; display: grid; place-items: center; }
+  #login .box { width: 380px; max-width: 92vw; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 30px 30px 26px; }
+  #login .lg { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; margin-bottom: 6px; }
+  #login .lg img.biglogo { height: 56px; display: block; }
+  #login h2 { margin: 0; font-size: 17px; }
+  #login .f { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+</style>
+</head>
+<body>
+
+<svg style="display:none" aria-hidden="true">
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.4"/><path d="M3.5 20c.6-3.6 2.8-5.5 5.5-5.5s4.9 1.9 5.5 5.5"/><circle cx="17" cy="9.5" r="2.4"/><path d="M16.5 14.6c2.2.3 3.6 1.8 4 4.4"/></symbol>
+  <symbol id="i-ticket" viewBox="0 0 24 24"><path d="M4 8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4z"/><path d="M13 6v2.4M13 11v2M13 15.6V18" stroke-dasharray="1 3"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V9M10 20V4M16 20v-8M21 20H3"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 3v4h-4"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-dl" viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4.5-4.5M12 15l4.5-4.5M4 20h16"/></symbol>
+  <symbol id="i-tag" viewBox="0 0 24 24"><path d="M12 3h7a1 1 0 0 1 1 1v7l-9 9-8-8z"/><circle cx="15.5" cy="8.5" r="1.6"/></symbol>
+</svg>
+
+<div id="login" class="hide">
+  <div class="box">
+    <div class="lg"><img class="biglogo" src="data:image/png;base64,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" alt="灵创工场" /><h2>渠道商控制台</h2></div>
+    <p class="mut" style="font-size:12.5px;margin:4px 0 0">用源站分配的账号密码登录。积分向源站购入；获客发<b>邀请码</b>（注册即归属你），充值发<b>兑换码</b>（面额从积分划转）。</p>
+    <div class="f">
+      <input id="lg_acc" type="text" placeholder="登录账号" onkeydown="if(event.key==='Enter')$('#lg_pw').focus()" />
+      <input id="lg_pw" type="password" placeholder="密码" onkeydown="if(event.key==='Enter')doLogin()" />
+      <button class="pri" onclick="doLogin()" style="justify-content:center">登录</button>
+    </div>
+    <p id="loginErr" class="bad-t hide" style="font-size:12.5px;margin:12px 0 0"></p>
+  </div>
+</div>
+
+<div id="app" class="shell hide">
+  <aside class="side">
+    <div class="brand"><div class="logo" id="brandLogo"><img src="data:image/png;base64,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" alt="" /></div><b id="brandName">灵创工场</b><span class="env">渠道商</span></div>
+    <nav class="nav">
+      <div class="grp">运 营</div>
+      <a data-tab="users" class="on" onclick="switchTab('users')"><svg><use href="#i-users"/></svg><span class="n">用户管理</span><span class="cnt" id="cnt-users"></span></a>
+      <a data-tab="redeem" onclick="switchTab('redeem')"><svg><use href="#i-ticket"/></svg><span class="n">兑换码</span><span class="cnt" id="cnt-redeem"></span></a>
+      <a data-tab="teams" onclick="switchTab('teams')"><svg><use href="#i-users"/></svg><span class="n">团队</span><span class="cnt" id="cnt-teams"></span></a>
+      <a data-tab="storage" onclick="switchTab('storage')"><svg><use href="#i-db"/></svg><span class="n">扩容卡</span><span class="cnt" id="cnt-storage"></span></a>
+      <a data-tab="pricing" onclick="switchTab('pricing')"><svg><use href="#i-tag"/></svg><span class="n">模型</span><span class="cnt" id="cnt-pricing"></span></a>
+      <a data-tab="templates" onclick="switchTab('templates')"><svg><use href="#i-file"/></svg><span class="n">提示词模板</span><span class="cnt" id="cnt-templates"></span></a>
+      <a data-tab="sharedlibs" onclick="switchTab('sharedlibs')"><svg><use href="#i-file"/></svg><span class="n">共享素材库</span><span class="cnt" id="cnt-sharedlibs"></span></a>
+      <a data-tab="stats" onclick="switchTab('stats')"><svg><use href="#i-chart"/></svg><span class="n">统计</span></a>
+      <div class="grp">系 统</div>
+      <a data-tab="logs" onclick="switchTab('logs')"><svg><use href="#i-list"/></svg><span class="n">请求记录</span></a>
+      <a data-tab="downloads" onclick="switchTab('downloads')"><svg><use href="#i-dl"/></svg><span class="n">批量下载</span></a>
+      <a data-tab="node" onclick="switchTab('node')"><svg><use href="#i-db"/></svg><span class="n">渠道节点</span></a>
+    </nav>
+    <div class="me"><span class="dot"></span><span id="me_name">渠道商</span><button class="sm ghost" onclick="logout()">退出</button></div>
+  </aside>
+  <div class="main">
+    <header class="top">
+      <h1 id="pageTitle">用户管理</h1>
+      <span class="sp"></span>
+      <div class="balance" title="从源站购入的积分池；给用户发兑换码时按面额从中划转"><span class="k">积分余额</span><span class="v" id="bal">—</span></div>
+      <button class="icon" title="刷新当前页" onclick="reloadTab()"><svg><use href="#i-refresh"/></svg></button>
+    </header>
+    <div class="views">
+      <section id="tab-users"></section>
+      <section id="tab-redeem" class="hide"></section>
+      <section id="tab-teams" class="hide"></section>
+      <section id="tab-storage" class="hide"></section>
+      <section id="tab-pricing" class="hide"></section>
+      <section id="tab-templates" class="hide"></section>
+      <section id="tab-sharedlibs" class="hide"></section>
+      <section id="tab-stats" class="hide"></section>
+      <section id="tab-logs" class="hide"></section>
+      <section id="tab-downloads" class="hide"></section>
+      <section id="tab-node" class="hide"></section>
+    </div>
+  </div>
+</div>
+
+<dialog id="dlg"><div class="mh"><h2 id="dlgTitle"></h2><span class="sp"></span><button class="ghost icon" onclick="dlg.close()"><svg><use href="#i-x"/></svg></button></div><div class="mb" id="dlgBody"></div></dialog>
+<dialog id="cfm" class="slim"><div class="mh"><h2 id="cfmTitle"></h2><span class="sp"></span><button class="ghost icon" onclick="cfm.close()"><svg><use href="#i-x"/></svg></button></div><div class="mb" id="cfmBody" style="font-size:13px"></div><div class="mf"><button onclick="cfm.close()">取消</button><button id="cfmOk">确认</button></div></dialog>
+<div class="scrim" id="scrim" onclick="closeDrawer()"></div>
+<aside class="drawer" id="drawer"><div id="drawerBody" style="display:flex;flex-direction:column;height:100%"></div></aside>
+<div id="toasts"></div>
+
+<script>
+const $ = (s, r=document) => r.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let TOKEN = localStorage.getItem("qiji_agent_token") || "";
+let ME = null;
+
+async function api(path, opts={}) {
+  const headers = { Authorization: "Bearer " + TOKEN, ...(opts.body!=null ? {"Content-Type":"application/json"} : {}), ...(opts.headers||{}) };
+  const r = await fetch(path, { ...opts, headers });
+  if (r.status === 401) { logout(); throw new Error("会话已过期，请重新登录"); }
+  if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e?.error?.message || ("HTTP " + r.status)); }
+  return r.status === 204 ? null : r.json();
+}
+function toast(msg, kind="ok"){ const t=document.createElement("div"); t.className="toast "+kind; t.textContent=msg; $("#toasts").appendChild(t); setTimeout(()=>{t.style.opacity="0";t.style.transition="opacity .3s";},2600); setTimeout(()=>t.remove(),3000); }
+function confirmDo({ title, text, okLabel="确认", danger=true, onOk }){ $("#cfmTitle").textContent=title; $("#cfmTitle").style.color=danger?"var(--bad)":""; $("#cfmBody").innerHTML=text; const ok=$("#cfmOk"); ok.className=danger?"danger":"pri"; ok.textContent=okLabel; ok.onclick=()=>{cfm.close();onOk();}; cfm.showModal(); }
+function copyText(s, msg){ navigator.clipboard.writeText(s); toast(msg||"已复制"); }
+function relTime(t){ if(!t)return""; const d=Date.now()-new Date(t).getTime(); if(d<60e3)return"刚刚"; if(d<3600e3)return Math.floor(d/60e3)+" 分钟前"; if(d<86400e3)return Math.floor(d/3600e3)+" 小时前"; return Math.floor(d/86400e3)+" 天前"; }
+function downloadCsv(rows, baseName){ const csv="﻿"+rows.map(r=>r.map(c=>{const s=String(c??"");return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}).join(",")).join("\r\n"); const blob=new Blob([csv],{type:"text/csv;charset=utf-8"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=baseName+"-"+new Date().toISOString().slice(0,19).replace(/[:T]/g,"")+".csv"; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); }
+
+/* ── 登录 ── */
+function showLogin(){ $("#login").classList.remove("hide"); $("#app").classList.add("hide"); }
+function showApp(){ $("#login").classList.add("hide"); $("#app").classList.remove("hide"); switchTab("users"); }
+async function doLogin(){
+  const account = $("#lg_acc").value.trim(), password = $("#lg_pw").value;
+  try {
+    const r = await fetch("/agent-api/login", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({account, password}) });
+    if (!r.ok){ const e = await r.json().catch(()=>({})); throw new Error(e?.error?.message || "登录失败"); }
+    const data = await r.json();
+    TOKEN = data.token; localStorage.setItem("qiji_agent_token", TOKEN);
+    await refreshMe(); showApp();
+  } catch(e){ $("#loginErr").textContent = e.message; $("#loginErr").classList.remove("hide"); }
+}
+function logout(){ localStorage.removeItem("qiji_agent_token"); TOKEN=""; ME=null; showLogin(); }
+async function refreshMe(){
+  ME = await api("/agent-api/me");
+  $("#bal").textContent = (ME.credits||0).toLocaleString();
+  $("#me_name").textContent = ME.name || "渠道商";
+  // 第136轮用户定：门户品牌与源站一致用「灵创工场」logo/名称（覆盖第111/124轮「品牌显示商名」）；
+  // 商名保留在侧栏底部（#me_name）。标题固定在 <title>，登录后不再改写。
+}
+
+/* ── 页签 ── */
+const TAB_TITLES = { users:"用户管理", redeem:"兑换码", teams:"团队", storage:"扩容卡", pricing:"模型", templates:"提示词模板", sharedlibs:"共享素材库", stats:"统计", logs:"请求记录", downloads:"批量下载", node:"渠道节点" };
+let CUR_TAB = "users";
+function switchTab(t){
+  CUR_TAB = t;
+  document.querySelectorAll(".nav a").forEach(b => b.classList.toggle("on", b.dataset.tab===t));
+  Object.keys(TAB_TITLES).forEach(x => $("#tab-"+x).classList.toggle("hide", x!==t));
+  $("#pageTitle").textContent = TAB_TITLES[t];
+  if (t==="users") loadUsers();
+  if (t==="redeem") loadRedeem();
+  if (t==="teams") loadTeams();
+  if (t==="storage") loadStorageCodes();
+  if (t==="pricing") loadPricing();
+  if (t==="templates") loadTemplates();
+  if (t==="sharedlibs") loadSharedLibs();
+  if (t==="stats") loadStats();
+  if (t==="logs") loadLogs(true);
+  if (t==="downloads") loadDownloads(true);
+  if (t==="node") loadNodePage();
+}
+function reloadTab(){ if(CUR_TAB==="logs") logFacetsCache=null; refreshMe(); switchTab(CUR_TAB); toast("已刷新"); }
+
+/* ════════════════ 批量下载（第232轮）════════════════
+   把名下用户的成功产物摊平成清单：按 时间/用户/步骤/模型/类型/保存情况 筛，
+   导出给下载器（JSON 清单 / CSV），或在浏览器里小批量直接下。
+   范围恒=本商归属（服务端强制，查询串改不动）。
+   ⚠ 原链是时效链接（各家 2~24h 不等）；部分渠道原链下载须带上游密钥 → 标「需代下」，直连必失败。 */
+let dlFilter = { rangeKey:"today", user:"", purpose:"", model:"", storage:"raw", kind:"" };
+let dlManifest = null, dlFacetsCache = null;
+const DL_BROWSER_MAX = 50;
+const DL_STORAGE_OPTS = [["","全部保存情况"],["raw","仅上游原链（需抢救）"],["oss","仅已存 OSS"],["oss-old","仅旧桶（已舍弃）"],["local","仅服务端兜底链"]];
+const DL_KIND_OPTS = [["","全部类型"],["image","图片"],["video","视频"],["audio","音频"],["other","其他"]];
+const DL_STORAGE_LABEL = { oss:"已存 OSS", "oss-old":"旧桶（已舍弃）", local:"服务端兜底链", raw:"上游原链" };
+const DL_RISK_BADGE = { none:`<span class="badge ok">永久</span>`, low:`<span class="badge ok">较新</span>`,
+  high:`<span class="badge run">可能已过期</span>`, expired:`<span class="badge bad">大概率已失效</span>` };
+function readDlInputs(){ const u=$("#d_user"),p=$("#d_purpose"),m=$("#d_model");
+  if(u)dlFilter.user=u.value.trim(); if(p)dlFilter.purpose=p.value.trim(); if(m)dlFilter.model=m.value.trim(); }
+function setDlRange(k){ readDlInputs(); dlFilter.rangeKey=k; loadDownloads(true); }
+function setDlStorage(v){ readDlInputs(); dlFilter.storage=v; loadDownloads(true); }
+function setDlKind(v){ readDlInputs(); dlFilter.kind=v; loadDownloads(true); }
+function applyDlFilter(){ readDlInputs(); loadDownloads(true); }
+function clearDlFilter(){ dlFilter.user=dlFilter.purpose=dlFilter.model=""; dlFilter.storage=""; dlFilter.kind=""; loadDownloads(true); }
+function dlQuery(){
+  const r = computeRange(dlFilter.rangeKey);
+  const qs = new URLSearchParams();
+  if (r.from!=null) qs.set("from", String(r.from));
+  if (r.to!=null) qs.set("to", String(r.to));
+  if (dlFilter.user) qs.set("user", dlFilter.user);
+  if (dlFilter.purpose) qs.set("purpose", dlFilter.purpose);
+  if (dlFilter.model) qs.set("model", dlFilter.model);
+  if (dlFilter.storage) qs.set("storages", dlFilter.storage);
+  if (dlFilter.kind) qs.set("kinds", dlFilter.kind);
+  return qs.toString();
+}
+async function loadDownloads(reset=true){
+  const el = $("#tab-downloads");
+  if (reset){
+    if (!dlFacetsCache){ try { dlFacetsCache = await api("/agent-api/logs/facets"); } catch { dlFacetsCache={users:[],purposes:[],models:[]}; } }
+    const f = dlFacetsCache;
+    el.innerHTML = `
+      <div class="filterbar">
+        <div class="seg">${LOG_RANGES.map(([k,lb])=>`<button class="${dlFilter.rangeKey===k?'on':''}" onclick="setDlRange('${k}')">${lb}</button>`).join("")}</div>
+        <div class="div"></div>
+        <input id="d_user" type="text" value="${esc(dlFilter.user)}" placeholder="用户" list="dl2_user" style="width:110px" onkeydown="if(event.key==='Enter')applyDlFilter()">
+        <input id="d_purpose" type="text" value="${esc(dlFilter.purpose)}" placeholder="步骤（如 视频生成）" list="dl2_purpose" style="width:150px" onkeydown="if(event.key==='Enter')applyDlFilter()">
+        <input id="d_model" type="text" value="${esc(dlFilter.model)}" placeholder="模型" list="dl2_model" style="width:130px" onkeydown="if(event.key==='Enter')applyDlFilter()">
+        <select id="d_storage" onchange="setDlStorage(this.value)" style="width:168px" title="保存情况：产物链接指向我方 OSS 还是上游原链">${DL_STORAGE_OPTS.map(([v,t])=>`<option value="${v}" ${v===dlFilter.storage?"selected":""}>${t}</option>`).join("")}</select>
+        <select id="d_kind" onchange="setDlKind(this.value)" style="width:104px">${DL_KIND_OPTS.map(([v,t])=>`<option value="${v}" ${v===dlFilter.kind?"selected":""}>${t}</option>`).join("")}</select>
+        <button class="sm" onclick="applyDlFilter()">应用</button><button class="sm ghost" onclick="clearDlFilter()">清空</button>
+        <span class="sp"></span>
+        <button class="sm" onclick="dlFacetsCache=null;loadDownloads(true)"><svg><use href="#i-refresh"/></svg>刷新</button>
+        ${selDatalist("dl2_user",f.users)}${selDatalist("dl2_purpose",(f.purposes||[]).map(purposeLabel))}${selDatalist("dl2_model",f.models)}
+      </div>
+      <div class="kpis" id="d_kpis" style="margin-bottom:13px"></div>
+      <div id="d_notice"></div>
+      <div class="card" style="margin-bottom:13px">
+        <div class="hd"><b>导出与下载</b><span class="sp"></span><span class="faint" id="d_selinfo"></span></div>
+        <div class="bd" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="sm pri" onclick="exportDlManifest()"><svg><use href="#i-dl"/></svg>导出清单 JSON（给下载器）</button>
+          <button class="sm" onclick="exportDlCsv()"><svg><use href="#i-dl"/></svg>导出 CSV</button>
+          <button class="sm" onclick="browserDownloadAll()">在浏览器里下载（≤${DL_BROWSER_MAX} 个）</button>
+          <span class="faint" style="flex:1 1 260px">大批量请用「导出清单 JSON」+ 独立下载器：浏览器下几十个 G 不现实，也不能自动分目录。</span>
+        </div>
+      </div>
+      <div class="tblwrap">
+        <table><thead><tr><th>时间</th><th>用户</th><th>步骤</th><th>模型</th><th>类型</th><th>保存情况</th><th>链接状态</th><th>链接</th></tr></thead><tbody id="d_body"></tbody></table>
+        <div class="tfoot"><span id="d_meta"></span><span class="sp"></span><span class="faint">范围=你名下用户的产物 · 清单按时间倒序（新的先抢救）</span></div>
+      </div>`;
+  }
+  try {
+    dlManifest = await api("/agent-api/downloads/manifest?"+dlQuery());
+    const m = dlManifest;
+    $("#d_kpis").innerHTML = [["产物总数",m.total],["上游原链",m.byStorage.raw],["需服务端代下",m.authRequired],["已存 OSS",m.byStorage.oss]]
+      .map(([k,v])=>`<div class="kpi"><div class="k">${k}</div><div class="v">${Number(v).toLocaleString()}</div></div>`).join("");
+    const n = [];
+    if (m.truncated) n.push(`<div class="bad-t" style="font-size:12.5px;margin:0 0 10px">匹配到 <b>${m.matched.toLocaleString()}</b> 个产物，已截断到 <b>${m.total.toLocaleString()}</b> 个——请缩小时间范围分批导出，否则会漏掉一部分。</div>`);
+    const expired = m.items.filter(i=>i.expiryRisk==="expired").length;
+    if (expired) n.push(`<div class="bad-t" style="font-size:12.5px;margin:0 0 10px">其中 <b>${expired.toLocaleString()}</b> 个原链已超 24 小时，<b>大概率已失效</b>（各渠道原链有效期 2~24 小时不等）——能救回的主要是最近几小时的。</div>`);
+    if (m.authRequired) n.push(`<div class="bad-t" style="font-size:12.5px;margin:0 0 10px">有 <b>${m.authRequired.toLocaleString()}</b> 个原链的下载须带上游密钥，密钥绝不外发，<b>下载器直连必然失败</b>，清单里已标 <code>authRequired</code>，请联系源站代下。</div>`);
+    $("#d_notice").innerHTML = n.join("");
+    const items = m.items.slice(0, 300);
+    $("#d_meta").textContent = `共 ${m.total} 个产物` + (m.total>items.length ? `（表格只显示前 ${items.length} 个，导出为全量）` : "");
+    $("#d_body").innerHTML = items.map(it=>`<tr>
+      <td class="mut">${fmtTime(it.startedAt)}</td>
+      <td>${esc(it.user||"—")}</td>
+      <td>${esc(it.purposeLabel||"—")}${it.total>1?` <span class="badge plain" title="该请求共 ${it.total} 个产物">${it.seq+1}/${it.total}</span>`:""}</td>
+      <td class="mono">${esc(it.model||"—")}</td>
+      <td><span class="badge plain">${esc(it.kind)}</span></td>
+      <td>${it.storage==="oss"?`<span class="badge ok">${DL_STORAGE_LABEL.oss}</span>`:it.storage==="raw"?`<span class="badge run">${DL_STORAGE_LABEL.raw}</span>`:`<span class="badge plain">${esc(DL_STORAGE_LABEL[it.storage]||it.storage)}</span>`}</td>
+      <td>${DL_RISK_BADGE[it.expiryRisk]||""}${it.authRequired?` <span class="badge bad" title="该渠道的原链下载须带上游密钥，直连必然失败">需代下</span>`:""}</td>
+      <td style="max-width:280px"><a href="${esc(it.url)}" target="_blank" rel="noopener" class="mono" style="font-size:11px;word-break:break-all">${esc(it.url.length>70?it.url.slice(0,70)+"…":it.url)}</a></td>
+    </tr>`).join("") || `<tr><td colspan="8" class="faint" style="text-align:center;padding:24px">该筛选条件下暂无可下载的产物</td></tr>`;
+  } catch(e){ $("#d_body").innerHTML = `<tr><td colspan="8" class="bad-t">${esc(e.message)}</td></tr>`; }
+}
+async function exportDlManifest(){
+  if (!dlManifest || !dlManifest.total){ toast("该筛选条件下暂无产物","bad"); return; }
+  const blob = new Blob([JSON.stringify(dlManifest, null, 2)], {type:"application/json"});
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+  a.download = "qiji-downloads-"+new Date().toISOString().slice(0,19).replace(/[:T]/g,"")+".json";
+  a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+  toast(`已导出 ${dlManifest.total} 个产物的清单`);
+}
+function exportDlCsv(){
+  if (!dlManifest || !dlManifest.total){ toast("该筛选条件下暂无产物","bad"); return; }
+  const rows = [["用户","时间","步骤","模型","类型","保存情况","链接状态","需代下","建议路径","链接","日志ID"]];
+  dlManifest.items.forEach(it=>rows.push([it.user, fmtTime(it.startedAt), it.purposeLabel, it.model, it.kind,
+    DL_STORAGE_LABEL[it.storage]||it.storage, it.expiryRisk, it.authRequired?"是":"否", it.suggestedPath, it.url, it.logId]));
+  downloadCsv(rows, "qiji-downloads");
+}
+async function browserDownloadAll(){
+  if (!dlManifest || !dlManifest.total){ toast("该筛选条件下暂无产物","bad"); return; }
+  const all = dlManifest.items.filter(i=>!i.authRequired);
+  const skipped = dlManifest.total - all.length;
+  const batch = all.slice(0, DL_BROWSER_MAX);
+  if (!batch.length){ toast("可直连的产物为 0（全部需服务端代下）","bad"); return; }
+  confirmDo({
+    title:"在浏览器里下载",
+    text:`将依次下载 <b>${batch.length}</b> 个文件${all.length>batch.length?`（共 ${all.length} 个可直连，本次只下前 ${DL_BROWSER_MAX} 个）`:""}${skipped?`，另有 <b>${skipped}</b> 个需服务端代下已跳过`:""}。<br>浏览器会逐个弹下载，<b>不会自动分目录</b>；大批量请用「导出清单 JSON」+ 独立下载器。`,
+    okLabel:"开始下载", danger:false,
+    onOk: async ()=>{
+      let done=0, failed=0;
+      for (const it of batch){
+        $("#d_selinfo").textContent = `下载中 ${done+failed+1}/${batch.length}…`;
+        try {
+          const r = await fetch(it.url, { mode:"cors" });
+          if (!r.ok) throw new Error("HTTP "+r.status);
+          const b = await r.blob();
+          const a = document.createElement("a"); a.href = URL.createObjectURL(b);
+          a.download = it.suggestedPath.split("/").pop();
+          a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 3000);
+          done++;
+        } catch { window.open(it.url, "_blank", "noopener"); failed++; }
+        await new Promise(res=>setTimeout(res, 220));
+      }
+      $("#d_selinfo").textContent = `完成：直接保存 ${done} 个${failed?`，另有 ${failed} 个跨域受限已改为新窗口打开`:""}`;
+      toast(`下载完成（${done} 个已保存${failed?`，${failed} 个转新窗口`:""}）`);
+    },
+  });
+}
+/* ════════════════ 渠道节点（P3 独立部署）════════════════ */
+async function loadNodePage(){
+  const el = $("#tab-node");
+  el.innerHTML = `<p class="mut">加载中…</p>`;
+  let nodeKey = null;
+  try { nodeKey = (await api("/agent-api/node-key")).nodeKey; } catch(e){ el.innerHTML = `<p class="mut">${esc(e.message)}</p>`; return; }
+  const origin = location.origin;
+  el.innerHTML = `
+    <div style="max-width:860px">
+      <div style="background:var(--panel2);border:1px solid var(--line);border-radius:var(--r-md);padding:16px 18px;margin-bottom:14px">
+        <h3 style="margin:0 0 8px;font-size:14px">独立部署（relay 渠道节点）</h3>
+        <p class="mut" style="margin:0 0 10px;font-size:12.5px">你可以把同一套服务端部署到自己的服务器上（<b>relay 模式</b>）：用户在你的节点上注册、积分由你本地自主发行；生成与素材全部经节点转发源站，按<b>平台统一价</b>从你的积分池实扣——池余额就是你的服务上限。节点<b>不需要</b>配置 OSS，也不接触任何上游密钥。</p>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+          <span style="font-size:13px">节点密钥</span>
+          ${nodeKey
+            ? `<b class="mono" style="font-size:13px">${esc(nodeKey.slice(0,14))}…</b>
+               <button class="sm" onclick="copyText('${esc(nodeKey)}','节点密钥已复制')">复制完整密钥</button>
+               <button class="sm" onclick="regenNodeKeyPortal(true)">重置</button>`
+            : `<span class="faint" style="font-size:12.5px">未生成</span>
+               <button class="sm pri" onclick="regenNodeKeyPortal(false)">生成节点密钥</button>`}
+        </div>
+        <p class="mut" style="margin:0;font-size:11.5px">⚠ 重置后旧密钥立即失效——已部署节点须同步更换 <span class="mono">SOURCE_NODE_KEY</span> 并重启。密钥等同你的积分池支配权，勿泄露。</p>
+      </div>
+      <div style="background:var(--panel2);border:1px solid var(--line);border-radius:var(--r-md);padding:16px 18px">
+        <h3 style="margin:0 0 8px;font-size:14px">部署指引</h3>
+        <ol class="mut" style="margin:0;padding-left:18px;font-size:12.5px;line-height:2">
+          <li>在你的服务器上部署本服务端（Node 24+，<span class="mono">cd server && npm i</span>）；</li>
+          <li><span class="mono">.env</span> 配置：<span class="mono">NODE_ROLE=relay</span> ＋ <span class="mono">SOURCE_URL=${esc(origin)}</span> ＋ <span class="mono">SOURCE_NODE_KEY=你的节点密钥</span>（另设 <span class="mono">PORT</span> 与 <span class="mono">ADMIN_TOKEN</span>）；</li>
+          <li>启动后打开节点的 <span class="mono">/admin</span>：顶部「源站连接」显示已连通与池余额即对接成功；</li>
+          <li>到节点管理端「注册与安全」配置 SMTP 开放注册；给用户发积分用节点本地「兑换码」；</li>
+          <li>客户端把服务器地址填成<b>你的节点地址</b>即可使用（价格与源站一致）。</li>
+        </ol>
+      </div>
+    </div>`;
+}
+async function regenNodeKeyPortal(isReset){
+  const doIt = async ()=>{
+    try {
+      const r = await api("/agent-api/node-key/regenerate",{method:"POST",body:"{}"});
+      toast(isReset?"节点密钥已重置（旧密钥已失效）":"节点密钥已生成");
+      if (r && r.nodeKey) copyText(r.nodeKey, "新密钥已复制到剪贴板");
+      loadNodePage();
+    } catch(e){ toast(e.message,"bad"); }
+  };
+  if (!isReset) return doIt();
+  confirmDo({ title:"重置节点密钥", text:"重置后<b>旧密钥立即失效</b>——你已部署的节点会断连，须同步更换 <span class='mono'>SOURCE_NODE_KEY</span> 并重启。确认重置？", okLabel:"确认重置", onOk: doIt });
+}
+
+/* ════════════════ 名下用户 ════════════════ */
+let USERS = [], uSearch = "", uChip = "all", uSel = new Set(), uSort = { key:"", dir:1 }, U_SHOWN = [];
+const AVATAR_BG = ["", "background:var(--info-dim);color:#c7bdf7", "background:var(--warn-dim);color:#f0d0a0", "background:var(--ok-dim);color:#9fe6c4"];
+function userFeat(u){ const f=u.features||{}; return { asset:f.assetMode!==false, canvas:f.canvasMode!==false, editor:f.editorMode!==false, libtv:f.libtv!==false, dreamina:f.dreamina!==false }; }
+/* 第121轮：源站整商硬闸（ME.features，缺省=开）——被平台禁用的模式，门户各处不显示该模式的开关
+   （用户级开关被硬闸压住无意义；用户表格 chips / 用户抽屉开关 / 签发弹窗勾选 三处同尺） */
+function agFeatOn(k){ return !(ME && ME.features && ME.features[k]===false); }
+/* 第228轮：用户级动态模式开关退役（与源站同尺）——渠道形式模式的管控由平台走
+   模式全局启停/整商硬闸，门户用户页只留功能形式五开关（资产/画布/实时剪辑/LibTV/即梦） */
+/* 「已注册」判定（P2b 全新语义）：注册体系下用户皆有账号；lastSeenAt 兜底登录留痕 */
+function uActivated(u){ return !!(u.account || u.lastSeenAt); }
+async function loadUsers(){
+  const el = $("#tab-users");
+  el.innerHTML = `
+    <div class="kpis" id="u_kpis"></div>
+    <div class="toolbar">
+      <div class="search"><svg><use href="#i-search"/></svg><input id="u_q" type="text" placeholder="搜索用户名 / 账号 / 备注" value="${esc(uSearch)}" oninput="uSearch=this.value;renderUsers()" /></div>
+      <span class="chip ${uChip==='all'?'on':''}" onclick="uChip='all';renderUsers()">全部</span>
+      <span class="chip ${uChip==='enabled'?'on':''}" onclick="uChip='enabled';renderUsers()">启用</span>
+      <span class="chip ${uChip==='disabled'?'on':''}" onclick="uChip='disabled';renderUsers()">停用</span>
+      <span class="sp"></span>
+      <span class="mut" style="font-size:12px" title="用户在客户端注册时填写此邀请码，即归属你名下（获客通道；给用户发积分走「兑换码」页）">我的邀请码</span>
+      <button class="pri" onclick="copyText(ME&&ME.inviteCode||'','邀请码已复制，发给用户注册时填写')"><svg><use href="#i-copy"/></svg><span class="mono">${esc(ME&&ME.inviteCode||"—")}</span></button>
+    </div>
+    <div id="u_batchbar" class="toolbar" style="display:none;align-items:center;gap:9px;background:var(--panel2,rgba(90,167,240,.08));border:1px solid var(--line2);border-radius:var(--r-sm);padding:8px 12px;margin:0 0 8px"></div>
+    <div class="tblwrap">
+      <table>
+        <thead><tr id="u_head"></tr></thead>
+        <tbody id="u_body"></tbody>
+      </table>
+      <div class="tfoot"><span id="u_meta"></span><span class="sp"></span><span class="faint">点行打开详情抽屉编辑</span></div>
+    </div>`;
+  try {
+    USERS = (await api("/agent-api/users")).items || [];
+    $("#cnt-users").textContent = USERS.length;
+    renderUsers();
+  } catch(e){ $("#u_body").innerHTML = `<tr><td colspan="8" class="bad-t">${esc(e.message)}</td></tr>`; }
+}
+function renderUsers(){
+  const kp = $("#u_kpis"); if(!kp) return;
+  const credits = USERS.reduce((s,u)=>s+(u.credits||0),0);
+  const daily = USERS.reduce((s,u)=>s+(u.dailySpent||0),0);
+  kp.innerHTML = [
+    ["名下用户", USERS.length, "凭你的邀请码注册的用户"],
+    ["用户积分合计", credits.toLocaleString(), `今日消耗 ${daily.toLocaleString()}`],
+    ["今日活跃", USERS.filter(u=>u.lastSeenAt && Date.now()-new Date(u.lastSeenAt).getTime()<86400e3).length, "近 24 小时有心跳"],
+    ["我的积分余额", (ME?.credits||0).toLocaleString(), "向源站购入；发兑换码时按面额划转给用户"],
+  ].map(([k,v,d])=>`<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join("");
+
+  /* 表头：可排序列——点击 降序→升序→恢复默认 */
+  const COLS = [
+    ["用户"], ["登录账号"], ["状态"], ["可用模式"],
+    ["积分","credits","right"], ["今日 / 总消耗","dailySpent","right"],
+    ["最近活跃","lastSeenAt"],
+  ];
+  const head = $("#u_head");
+  if (head) head.innerHTML = `<th style="width:34px"><input type="checkbox" id="u_selall" title="全选当前列表" onclick="toggleSelAll(this.checked)"/></th>` + COLS.map(([lb,key,right])=>{
+    const st = right ? ' style="text-align:right"' : "";
+    if (!key) return `<th${st}>${lb}</th>`;
+    const on = uSort.key===key;
+    const mark = on ? (uSort.dir===1 ? " ▼" : " ▲") : ` <span class="faint">⇅</span>`;
+    return `<th class="sorth${on?' on':''}"${st} title="点击排序（再点切换升降序 / 恢复默认）" onclick="setUSort('${key}')">${lb}${mark}</th>`;
+  }).join("");
+
+  const q = uSearch.trim().toLowerCase();
+  let shown = USERS;
+  if (uChip==="enabled") shown = shown.filter(u=>u.enabled);
+  if (uChip==="disabled") shown = shown.filter(u=>!u.enabled);
+  if (q) shown = shown.filter(u => [u.name,u.account,u.note].some(x=>String(x||"").toLowerCase().includes(q)));
+  if (uSort.key){
+    const val = u => uSort.key==="lastSeenAt" ? (u.lastSeenAt ? Date.parse(u.lastSeenAt)||0 : 0) : (Number(u[uSort.key])||0);
+    shown = shown.slice().sort((a,b)=>(val(b)-val(a))*uSort.dir);
+  }
+  $("#u_meta").textContent = `共 ${USERS.length} 个用户 · 显示 ${shown.length} 个`;
+  U_SHOWN = shown.map(u=>u.id);
+  $("#u_body").innerHTML = shown.map((u,i)=>{
+    const f = userFeat(u);
+    const mchip = (k,on,lb) => `<span class="mchip ${on?'on':'off'}" title="点击开关（心跳 ≤30s 生效）" onclick="event.stopPropagation();toggleFeat('${u.id}','${k}')">${lb}</span>`;
+    return `<tr class="clk" ${u.enabled?"":'style="opacity:.55"'} onclick="openUserDrawer('${u.id}')">
+      <td onclick="event.stopPropagation()"><input type="checkbox" ${uSel.has(u.id)?"checked":""} onclick="toggleSel('${u.id}',this.checked)"/></td>
+      <td><div class="ucell"><div class="avatar" style="${AVATAR_BG[i%4]}">${esc((dispUName(u)).slice(0,1))}</div><div><div>${esc(dispUName(u))}</div>${u.note?`<div class="sub">${esc(u.note)}</div>`:""}</div></div></td>
+      <td class="mono">${esc(u.account||"—")}</td>
+      <td><label class="sw" onclick="event.stopPropagation()"><input type="checkbox" ${u.enabled?"checked":""} onchange="updUser('${u.id}','enabled',this.checked,true)"/><i></i></label></td>
+      <td><div class="modechips">${[["assetMode",f.asset,"资产"],["canvasMode",f.canvas,"画布"],["editorMode",f.editor,"实时剪辑"],["libtv",f.libtv,"LibTV"],["dreamina",f.dreamina,"即梦"]].filter(x=>agFeatOn(x[0])).map(x=>mchip(x[0],x[1],x[2])).join("")}</div></td>
+      <td style="text-align:right">${(u.credits||0).toLocaleString()}</td>
+      <td style="text-align:right"><span>${(u.dailySpent||0).toLocaleString()}</span><span class="faint"> / ${(u.totalSpent||0).toLocaleString()}</span></td>
+      <td class="mut">${u.lastSeenAt ? relTime(u.lastSeenAt) : "—"}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="8" class="faint" style="text-align:center;padding:26px">还没有用户——把右上角<b>你的邀请码</b>发给用户，注册时填写即归属你名下</td></tr>`;
+  const sa = $("#u_selall"); if (sa) sa.checked = U_SHOWN.length>0 && U_SHOWN.every(id=>uSel.has(id));
+  renderUserBatchbar();
+}
+const dispUName = (u) => (u.name && u.name.trim()) ? u.name : (u.account || "（未命名）");
+/* ── 用户批量选择与操作（P2b：启停 + 模式开关；删除/解绑随激活码机制移除）── */
+function toggleSel(id, on){ if(on) uSel.add(id); else uSel.delete(id); const sa=$("#u_selall"); if(sa) sa.checked = U_SHOWN.length>0 && U_SHOWN.every(x=>uSel.has(x)); renderUserBatchbar(); }
+function toggleSelAll(on){ if(on) U_SHOWN.forEach(id=>uSel.add(id)); else U_SHOWN.forEach(id=>uSel.delete(id)); renderUsers(); }
+function renderUserBatchbar(){
+  const bb = $("#u_batchbar"); if(!bb) return;
+  if(uSel.size===0){ bb.style.display="none"; bb.innerHTML=""; return; }
+  const modeOpts = [["f:assetMode","资产"],["f:canvasMode","画布"],["f:editorMode","实时剪辑"],["f:libtv","LibTV"],["f:dreamina","即梦"]].filter(x=>agFeatOn(x[0].slice(2)))
+    .map(x=>`<option value="${x[0]}">${x[1]}</option>`).join("");
+  bb.style.display="flex";
+  bb.innerHTML = `<b>已选 ${uSel.size} 个</b>
+    <button class="sm" onclick="batchAccount(true)">启用账号</button>
+    <button class="sm" onclick="batchAccount(false)">停用账号</button>
+    <span style="width:12px"></span><span class="faint">模式：</span>
+    <select id="u_batchmode">${modeOpts}</select>
+    <button class="sm" onclick="batchSetMode(true)">开启</button>
+    <button class="sm" onclick="batchSetMode(false)">关闭</button>
+    <span class="sp" style="flex:1"></span>
+    <button class="sm ghost" onclick="uSel=new Set();renderUsers()">取消选择</button>`;
+}
+async function batchOp(body, okTpl){
+  try{
+    const r = await api("/agent-api/users/batch-op",{method:"POST",body:JSON.stringify({ids:[...uSel],...body})});
+    toast(okTpl.replace("{n}", r.affected) + (r.skipped ? `（跳过 ${r.skipped} 个）` : ""));
+    await loadUsers();
+  } catch(e){ toast(e.message,"bad"); }
+}
+function batchAccount(on){ batchOp({op:on?"enable":"disable"}, on?"已启用 {n} 个账号":"已停用 {n} 个账号"); }
+function batchSetMode(on){
+  const v = ($("#u_batchmode")||{}).value; if(!v) return;
+  const k = v.split(":")[1];
+  batchOp({op:"setFeature",feature:k,value:on}, (on?"已开启":"已关闭")+" {n} 个用户的该模式（心跳 ≤30s 生效）");
+}
+function setUSort(key){
+  if (uSort.key!==key) uSort = { key, dir: 1 };
+  else if (uSort.dir===1) uSort.dir = -1;
+  else uSort = { key: "", dir: 1 };
+  renderUsers();
+}
+async function updUser(id,k,v,rerender){
+  try { await api("/agent-api/users/"+id,{method:"PUT",body:JSON.stringify({[k]:v})}); const u=USERS.find(x=>x.id===id); if(u)u[k]=v; toast("已保存"); if(rerender)renderUsers(); }
+  catch(e){ toast(e.message,"bad"); if(rerender)renderUsers(); }
+}
+async function toggleFeat(id,k){
+  const u = USERS.find(x=>x.id===id); if(!u) return;
+  const f = Object.assign({assetMode:true,canvasMode:true,editorMode:true,libtv:true,dreamina:true}, u.features||{});
+  f[k] = f[k]===false;
+  if (f.assetMode===false && f.canvasMode===false && f.editorMode===false){ toast("资产、画布与实时剪辑模式至少保留一个","bad"); return; }
+  try { await api("/agent-api/users/"+id,{method:"PUT",body:JSON.stringify({features:f})}); u.features=f; toast(`${f[k]!==false?"已开启":"已关闭"}，心跳 ≤30s 生效`); renderUsers(); if(DRAWER_UID===id)renderUserDrawer(); }
+  catch(e){ toast(e.message,"bad"); }
+}
+let DRAWER_UID = null;
+function openUserDrawer(id){ DRAWER_UID=id; renderUserDrawer(); $("#scrim").classList.add("on"); $("#drawer").classList.add("on"); }
+function closeDrawer(){ DRAWER_UID=null; $("#scrim").classList.remove("on"); $("#drawer").classList.remove("on"); }
+function renderUserDrawer(){
+  const u = USERS.find(x=>x.id===DRAWER_UID); if(!u) return;
+  const f = userFeat(u);
+  const swrow = (k,on,nm,ds) => `<div class="swrow"><div><div class="nm">${nm}</div><div class="ds">${ds}</div></div><span class="sp"></span><label class="sw"><input type="checkbox" ${on?"checked":""} onchange="toggleFeat('${u.id}','${k}')"/><i></i></label></div>`;
+  $("#drawerBody").innerHTML = `
+    <div class="dh"><div class="avatar">${esc((dispUName(u)).slice(0,1))}</div><h2>${esc(dispUName(u))}</h2><span class="badge ${u.enabled?"ok":"bad"}">${u.enabled?"启用":"停用"}</span><span class="sp" style="flex:1"></span><button class="ghost icon" onclick="closeDrawer()"><svg><use href="#i-x"/></svg></button></div>
+    <div class="db">
+      <div class="dsec"><div class="t">基 本 信 息</div>
+        <div class="frow"><label>用户名</label><input type="text" value="${esc(u.name)}" onchange="updUser('${u.id}','name',this.value,true)" /></div>
+        <div class="frow"><label>登录账号</label>${u.account?`<span class="val mono">${esc(u.account)}</span>`:`<span class="val faint">未注册</span>`}</div>
+        <div class="frow"><label>备注</label><input type="text" value="${esc(u.note||"")}" onchange="updUser('${u.id}','note',this.value,true)" /></div>
+        <div class="frow"><label>积分</label><span class="val">${(u.credits||0).toLocaleString()}</span><span class="faint" style="font-size:11.5px">给他充值 → 发兑换码（面额从你的余额划转）</span></div>
+        <div class="frow"><label>启用</label><label class="sw"><input type="checkbox" ${u.enabled?"checked":""} onchange="updUser('${u.id}','enabled',this.checked,true);renderUserDrawer()"/><i></i></label></div>
+      </div>
+      <div class="dsec"><div class="t">可 用 模 式（心跳 ≤30s 生效）</div>
+        ${agFeatOn("assetMode")?swrow("assetMode",f.asset,"资产模式","表格创作五类资产界面"):""}
+        ${agFeatOn("canvasMode")?swrow("canvasMode",f.canvas,"画布模式","节点画布；三个主模式至少留一个"):""}
+        ${agFeatOn("editorMode")?swrow("editorMode",f.editor,"实时剪辑模式","实时剪辑；三个主模式至少留一个"):""}
+        ${agFeatOn("libtv")?swrow("libtv",f.libtv,"LibTV 授权入口","用户自有账号生成"):""}
+        ${agFeatOn("dreamina")?swrow("dreamina",f.dreamina,"即梦授权入口","用户自有即梦账号生成"):""}
+        ${["assetMode","canvasMode","editorMode","libtv","dreamina"].some(k=>!agFeatOn(k))?`<div class="faint" style="font-size:11.5px;padding:4px 0">部分模式已由平台对你整体停用，不在此显示。</div>`:""}
+      </div>
+      <div class="dsec"><div class="t">消 耗</div>
+        <div class="frow"><label>今日</label><span class="val">${(u.dailySpent||0).toLocaleString()} 积分</span></div>
+        <div class="frow"><label>累计</label><span class="val">${(u.totalSpent||0).toLocaleString()} 积分</span></div>
+        <div class="frow"><label>最近活跃</label><span class="val mut">${u.lastSeenAt?new Date(u.lastSeenAt).toLocaleString():"—"}</span></div>
+        <div class="frow"><label>请求记录</label><button class="sm" onclick="openUserLogs('${u.id}','${esc(dispUName(u))}')">查看该用户请求记录</button></div>
+      </div>
+    </div>`;
+}
+
+/* ════════════════ 兑换码 ════════════════ */
+async function loadRedeem(){
+  const el = $("#tab-redeem");
+  el.innerHTML = `
+    <div class="card"><div class="hd"><h3>生成兑换码</h3><span class="badge plain" style="font-size:11px">面额×数量 从你的余额划转 · 兑换充入用户余额 · 作废未用退回</span></div>
+      <div class="bd">
+        <div class="mut" style="font-size:12px;margin-bottom:10px">本页只显示<b>你签发</b>的兑换码——它们<b>只有你的名下用户</b>能兑换（别家渠道商的用户兑换会被拒绝）；源站直发的码则所有用户通用。生成时按 <b>面额×数量</b> 从你的积分余额<b>真实划转</b>；作废未使用的码会把面额退回。</div>
+        <div class="fgrid">
+          <div class="fld"><span>面额（积分/码）</span><input id="rd_credits" type="number" value="5000" min="1"/></div>
+          <div class="fld"><span>数量（1–500）</span><input id="rd_count" type="number" value="10" min="1" max="500"/></div>
+          <div class="fld"><span>有效期至（可空）</span><input id="rd_exp" type="date"/></div>
+          <div class="fld"><span>备注（可空）</span><input id="rd_note" type="text" placeholder="如 复购活动"/></div>
+        </div>
+        <div class="toolbar" style="margin:12px 0 0"><button class="pri" id="rd_ok" onclick="genRedeem()"><svg><use href="#i-plus"/></svg>生成兑换码</button><button class="sm" onclick="copyUnusedCodes()"><svg><use href="#i-copy"/></svg>复制未使用码</button><span class="bad-t" id="rd_err" style="font-size:12px"></span></div>
+      </div>
+    </div>
+    <div class="tblwrap"><table><thead><tr><th>兑换码</th><th style="text-align:right">面额</th><th>状态</th><th>兑换用户</th><th>有效期</th><th>备注</th><th>生成时间</th><th></th></tr></thead><tbody id="rd_body"></tbody></table></div>`;
+  try {
+    const { items } = await api("/agent-api/redeem-codes");
+    window.__codes = items;
+    $("#cnt-redeem").textContent = items.length;
+    $("#rd_body").innerHTML = items.map(c=>{
+      const expd = c.expiresAt && Date.now()>Date.parse(c.expiresAt);
+      const status = c.used ? `<span class="badge bad">已兑换</span>` : (expd ? `<span class="badge run">已过期</span>` : `<span class="badge ok">未使用</span>`);
+      return `<tr>
+        <td><span class="mono">${esc(c.code)}</span> <button class="sm ghost icon" onclick="copyText('${esc(c.code)}','兑换码已复制')"><svg><use href="#i-copy"/></svg></button></td>
+        <td style="text-align:right">${c.credits}</td><td>${status}</td>
+        <td class="mut">${c.used ? esc(c.usedByName||c.usedBy||'')+' · '+(c.usedAt?new Date(c.usedAt).toLocaleString():'') : '—'}</td>
+        <td class="mut">${c.expiresAt ? new Date(c.expiresAt).toLocaleDateString() : '永久'}</td>
+        <td class="mut">${esc(c.note||'')}</td>
+        <td class="mut">${new Date(c.createdAt).toLocaleString()}</td>
+        <td>${c.used?'':`<button class="sm danger" onclick="voidRedeem('${esc(c.code)}',${c.credits})">作废</button>`}</td></tr>`;
+    }).join("") || `<tr><td colspan="8" class="faint" style="text-align:center;padding:24px">暂无兑换码</td></tr>`;
+  } catch(e){ $("#rd_err").textContent = e.message; }
+}
+async function genRedeem(){
+  const credits = Number($("#rd_credits").value)||0, count = Number($("#rd_count").value)||1;
+  const exp = $("#rd_exp").value, expiresAt = exp ? new Date(exp+"T23:59:59").toISOString() : undefined;
+  const note = $("#rd_note").value.trim()||undefined;
+  if (credits<=0){ $("#rd_err").textContent = "面额需 > 0"; return; }
+  try {
+    const r = await api("/agent-api/redeem-codes",{method:"POST",body:JSON.stringify({credits,count,expiresAt,note})});
+    const items = r.items||[];
+    $("#dlgTitle").textContent = "已生成 " + items.length + " 个兑换码";
+    $("#dlgBody").innerHTML = `<div class="toolbar" style="margin-bottom:12px"><button class="pri sm" onclick="copyText(window.__newRd.join('\\n'),'已复制 '+window.__newRd.length+' 个兑换码')"><svg><use href="#i-copy"/></svg>复制全部</button><span class="mut" style="font-size:12px">面额 ${credits} 积分/码 · 已划转 ${(r.spent||0).toLocaleString()} 积分 · 余额 ${(r.balance||0).toLocaleString()}</span></div><pre class="jsonbox" style="max-height:46vh">${esc(items.map(c=>c.code).join("\n"))}</pre>`;
+    window.__newRd = items.map(c=>c.code);
+    dlg.classList.remove("wide"); dlg.showModal(); refreshMe(); loadRedeem();
+  } catch(e){ $("#rd_err").textContent = e.message; }
+}
+function copyUnusedCodes(){
+  const list = (window.__codes||[]).filter(c=>!c.used && !(c.expiresAt && Date.now()>Date.parse(c.expiresAt))).map(c=>c.code);
+  if (!list.length){ toast("没有可用的未使用兑换码","bad"); return; }
+  copyText(list.join("\n"), "已复制 "+list.length+" 个未使用兑换码");
+}
+function voidRedeem(code, credits){ confirmDo({ title:"作废兑换码", text:`作废「<span class="mono">${esc(code)}</span>」？该码未使用，作废后不可再兑换，<b>面额 ${credits} 积分退回你的余额</b>。`, okLabel:"作废", onOk: async ()=>{ try { const r = await api("/agent-api/redeem-codes/"+encodeURIComponent(code),{method:"DELETE"}); toast(r.refund>0?`已作废，退回 ${r.refund.toLocaleString()} 积分`:"已作废"); refreshMe(); loadRedeem(); } catch(e){ toast(e.message,"bad"); } }}); }
+
+/* ── 扩容卡（P1 商业化改造：签发免费；规格由源站统一配置、冻结进卡）── */
+const SC_MB = 1048576;
+const scMB = (b) => Math.round((Number(b)||0) / SC_MB);
+async function loadStorageCodes(){
+  const el = $("#tab-storage");
+  el.innerHTML = `<div class="mut" style="font-size:12.5px">加载中…</div>`;
+  let d;
+  try { d = await api("/agent-api/storage-codes"); }
+  catch(e){ el.innerHTML = `<div class="bad-t">${esc(e.message)}</div>`; return; }
+  window.__sc = d;
+  $("#cnt-storage").textContent = d.items.length || "";
+  const opt = (k) => `<option value="${k}">${k==='user'?'个人':'团队'}：+${scMB(d.specs[k].bytes)}MB / ${d.specs[k].days}天</option>`;
+  el.innerHTML = `
+    <div class="card" style="margin-bottom:14px">
+      <div class="hd"><h3>签发扩容卡</h3><span class="mut" style="font-size:12px">
+        用户收藏的素材会被<b>云端永久保留</b>，每人有基础额度；扩容卡给他加额度、按天计时。
+        个人卡由用户在客户端「个人中心」核销，团队卡由团长核销到团队共享库。
+        <b>签发免费</b>（规格由源站统一配置）。</span></div>
+      <div class="bd">
+        <div class="toolbar" style="margin:0 0 10px">
+          <select id="sc_target" style="width:auto">${opt('user')}${opt('team')}</select>
+          <input id="sc_count" type="number" value="1" min="1" max="200" style="width:80px" title="生成数量"/>
+          <input id="sc_note" type="text" placeholder="备注（可空）" style="width:170px"/>
+          <button class="pri" id="sc_btn" onclick="genSc()">生成</button>
+        </div>
+        ${d.items.length ? `<table class="tbl"><thead><tr><th>卡号</th><th>类型</th><th>容量/天数</th><th>状态</th><th>备注</th><th>签发时间</th><th></th></tr></thead><tbody>
+          ${d.items.map(c => `<tr>
+            <td><code>${esc(c.code)}</code></td>
+            <td>${c.target==='team'?'团队':'个人'}</td>
+            <td>+${scMB(c.bytes)}MB / ${c.days}天</td>
+            <td>${c.usedBy ? `<span class="badge ok">已用</span>` : '<span class="badge">未用</span>'}</td>
+            <td class="mut">${esc(c.note||'')}</td>
+            <td class="mut">${relTime(c.createdAt)}</td>
+            <td>${c.usedBy ? '' : `<button class="ghost sm" onclick="delSc('${esc(c.code)}')">作废</button>`}</td>
+          </tr>`).join("")}
+        </tbody></table>` : `<div class="mut" style="font-size:12.5px">还没有签发过扩容卡</div>`}
+      </div>
+    </div>`;
+}
+async function genSc(){
+  const body = { count: Number($("#sc_count").value)||1, target: $("#sc_target").value, note: $("#sc_note").value.trim() };
+  try {
+    const r = await api("/agent-api/storage-codes",{method:"POST",body:JSON.stringify(body)});
+    const codes = r.items.map(c=>c.code).join("\n");
+    $("#dlgTitle").textContent = `已签发 ${r.items.length} 张扩容卡`;
+    $("#dlgBody").innerHTML = `<textarea readonly style="width:100%;height:220px;font-family:var(--mono);font-size:12px">${esc(codes)}</textarea>
+      <div class="toolbar" style="margin-top:10px"><button class="pri" onclick="copyText(${JSON.stringify(codes)},'已复制全部卡号')">复制全部</button></div>`;
+    dlg.showModal(); loadStorageCodes();
+  } catch(e){ toast(e.message,"bad"); }
+}
+function delSc(code){
+  confirmDo({ title:"作废扩容卡", text:`确定作废 <code>${esc(code)}</code>？<br>作废后不可再用，且<b>无退回</b>。`, okLabel:"作废", onOk: async () => {
+    try { await api("/agent-api/storage-codes/"+encodeURIComponent(code),{method:"DELETE"}); toast("已作废"); loadStorageCodes(); }
+    catch(e){ toast(e.message,"bad"); }
+  }});
+}
+
+async function loadTeams(){
+  const el = $("#tab-teams");
+  el.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:baseline;background:var(--acc-dim);border:1px solid rgba(90,167,240,.25);border-radius:var(--r-md);padding:9px 14px;margin-bottom:12px;font-size:12.5px;color:#bcd8f6"><b style="color:var(--acc)">团队码</b><span>团队码现由<b>源站统一免费签发</b>（联系平台获取后发给你的用户开团）；本页只读查看名下团队。</span></div>
+    <div class="tblwrap">
+      <table><thead><tr><th>团队</th><th>团长</th><th style="text-align:right" title="现有人数 / 上限（含团长，上限由源站设定）">成员数/上限</th><th>积分方式</th><th style="text-align:right" title="共享模式=团队共享池（团长余额）；分发模式=团长可分发余量">池余额（团长）</th><th style="text-align:right">团员积分合计</th><th>共享素材库</th><th>创建时间</th></tr></thead><tbody id="tm_body"></tbody></table>
+      <div class="tfoot"><span id="tm_meta"></span><span class="sp"></span><span class="faint">只读——团队由团长在客户端管理（邀请团员/积分方式/分发收回/解散）</span></div>
+    </div>`;
+  try {
+    const tr = await api("/agent-api/teams");
+    const teams = tr.items||[];
+    $("#cnt-teams").textContent = teams.length;
+    $("#tm_meta").textContent = `名下 ${teams.length} 个团队`;
+    $("#tm_body").innerHTML = teams.map(t=>`<tr>
+      <td><b>${esc(t.name)}</b></td>
+      <td>${t.leader?`${esc(t.leader.name)}${t.leader.account?` <span class="mut mono">@${esc(t.leader.account)}</span>`:""}`:`<span class="bad-t">（已删）</span>`}</td>
+      <td style="text-align:right">${t.memberCount}<span class="faint">/${t.effectiveLimit||"—"}</span></td>
+      <td>${t.creditMode==="shared"?`<span class="badge ok">共享积分</span>`:`<span class="badge plain">分发积分</span>`}</td>
+      <td style="text-align:right">${(t.poolCredits||0).toLocaleString()}</td>
+      <td style="text-align:right">${(t.memberCredits||0).toLocaleString()}</td>
+      <td class="mut">${esc(t.sharedLibName||"—")}</td>
+      <td class="mut">${new Date(t.createdAt).toLocaleString()}</td>
+    </tr>`).join("") || `<tr><td colspan="8" class="faint" style="text-align:center;padding:20px">名下还没有团队</td></tr>`;
+  } catch(e){ $("#tm_body").innerHTML = `<tr><td colspan="8" class="bad-t">${esc(e.message)}</td></tr>`; }
+}
+
+/* ════════════════ 模型（P1 统一定价：只读平台价 + 启停 + 显示名）════════════════ */
+const CAP_LABELS = { text:"文本", image:"图像", video:"视频", audio:"音频", "video-enhance":"视频超分", "video-erase":"视频去字幕", "image-enhance":"图像超分" };
+let PMODELS = [];
+/* 定价表按模式分组（第131轮）：默认模式在前，其余按模式名排序；组内保持模型清单序 */
+function groupByMode(items){
+  const groups = {};
+  items.forEach(m=>{ const k = m.modeId||""; (groups[k]=groups[k]||{name:m.modeName||"默认模式（常开）",list:[]}).list.push(m); });
+  return Object.keys(groups).sort((a,b)=> a===""?-1 : b===""?1 : groups[a].name.localeCompare(groups[b].name)).map(k=>groups[k]);
+}
+const unitName = (f) => f==="duration" ? "秒" : (f||"单位");
+/* 档位条件签名/显示名（签名口径与服务端 pricingWhenKey 一致：键排序后 JSON） */
+const whenKey = (w) => JSON.stringify(Object.entries(w||{}).sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0));
+const whenLabel = (w) => Object.values(w||{}).map(esc).join("/") || "默认";
+function priceRuleDesc(r, field){
+  const cond = Object.values(r.when||{}).map(esc).join("/") || "默认";
+  const parts = [];
+  if (field && r.costPerUnit!=null) parts.push(r.costPerUnit+" 积分/"+esc(unitName(field)));
+  if (r.cost!=null) parts.push(r.cost+" 积分/次");
+  return parts.length ? cond+" "+parts.join("，") : "";
+}
+function platPriceHtml(m){
+  const base = m.costField
+    ? (m.costPerUnit!=null ? `${m.costPerUnit} 积分/${esc(unitName(m.costField))}` : `按档位`) + ` <span class="faint">（兜底 ${m.cost} 积分/次）</span>`
+    : `${m.cost} 积分/次`;
+  const rules = (m.costRules||[]).map(r=>priceRuleDesc(r, m.costField)).filter(Boolean);
+  return `<div>${base}</div>` + (rules.length ? `<div class="sub">档位：${rules.join(" · ")}</div>` : "");
+}
+async function loadPricing(){
+  const el = $("#tab-pricing");
+  el.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:baseline;background:var(--acc-dim);border:1px solid rgba(90,167,240,.25);border-radius:var(--r-md);padding:9px 14px;margin-bottom:12px;font-size:12.5px;color:#bcd8f6"><b style="color:var(--acc)">统一定价</b><span>模型价格由源站统一制定，对全体用户同价（你的用户按平台价扣自己的积分，你不再按请求结算）。你可以：<b>启停</b>自己范围内的模型、给模型改<b>显示名</b>（只影响你名下用户看到的名称）。</span></div>
+    <div class="toolbar" id="pm_toolbar"></div>
+    <div class="tblwrap">
+      <table>
+        <thead><tr><th style="width:52px">启用</th><th>模型</th><th title="改名后你的用户在客户端看到的名称；留空=平台名">显示名（对用户）</th><th>能力</th><th title="源站统一价：全体用户同价，客户端预估=实扣">价格（统一价）</th></tr></thead>
+        <tbody id="pm_body"><tr><td colspan="5" class="faint" style="text-align:center;padding:24px">加载中…</td></tr></tbody>
+      </table>
+      <div class="tfoot"><span id="pm_meta"></span><span class="sp"></span><span class="faint">启用开关即时生效；显示名改动点右上「保存全部修改」一次提交</span></div>
+    </div>`;
+  try {
+    PMODELS = (await api("/agent-api/models")).items || [];
+    P_EDIT = {};
+    $("#cnt-pricing").textContent = PMODELS.length;
+    renderPricing();
+  } catch(e){ $("#pm_body").innerHTML = `<tr><td colspan="5" class="bad-t">${esc(e.message)}</td></tr>`; }
+}
+
+/* ── 模型表（P1 统一定价瘦身）：单行紧凑 · 状态/分组筛选 · 显示名暂存 + 一键保存 · 启停即时生效 ── */
+let P_EDIT = {};            // modelId → { label? } 输入原始串暂存（筛选/分组重渲染不丢）
+let pChip = "on", pGroup = "mode"; // 状态筛选（on/off/all）· 分组（mode/channel）
+function pmEdit(id){ return P_EDIT[id] = P_EDIT[id] || {}; }
+function pmVal(id, key, orig){ const e = P_EDIT[id]; if (e && (key in e)) return e[key]; return orig != null ? String(orig) : ""; }
+function pmIn(id, key, v){ pmEdit(id)[key] = v; updateSaveBtn(); }
+function modelDirty(m){
+  const e = P_EDIT[m.id]; if (!e) return false;
+  return ("label" in e) && e.label.trim() !== (m.myLabel != null ? String(m.myLabel) : "");
+}
+function dirtyCount(){ return PMODELS.filter(modelDirty).length; }
+function updateSaveBtn(){ const b = $("#pm_saveall"); if (!b) return; const n = dirtyCount(); b.disabled = n===0; b.textContent = n ? `保存全部修改（${n}）` : "保存全部修改"; }
+function groupModelsBy(items, keyF, nameF){
+  const groups = {};
+  items.forEach(m=>{ const k = keyF(m); (groups[k]=groups[k]||{name:nameF(m),list:[]}).list.push(m); });
+  return Object.keys(groups).sort((a,b)=> a===""?-1 : b===""?1 : groups[a].name.localeCompare(groups[b].name)).map(k=>groups[k]);
+}
+function platBase(m){
+  return m.costField
+    ? (m.costPerUnit!=null ? `${m.costPerUnit} 积分/${esc(unitName(m.costField))}` : "按档位")
+    : `${m.cost} 积分/次`;
+}
+function platTitle(m){
+  const rules = (m.costRules||[]).map(r=>priceRuleDesc(r, m.costField)).filter(Boolean);
+  const parts = [];
+  if (m.costField) parts.push(`兜底 ${m.cost} 积分/次`);
+  if (rules.length) parts.push("档位："+rules.join("；"));
+  return parts.length ? ` title="${esc(parts.join("；"))}"` : "";
+}
+function pmRow(m){
+  return `<tr${m.myBlocked ? ' style="opacity:.5"' : ""}>
+    <td>${m.hidden ? `<span class="faint">—</span>` : `<label class="sw"><input type="checkbox" ${m.myBlocked?"":"checked"} onchange="toggleModelAccess('${esc(m.id)}',this.checked)"/><i></i></label>`}</td>
+    <td style="white-space:nowrap"><b style="font-weight:600">${esc(m.label)}</b> <span class="sub mono" style="display:inline">${esc(m.id)}</span>${m.hidden?` <span class="badge info" title="不在用户模型下拉里；用户走 LibTV/即梦生成一次收一次">手续费</span>`:""}${m.myBlocked?` <span class="bad-t" style="font-size:11px">已禁用</span>`:""}</td>
+    <td>${m.hidden ? `<span class="faint">—</span>` : `<input type="text" maxlength="40" style="width:150px;font-size:12px" placeholder="${esc(m.label)}" value="${esc(pmVal(m.id,"label",m.myLabel))}" oninput="pmIn('${esc(m.id)}','label',this.value)" onkeydown="if(event.key==='Enter')saveAllPricing()" title="改名后你的用户在客户端看到的名称；留空=平台名" />`}</td>
+    <td><span class="badge plain">${m.hidden?"内部计费":esc(CAP_LABELS[m.capability]||m.capability)}</span></td>
+    <td style="white-space:nowrap"${platTitle(m)}>${platBase(m)}</td>
+  </tr>`;
+}
+function renderPricing(){
+  const body = $("#pm_body"); if (!body) return;
+  const onN = PMODELS.filter(m=>!m.myBlocked).length, offN = PMODELS.length - onN;
+  const tb = $("#pm_toolbar");
+  if (tb) tb.innerHTML = `
+    <span class="chip ${pChip==='on'?'on':''}" onclick="pChip='on';renderPricing()">启用 ${onN}</span>
+    <span class="chip ${pChip==='off'?'on':''}" onclick="pChip='off';renderPricing()">已禁用 ${offN}</span>
+    <span class="chip ${pChip==='all'?'on':''}" onclick="pChip='all';renderPricing()">全部 ${PMODELS.length}</span>
+    <span class="faint" style="margin-left:12px;font-size:12px">分组</span>
+    <span class="chip ${pGroup==='mode'?'on':''}" onclick="pGroup='mode';renderPricing()">按模式</span>
+    <span class="chip ${pGroup==='channel'?'on':''}" onclick="pGroup='channel';renderPricing()">按渠道</span>
+    <span class="sp"></span>
+    <button class="pri" id="pm_saveall" onclick="saveAllPricing()" disabled>保存全部修改</button>`;
+  let shown = PMODELS;
+  if (pChip==="on") shown = shown.filter(m=>!m.myBlocked);
+  if (pChip==="off") shown = shown.filter(m=>m.myBlocked);
+  const groups = pGroup==="channel"
+    ? groupModelsBy(shown, m=>m.channelId||"", m=>m.channelName||"平台内部")
+    : groupModelsBy(shown, m=>m.modeId||"", m=>m.modeName||"默认模式（常开）");
+  $("#pm_meta").textContent = `共 ${PMODELS.length} 个模型 · 启用 ${onN} · 已禁用 ${offN} · 已改名 ${PMODELS.filter(m=>m.myLabel).length}`;
+  body.innerHTML = groups.map(g=>
+    `<tr class="grphead"><td colspan="5">▍ ${esc(g.name)} <span class="faint" style="font-weight:400">（${g.list.length} 个模型）</span></td></tr>` + g.list.map(pmRow).join("")
+  ).join("") || `<tr><td colspan="5" class="faint" style="text-align:center;padding:24px">没有匹配的模型</td></tr>`;
+  updateSaveBtn();
+}
+/* 启用/禁用（即时生效，不进「保存全部」）：写本商 blockedModels——名下用户 catalog 隐藏 + 调用 403；解禁即恢复 */
+async function toggleModelAccess(id, enabled){
+  const m = PMODELS.find(x=>x.id===id); if (!m) return;
+  try {
+    await api("/agent-api/models/"+encodeURIComponent(id)+"/access",{ method:"PUT", body: JSON.stringify({ blocked: !enabled }) });
+    m.myBlocked = !enabled;
+    toast(enabled ? "已启用，用户端 ≤30s 恢复该模型" : "已禁用：你的用户不可再用该模型（≤30s 生效）");
+  } catch(e){ toast(e.message,"bad"); }
+  renderPricing();
+}
+/* 一键保存：显示名脏项逐项提交（成功项从暂存清除，失败项保留可改后重试） */
+async function saveAllPricing(){
+  const jobs = PMODELS.filter(modelDirty);
+  if (!jobs.length){ toast("没有需要保存的修改"); return; }
+  const btn = $("#pm_saveall"); if (btn){ btn.disabled = true; btn.textContent = "保存中…"; }
+  let okN = 0; const fails = [];
+  for (const m of jobs){
+    try {
+      const r = await api("/agent-api/models/"+encodeURIComponent(m.id)+"/label",{ method:"PUT", body: JSON.stringify({ label: pmVal(m.id,"label",m.myLabel).trim() }) });
+      m.myLabel = r.myLabel; const e = P_EDIT[m.id]; if (e) delete e.label; okN++;
+    } catch(err){ fails.push(`${m.label}：${err.message}`); }
+  }
+  renderPricing();
+  if (fails.length) toast(`已保存 ${okN} 项；${fails.length} 项失败：${fails[0]}`,"bad");
+  else toast(`已保存 ${okN} 项修改`);
+}
+
+/* ════════════════ 自营提示词模板（渠道商管自己的；随 catalog 下发给名下用户）════════════════ */
+/* 模板可选用途（第108轮精简，与管理端一致）：删 asset.* 出图/变体项；新增「单卡推理」 */
+const T_PURPOSES = ["script.toScenes","script.analyze","storyboard.split","storyboard.toImagePrompt","storyboard.toVideoPrompt","storyboard.singleShot","storyboard.unified","storyboard.unifiedShot","video.generate","audio.tts"];
+const T_CATEGORIES = ["画风","剧本结构化","资产提取","变体融图","分镜生图","视频生成","其他"];
+const T_CAPS = ["text","image","video","audio","video-enhance","video-erase"];
+const tplPurposeLabel = (p) => PURPOSE_LABELS[p] || p || "—";
+const tplPurposeOpt = (p) => `${tplPurposeLabel(p)}（${p}）`;
+let TPLS = [], SHARED_TPLS = [], tplSel = "", tplSearch = "";
+function parseList(s){ return String(s||"").split(/[,，\s]+/).map(x=>x.trim()).filter(Boolean); }
+async function loadTemplates(){
+  const el = $("#tab-templates");
+  el.innerHTML = `
+    <datalist id="cat_list">${T_CATEGORIES.map(c=>`<option value="${esc(c)}">`).join("")}</datalist>
+    <div class="why" style="display:flex;gap:8px;align-items:baseline;background:var(--acc-dim);border:1px solid rgba(90,167,240,.25);border-radius:var(--r-md);padding:9px 14px;margin-bottom:12px;font-size:12.5px;color:#bcd8f6"><b style="color:var(--acc)">自营模板</b><span>这里的提示词只属于你、只对你名下的用户生效（随 catalog 下发）。平台自带的基础模板（剧本分析/智能推理等）你的用户仍可用，此处不显示、也不受影响。</span></div>
+    <div class="tpl">
+      <div class="tpllist">
+        <div class="lh"><input type="text" placeholder="搜索 id / 名称…" value="${esc(tplSearch)}" oninput="tplSearch=this.value;renderTplList()" /><button class="pri icon" title="新建模板" onclick="openNewTplDlg()"><svg><use href="#i-plus"/></svg></button></div>
+        <div class="lbody" id="tpl_list"></div>
+      </div>
+      <div class="tpled" id="tpl_editor"></div>
+    </div>`;
+  try {
+    TPLS = (await api("/agent-api/templates")).items||[];
+    try { SHARED_TPLS = (await api("/agent-api/shared-templates")).items||[]; } catch { SHARED_TPLS = []; }
+    $("#cnt-templates").textContent = TPLS.length;
+    if (!tplSel || !(TPLS.some(t=>t.id===tplSel)||SHARED_TPLS.some(t=>t.id===tplSel))) tplSel = TPLS[0]?.id || "";
+    renderTplList(); renderTplEditor();
+  } catch(e){ $("#tpl_list").innerHTML = `<div class="bad-t" style="padding:14px;font-size:12.5px">${esc(e.message)}</div>`; }
+}
+const isSharedTpl = (id) => SHARED_TPLS.some(t=>t.id===id) && !TPLS.some(t=>t.id===id);
+function tplGroups(){
+  const q = tplSearch.trim().toLowerCase();
+  let items = TPLS;
+  if (q) items = items.filter(t=>[t.id,t.name,t.purpose,tplPurposeLabel(t.purpose||""),t.category].some(x=>String(x||"").toLowerCase().includes(q)));
+  const by = {};
+  items.forEach(t=>{ const k=t.purpose||""; (by[k]=by[k]||[]).push(t); });
+  Object.values(by).forEach(a=>a.sort((x,y)=>(x.order||0)-(y.order||0) || String(x.name).localeCompare(String(y.name))));
+  const known = T_PURPOSES.filter(p=>by[p]);
+  const unknown = Object.keys(by).filter(k=>k && !T_PURPOSES.includes(k)).sort();
+  const groups = [];
+  known.forEach(p=>groups.push({ key:p, label:`${tplPurposeLabel(p)} · ${p}`, items:by[p] }));
+  unknown.forEach(p=>groups.push({ key:p, label:`${tplPurposeLabel(p)} · ${p}`, items:by[p] }));
+  if (by[""]) groups.push({ key:"", label:"预设（无用途，画风等）", items:by[""] });
+  return groups;
+}
+function renderTplList(){
+  const host = $("#tpl_list"); if(!host) return;
+  const groups = tplGroups();
+  const q = tplSearch.trim().toLowerCase();
+  let shared = SHARED_TPLS;
+  if (q) shared = shared.filter(t=>[t.id,t.name,tplPurposeLabel(t.purpose||""),t.category].some(x=>String(x||"").toLowerCase().includes(q)));
+  shared = shared.slice().sort((a,b)=>(a.order||0)-(b.order||0) || String(a.name).localeCompare(String(b.name)));
+  const ownHtml = groups.map(g=>`<div class="grp">${esc(g.label)}</div>`+g.items.map(t=>`
+    <div class="it ${t.id===tplSel?'on':''} ${t.enabled===false?'dis':''}" onclick="tplSel='${esc(t.id)}';renderTplList();renderTplEditor()">
+      <div class="nm">${esc(t.name)}${t.isDefault?'<span class="faint" style="font-size:10.5px"> · 默认</span>':''}${t.enabled===false?'<span class="faint" style="font-size:10.5px"> · 停用</span>':''}</div>
+      <div class="id">${esc(t.id)}</div></div>`).join("")).join("") || `<div class="faint" style="padding:14px;font-size:12.5px;text-align:center">还没有自营模板，点「＋」新建</div>`;
+  const sharedHtml = shared.length ? `<div class="grp" style="color:var(--acc)">平台开放给你的（只读，正文由平台维护）</div>`+shared.map(t=>`
+    <div class="it ${t.id===tplSel?'on':''}" onclick="tplSel='${esc(t.id)}';renderTplList();renderTplEditor()">
+      <div class="nm">${esc(t.name)} <span class="faint" style="font-size:10.5px">· ${esc(tplPurposeLabel(t.purpose||"预设"))}</span></div>
+      <div class="id">${esc(t.id)}</div></div>`).join("") : "";
+  host.innerHTML = ownHtml + sharedHtml;
+}
+function renderTplEditor(){
+  const host = $("#tpl_editor"); if(!host) return;
+  if (isSharedTpl(tplSel)){
+    const t = SHARED_TPLS.find(x=>x.id===tplSel);
+    host.innerHTML = `
+      <div class="hd"><h3>${esc(t.name)}</h3><span class="badge plain" style="color:var(--acc);border-color:rgba(90,167,240,.3)">平台开放</span>${t.purpose?`<span class="badge plain">${esc(tplPurposeLabel(t.purpose))}</span>`:""}</div>
+      <div class="bd" style="padding:20px 18px">
+        <p class="mut" style="font-size:13px;margin:0 0 14px">这是<b>平台开放给你</b>的模板，你名下的用户可以直接使用。正文由平台统一维护，你无需也不能编辑。</p>
+        <div class="frow"><label>模板 id</label><span class="val mono">${esc(t.id)}</span></div>
+        <div class="frow"><label>用途</label><span class="val">${esc(tplPurposeLabel(t.purpose||"—"))}</span></div>
+        <div class="frow"><label>分类</label><span class="val">${esc(t.category||"—")}</span></div>
+        <div class="frow"><label>能力</label><span class="val">${esc(t.capability||"—")}</span></div>
+      </div>`;
+    return;
+  }
+  const t = TPLS.find(x=>x.id===tplSel);
+  if (!t){ host.innerHTML = `<div class="faint" style="padding:60px;text-align:center">左侧选择一个模板，或点「＋」新建</div>`; return; }
+  const pOpts = `<option value="" ${!t.purpose?"selected":""}>—（预设/无）</option>`+T_PURPOSES.map(p=>`<option value="${p}" ${p===t.purpose?"selected":""}>${esc(tplPurposeOpt(p))}</option>`).join("");
+  host.innerHTML = `
+    <div class="hd">
+      <h3>${esc(t.name)}</h3>
+      ${t.purpose?`<span class="badge plain" style="color:var(--acc);border-color:rgba(90,167,240,.3)">${esc(tplPurposeLabel(t.purpose))}</span>`:`<span class="badge plain">预设</span>`}
+      ${t.isDefault?`<span class="badge plain">默认</span>`:""}
+      <span class="sp"></span><span class="ok-t" id="t_save" style="font-size:12px"></span>
+      <button class="sm" onclick="cloneTplDlg('${esc(t.id)}')">克隆</button>
+      <button class="sm danger" onclick="delTpl('${esc(t.id)}')">删除</button>
+      <button class="pri sm" onclick="saveTpl('${esc(t.id)}')">保存</button>
+    </div>
+    <div class="bd" style="padding:14px 18px">
+      <div class="fgrid" style="margin-bottom:12px">
+        <div class="fld"><span>模板 id（只读）</span><input type="text" value="${esc(t.id)}" disabled /></div>
+        <div class="fld"><span>显示名</span><input id="te_name" type="text" value="${esc(t.name)}" /></div>
+        <div class="fld"><span>分类</span><input id="te_cat" type="text" list="cat_list" value="${esc(t.category||'')}" /></div>
+        <div class="fld"><span>能力</span><select id="te_cap">${T_CAPS.map(c=>`<option ${c===t.capability?"selected":""}>${c}</option>`).join("")}</select></div>
+        <div class="fld"><span>用途 purpose</span><select id="te_purpose">${pOpts}</select></div>
+        <div class="fld"><span>schemaId（可选）</span><input id="te_schema" type="text" value="${esc(t.schemaId||'')}" /></div>
+        <div class="fld"><span>变量（逗号分隔）</span><input id="te_vars" type="text" value="${esc((t.variables||[]).join(','))}" /></div>
+        <div class="fld"><span>排序</span><input id="te_order" type="number" value="${t.order||0}" /></div>
+        <div class="fld"><span>开关</span><div style="display:flex;gap:16px;padding:5px 0"><label style="display:flex;align-items:center;gap:7px;font-size:12.5px"><label class="sw"><input id="te_default" type="checkbox" ${t.isDefault?"checked":""}/><i></i></label>默认</label><label style="display:flex;align-items:center;gap:7px;font-size:12.5px"><label class="sw"><input id="te_enabled" type="checkbox" ${t.enabled!==false?"checked":""}/><i></i></label>启用</label></div></div>
+      </div>
+      ${(t.variables||[]).length?`<div class="fld" style="margin-bottom:12px"><span>正文变量（点击复制占位符）</span><div class="varchips">${(t.variables||[]).map(v=>`<span class="varchip" onclick="copyText('{{${esc(v)}}}','变量已复制')">{{${esc(v)}}}</span>`).join("")}</div></div>`:""}
+      <div class="fld"><span>模板正文（支持 {{变量}} 占位；改完点右上「保存」）</span><textarea id="te_body" class="bodyed">${esc(t.body||'')}</textarea></div>
+    </div>`;
+}
+async function saveTpl(id){
+  const t = TPLS.find(x=>x.id===id); if(!t) return;
+  const patch = { name:$("#te_name").value.trim()||id, category:$("#te_cat").value.trim()||null, capability:$("#te_cap").value, purpose:$("#te_purpose").value||null, schemaId:$("#te_schema").value.trim()||null, variables:parseList($("#te_vars").value), order:Number($("#te_order").value)||0, isDefault:$("#te_default").checked, enabled:$("#te_enabled").checked, body:$("#te_body").value };
+  try { await api("/agent-api/templates/"+id,{method:"PUT",body:JSON.stringify(patch)}); Object.assign(t,patch,{category:patch.category||undefined,purpose:patch.purpose||undefined,schemaId:patch.schemaId||undefined}); const s=$("#t_save"); if(s){s.textContent="已保存 ✓";setTimeout(()=>{if(s.isConnected)s.textContent="";},1800);} toast("模板已保存，随 catalog 下发给你的用户"); renderTplList(); renderTplEditor(); }
+  catch(e){ toast(e.message,"bad"); }
+}
+function openNewTplDlg(){
+  $("#dlgTitle").textContent = "新建自营模板";
+  $("#dlgBody").innerHTML = `
+    <p class="mut" style="margin:0 0 14px;font-size:12.5px">id 会自动加你的渠道商前缀，避免与平台/他人模板冲突。创建后在编辑器里填正文。</p>
+    <div class="fgrid">
+      <div class="fld"><span>模板 id</span><input id="nt_id" type="text" placeholder="如 my-asset-extract" /></div>
+      <div class="fld"><span>显示名</span><input id="nt_name" type="text" /></div>
+      <div class="fld"><span>分类</span><input id="nt_cat" type="text" list="cat_list" placeholder="如 资产提取" /></div>
+      <div class="fld"><span>能力</span><select id="nt_cap">${T_CAPS.map(c=>`<option>${c}</option>`).join("")}</select></div>
+      <div class="fld full"><span>用途 purpose</span><select id="nt_purpose"><option value="">—（预设/无）</option>${T_PURPOSES.map(p=>`<option value="${p}">${esc(tplPurposeOpt(p))}</option>`).join("")}</select></div>
+    </div>
+    <p id="nt_err" class="bad-t" style="font-size:12.5px;margin:6px 0 0"></p>
+    <div style="display:flex;justify-content:flex-end;gap:9px;margin-top:12px"><button onclick="dlg.close()">取消</button><button class="pri" onclick="addTemplate()">创建</button></div>`;
+  dlg.classList.remove("wide"); dlg.showModal();
+}
+async function addTemplate(){
+  const id = $("#nt_id").value.trim();
+  if (!id){ $("#nt_err").textContent = "请填模板 id"; return; }
+  try { const t = await api("/agent-api/templates",{method:"POST",body:JSON.stringify({ id, name:$("#nt_name").value.trim()||id, capability:$("#nt_cap").value, purpose:$("#nt_purpose").value||undefined, category:$("#nt_cat").value.trim()||undefined, variables:[], body:"", isDefault:false, order:0 })});
+    dlg.close(); toast("模板已创建"); tplSel = t.id; loadTemplates();
+  } catch(e){ $("#nt_err").textContent = e.message; }
+}
+function cloneTplDlg(id){
+  $("#dlgTitle").textContent = "克隆模板 · " + id;
+  $("#dlgBody").innerHTML = `
+    <div class="fld"><span>新模板 id</span><input id="ct_id" type="text" value="${esc(id)}-copy" /></div>
+    <p id="ct_err" class="bad-t" style="font-size:12.5px;margin:6px 0 0"></p>
+    <div style="display:flex;justify-content:flex-end;gap:9px;margin-top:12px"><button onclick="dlg.close()">取消</button><button class="pri" onclick="cloneTpl('${esc(id)}')">克隆</button></div>`;
+  dlg.classList.remove("wide"); dlg.showModal();
+}
+async function cloneTpl(id){
+  const src = TPLS.find(x=>x.id===id); if(!src) return;
+  const nid = $("#ct_id").value.trim();
+  if (!nid){ $("#ct_err").textContent = "请填新模板 id"; return; }
+  try { const t = await api("/agent-api/templates",{method:"POST",body:JSON.stringify({ id:nid, name:(src.name||id)+"（副本）", capability:src.capability, purpose:src.purpose||undefined, category:src.category||undefined, variables:src.variables||[], body:src.body||"", isDefault:false, order:(src.order||0)+1 })});
+    dlg.close(); toast("已克隆"); tplSel = t.id; loadTemplates();
+  } catch(e){ $("#ct_err").textContent = e.message; }
+}
+function delTpl(id){ confirmDo({ title:"删除模板", text:`删除自营模板「<b>${esc(id)}</b>」？删除后你名下用户将不再能用它。`, okLabel:"删除", onOk: async ()=>{ try { await api("/agent-api/templates/"+id,{method:"DELETE"}); toast("已删除"); if(tplSel===id)tplSel=""; loadTemplates(); } catch(e){ toast(e.message,"bad"); } }}); }
+
+/* ════════════════ 共享素材库（第120轮：本商自营；用户凭 库名+密码 在客户端加入）════════════════ */
+async function loadSharedLibs(){
+  const el = $("#tab-sharedlibs");
+  el.innerHTML = `
+    <div class="toolbar">
+      <span class="mut" style="font-size:12.5px">设加入密码，把「库名+密码」告知你的用户——用户在客户端「资产助手 → 共享资产」搜索加入后可浏览/共享素材（素材只存 OSS 记录，不复制文件）。</span>
+      <span class="sp"></span>
+      <button class="pri" onclick="newSharedLibDlg()">＋ 新建共享库</button>
+    </div>
+    <div class="tblwrap"><table>
+      <thead><tr><th>名称</th><th>文件夹</th><th>素材</th><th>已加入用户</th><th>状态</th><th>创建时间</th><th style="width:250px">操作</th></tr></thead>
+      <tbody id="sl_rows"><tr><td colspan="7" class="mut" style="text-align:center;padding:20px">加载中…</td></tr></tbody>
+    </table></div>`;
+  try {
+    const r = await api("/agent-api/shared-libs");
+    $("#cnt-sharedlibs").textContent = r.items.length || "";
+    $("#sl_rows").innerHTML = r.items.map(l => `<tr>
+      <td><b>${esc(l.name)}</b></td><td>${l.folderCount}</td><td>${l.assetCount}</td><td>${l.memberCount}</td>
+      <td>${l.enabled?'<span class="ok-t">启用</span>':'<span class="bad-t">停用</span>'}</td>
+      <td class="mut">${new Date(l.createdAt).toLocaleDateString()}</td>
+      <td style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="sm pri" onclick="sharedLibDetail('${l.id}','${esc(l.name)}')">详情</button>
+        <button class="sm" onclick="editSharedLibDlg('${l.id}','${esc(l.name)}')">改名/改密码</button>
+        <button class="sm" onclick="toggleSharedLib('${l.id}',${l.enabled?'false':'true'})">${l.enabled?'停用':'启用'}</button>
+        <button class="sm danger" onclick="delSharedLib('${l.id}','${esc(l.name)}')">删除</button>
+      </td></tr>`).join("") || `<tr><td colspan="7" class="mut" style="text-align:center;padding:26px">还没有共享库——点右上「新建共享库」，把 库名+加入密码 告知你的用户即可使用。</td></tr>`;
+  } catch(e){
+    $("#sl_rows").innerHTML = `<tr><td colspan="7" class="bad-t" style="text-align:center;padding:26px">${esc(e.message)}</td></tr>`;
+  }
+}
+function newSharedLibDlg(){
+  $("#dlgTitle").textContent = "新建共享库";
+  $("#dlgBody").innerHTML = `
+    <div class="fgrid">
+      <div class="fld"><span>库名（用户按此搜索）</span><input id="sl_name" type="text" placeholder="如 通用场景素材" /></div>
+      <div class="fld"><span>加入密码（至少 4 位）</span><input id="sl_pw" type="text" placeholder="告知你的用户" /></div>
+    </div>
+    <p id="sl_err" class="bad-t" style="font-size:12.5px;margin:6px 0 0"></p>
+    <div style="display:flex;justify-content:flex-end;gap:9px;margin-top:12px"><button onclick="dlg.close()">取消</button><button class="pri" onclick="addSharedLib()">创建</button></div>`;
+  dlg.classList.remove("wide"); dlg.showModal();
+}
+async function addSharedLib(){
+  try {
+    await api("/agent-api/shared-libs",{method:"POST",body:JSON.stringify({ name:$("#sl_name").value, password:$("#sl_pw").value })});
+    dlg.close(); toast("共享库已创建"); loadSharedLibs();
+  } catch(e){ $("#sl_err").textContent = e.message; }
+}
+function editSharedLibDlg(id, name){
+  $("#dlgTitle").textContent = "编辑共享库 · " + name;
+  $("#dlgBody").innerHTML = `
+    <div class="fgrid">
+      <div class="fld"><span>库名</span><input id="se_name" type="text" value="${esc(name)}" /></div>
+      <div class="fld"><span>新加入密码（留空=不改）</span><input id="se_pw" type="text" placeholder="至少 4 位" /></div>
+    </div>
+    <p id="se_err" class="bad-t" style="font-size:12.5px;margin:6px 0 0"></p>
+    <div style="display:flex;justify-content:flex-end;gap:9px;margin-top:12px"><button onclick="dlg.close()">取消</button><button class="pri" onclick="saveSharedLib('${id}')">保存</button></div>`;
+  dlg.classList.remove("wide"); dlg.showModal();
+}
+async function saveSharedLib(id){
+  const body = { name: $("#se_name").value };
+  const pw = $("#se_pw").value.trim();
+  if (pw) body.password = pw;
+  try { await api("/agent-api/shared-libs/"+id,{method:"PUT",body:JSON.stringify(body)}); dlg.close(); toast("已保存"); loadSharedLibs(); }
+  catch(e){ $("#se_err").textContent = e.message; }
+}
+async function toggleSharedLib(id, enabled){
+  try { await api("/agent-api/shared-libs/"+id,{method:"PUT",body:JSON.stringify({ enabled: enabled==="true"||enabled===true })}); toast("已更新"); loadSharedLibs(); }
+  catch(e){ toast(e.message,"bad"); }
+}
+function delSharedLib(id, name){
+  confirmDo({ title:"删除共享库", text:`确认删除共享库「${esc(name)}」？其下全部文件夹与素材记录将一并删除（OSS 上的文件不受影响），已加入的用户将不再可见。`, okLabel:"删除", onOk: async ()=>{
+    try { await api("/agent-api/shared-libs/"+id,{method:"DELETE"}); toast("已删除"); loadSharedLibs(); } catch(e){ toast(e.message,"bad"); }
+  }});
+}
+/* 共享库详情（只读预览）：文件夹 → 素材缩略图——预览直连 OSS 直链（img/video src=url），不经服务端下载不落盘 */
+async function sharedLibDetail(id, name){
+  $("#dlgTitle").textContent = "共享库详情 · " + name;
+  $("#dlgBody").innerHTML = `
+    <div id="sld_folders" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px"><span class="mut" style="font-size:12px">加载文件夹…</span></div>
+    <div id="sld_assets" class="mut" style="font-size:12.5px">点击上方文件夹查看素材（预览直连 OSS 直链，不下载不落盘）。</div>`;
+  dlg.classList.add("wide"); dlg.showModal();
+  try {
+    const r = await api("/agent-api/shared-libs/"+id+"/folders");
+    $("#sld_folders").innerHTML = r.items.map(f =>
+      `<button class="sm" onclick="sharedFolderPreview('${f.id}','${esc(f.name)}')" title="创建者 ${esc(f.by||"")}">${esc(f.name)}（${f.count}）</button>`
+    ).join("") || `<span class="mut" style="font-size:12px">该库还没有文件夹（用户加入后可在客户端新建）。</span>`;
+  } catch(e){ $("#sld_folders").innerHTML = `<span class="bad-t" style="font-size:12px">${esc(e.message)}</span>`; }
+}
+async function sharedFolderPreview(fid, name){
+  const el = $("#sld_assets"); if(!el) return;
+  el.innerHTML = `<span class="mut">加载素材…</span>`;
+  try {
+    const r = await api("/agent-api/shared-folders/"+fid+"/assets");
+    el.innerHTML = `
+      <div style="font-size:12.5px;margin-bottom:8px"><b>${esc(name)}</b> · ${r.items.length} 条素材<span class="mut">（预览直连 OSS，服务端不代理不落盘；点图片新窗口看原图）</span></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px;max-height:54vh;overflow:auto">` +
+      r.items.map(a => {
+        const m = a.mime || "";
+        const media = m.startsWith("video/")
+          ? `<video src="${esc(a.url)}" controls preload="metadata" style="width:100%;height:100px;object-fit:cover;background:#000;display:block"></video>`
+          : m.startsWith("audio/")
+            ? `<div style="height:100px;display:flex;align-items:center;justify-content:center"><audio src="${esc(a.url)}" controls style="width:92%"></audio></div>`
+            : `<a href="${esc(a.url)}" target="_blank" rel="noreferrer"><img src="${esc(a.url)}" loading="lazy" style="width:100%;height:100px;object-fit:cover;display:block;background:#0a0c11" /></a>`;
+        return `<div style="border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel2)">${media}
+          <div style="padding:5px 8px 2px;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(a.name)}">${esc(a.name)}</div>
+          <div class="mut" style="padding:0 8px 6px;font-size:10.5px">${esc(a.by||"")}${a.assetId?` · <span class="mono">${esc(a.assetId)}</span>`:""}</div></div>`;
+      }).join("") + `</div>`;
+  } catch(e){ el.innerHTML = `<span class="bad-t">${esc(e.message)}</span>`; }
+}
+
+/* ════════════════ 统计（独立页，按用户/时间/模型筛选；纯文字无图表）════════════════ */
+let statFilter = { rangeKey:"7d", user:"", model:"" };
+let statFacetsCache = null;
+function readStatInputs(){ const u=$("#sf_user"), m=$("#sf_model"); if(u)statFilter.user=u.value.trim(); if(m)statFilter.model=m.value.trim(); }
+function applyStatFilter(){ readStatInputs(); refreshStats(); }
+function clearStatFilter(){ statFilter.user=statFilter.model=""; refreshStats(); }
+function setStatRange(key){ readStatInputs(); statFilter.rangeKey=key; refreshStats(); }
+async function loadStats(){
+  const el = $("#tab-stats");
+  if (!statFacetsCache){ try { statFacetsCache = await api("/agent-api/logs/facets"); } catch { statFacetsCache={users:[],purposes:[],models:[]}; } }
+  const f = statFacetsCache;
+  el.innerHTML = `
+    <div class="filterbar">
+      <div class="seg">${LOG_RANGES.map(([k,lb])=>`<button class="${statFilter.rangeKey===k?'on':''}" onclick="setStatRange('${k}')">${lb}</button>`).join("")}</div>
+      <div class="div"></div>
+      <input id="sf_user" type="text" value="${esc(statFilter.user)}" placeholder="按用户" list="dl_suser" style="width:120px" onkeydown="if(event.key==='Enter')applyStatFilter()">
+      <input id="sf_model" type="text" value="${esc(statFilter.model)}" placeholder="按模型" list="dl_smodel" style="width:140px" onkeydown="if(event.key==='Enter')applyStatFilter()">
+      <button class="sm" onclick="applyStatFilter()">应用</button>
+      <button class="sm ghost" onclick="clearStatFilter()">清空</button>
+      <span class="sp"></span>
+      <button class="sm" onclick="statFacetsCache=null;loadStats()"><svg><use href="#i-refresh"/></svg>刷新</button>
+      ${selDatalist("dl_suser", f.users)}${selDatalist("dl_smodel", f.models)}
+    </div>
+    <div class="kpis" id="s_kpis"><div class="faint" style="font-size:12px">统计加载中…</div></div>
+    <div class="statlists" id="s_lists"></div>`;
+  refreshStats();
+}
+function statQs(){
+  const r = computeRange(statFilter.rangeKey);
+  const qs = new URLSearchParams();
+  if (r.from!=null) qs.set("from", String(r.from));
+  if (r.to!=null) qs.set("to", String(r.to));
+  if (statFilter.user) qs.set("user", statFilter.user);
+  if (statFilter.model) qs.set("model", statFilter.model);
+  return qs;
+}
+async function refreshStats(){
+  try {
+    const s = await api("/agent-api/logs/summary?"+statQs().toString());
+    const kpis = [["总请求",s.total],["成功",s.success],["失败",s.failed],["进行中",s.running],["消耗（积分）",s.credits]];
+    $("#s_kpis").innerHTML = kpis.map(([k,v])=>`<div class="kpi"><div class="k">${k}</div><div class="v">${Number(v).toLocaleString()}</div></div>`).join("");
+    const listCard = (title, rows) => `<div class="statlist"><h4>${title}</h4>${rows.length?rows.map(([lb,vl])=>`<div class="row"><span class="lb" title="${esc(lb)}">${esc(lb)}</span><span class="vl">${esc(vl)}</span></div>`).join(""):`<div class="empty">暂无数据</div>`}</div>`;
+    const bm = s.byModel.map(m=>[m.key, `${m.count} 次 · ${Number(m.credits).toLocaleString()} 积分`]);
+    const bu = s.byUser.map(u=>[u.name, `${u.count} 次 · ${Number(u.credits).toLocaleString()} 积分`]);
+    const bp = s.byPurpose.map(p=>[p.label, p.count+" 次"]);
+    $("#s_lists").innerHTML = listCard("按模型", bm) + listCard("按名下用户", bu) + listCard("按步骤", bp);
+  } catch(e){ $("#s_kpis").innerHTML = `<div class="bad-t" style="font-size:12px">统计加载失败：${esc(e.message)}</div>`; }
+}
+
+/* ════════════════ 请求记录（名下用户，详情仅 ①②段）════════════════ */
+const PURPOSE_LABELS = { "script.toScenes":"小说转剧本","script.analyze":"剧本分析","storyboard.split":"剧本分镜","storyboard.toImagePrompt":"故事板提示词","storyboard.toVideoPrompt":"视频提示词（多卡）","storyboard.singleShot":"单卡推理","storyboard.unified":"图视同源（多卡）","storyboard.unifiedShot":"图视同源（单卡）","asset.character.image":"角色出图","asset.character.variant":"角色变体","asset.scene.image":"场景出图","asset.scene.variant":"场景变体","asset.creature.image":"生物出图","asset.creature.variant":"生物变体","asset.prop.image":"物品出图","asset.prop.variant":"物品变体","video.generate":"视频生成","audio.tts":"语音合成","video.upscale":"视频超分","video.desub":"视频去字幕","image.upscale":"图像超分","chat.reply":"AI 对话","chat.summarize":"对话总结" };
+const purposeLabel = (p) => PURPOSE_LABELS[p] || p || "—";
+let logOffset = 0, logFacetsCache = null;
+let logFilter = { rangeKey:"today", user:"", purpose:"", model:"", status:"" };
+function dayStartMs(t){ const x=new Date(t); x.setHours(0,0,0,0); return x.getTime(); }
+function computeRange(key){ const now=Date.now(),today=dayStartMs(now),DAY=86400000; if(key==="today")return{from:today,to:now}; if(key==="yesterday")return{from:today-DAY,to:today}; if(key==="2ago")return{from:today-2*DAY,to:today-DAY}; if(key==="7d")return{from:today-6*DAY,to:now}; if(key==="30d")return{from:today-29*DAY,to:now}; return{from:undefined,to:undefined}; }
+const LOG_RANGES = [["today","今天"],["yesterday","昨天"],["2ago","前天"],["7d","近 7 天"],["30d","近 30 天"],["all","全部"]];
+function selDatalist(id,list){ return `<datalist id="${id}">${(list||[]).map(v=>`<option value="${esc(v)}">`).join("")}</datalist>`; }
+function readLogInputs(){ const u=$("#f_user"),p=$("#f_purpose"),m=$("#f_model"),s=$("#f_status"); if(u)logFilter.user=u.value.trim(); if(p)logFilter.purpose=p.value.trim(); if(m)logFilter.model=m.value.trim(); if(s)logFilter.status=s.value; }
+function applyLogFilter(){ readLogInputs(); loadLogs(true); }
+function clearLogFilter(){ logFilter.user=logFilter.purpose=logFilter.model=logFilter.status=""; loadLogs(true); }
+function setLogRange(key){ readLogInputs(); logFilter.rangeKey=key; loadLogs(true); }
+function fmtTime(s){ return s ? new Date(s).toLocaleString() : "—"; }
+const statusBadge = (s) => s==="success"?`<span class="badge ok">成功</span>`:s==="failed"?`<span class="badge bad">失败</span>`:`<span class="badge run">进行中</span>`;
+async function loadLogs(reset=true){
+  if (reset) logOffset = 0;
+  const el = $("#tab-logs");
+  if (reset){
+    if (!logFacetsCache){ try { logFacetsCache = await api("/agent-api/logs/facets"); } catch { logFacetsCache={users:[],purposes:[],models:[]}; } }
+    const f = logFacetsCache;
+    el.innerHTML = `
+      <div class="filterbar">
+        <div class="seg">${LOG_RANGES.map(([k,lb])=>`<button class="${logFilter.rangeKey===k?'on':''}" onclick="setLogRange('${k}')">${lb}</button>`).join("")}</div>
+        <div class="div"></div>
+        <input id="f_user" type="text" value="${esc(logFilter.user)}" placeholder="用户" list="dl_user" style="width:110px" onkeydown="if(event.key==='Enter')applyLogFilter()">
+        <input id="f_purpose" type="text" value="${esc(logFilter.purpose)}" placeholder="步骤（如 视频生成）" list="dl_purpose" style="width:150px" onkeydown="if(event.key==='Enter')applyLogFilter()">
+        <input id="f_model" type="text" value="${esc(logFilter.model)}" placeholder="模型" list="dl_model" style="width:130px" onkeydown="if(event.key==='Enter')applyLogFilter()">
+        <select id="f_status" onchange="applyLogFilter()" style="width:92px">${[["","全部状态"],["success","成功"],["failed","失败"],["running","进行中"]].map(([v,t])=>`<option value="${v}" ${v===logFilter.status?"selected":""}>${t}</option>`).join("")}</select>
+        <button class="sm" onclick="applyLogFilter()">应用</button><button class="sm ghost" onclick="clearLogFilter()">清空</button>
+        <span class="sp"></span>
+        <button class="sm" onclick="logFacetsCache=null;loadLogs(true)"><svg><use href="#i-refresh"/></svg>刷新</button>
+        <button class="sm" onclick="exportLogsCsv()"><svg><use href="#i-dl"/></svg>导出 CSV</button>
+        ${selDatalist("dl_user",f.users)}${selDatalist("dl_purpose",(f.purposes||[]).map(purposeLabel))}${selDatalist("dl_model",f.models)}
+      </div>
+      <div class="kpis" id="l_statbar" style="margin-bottom:13px"></div>
+      <div class="tblwrap">
+        <table><thead><tr><th>请求时间</th><th>完成时间</th><th style="text-align:right">用时</th><th>用户</th><th>步骤</th><th>模型</th><th style="text-align:right" title="用户请求=该用户实扣的积分（统一定价，实时扣用户）；发码记录=你的积分池划转（作废退回为负）；渠道节点请求=你的积分池实扣">消耗</th><th>状态</th></tr></thead><tbody id="l_body"></tbody></table>
+        <div class="tfoot"><span id="l_meta"></span><span class="sp"></span><span class="faint">范围=你名下用户的请求 + 你的发码记录；「消耗」=用户请求显示该用户实扣的积分（统一定价，实时扣用户，失败已自动退款），发码记录显示你的积分池划转</span><button class="sm" onclick="moreLogs()">加载更多</button></div>
+      </div>`;
+    loadLogStatbar();
+  }
+  try {
+    const r = computeRange(logFilter.rangeKey);
+    const qs = new URLSearchParams({ limit:"50", offset:String(logOffset) });
+    if (r.from!=null) qs.set("from", String(r.from));
+    if (r.to!=null) qs.set("to", String(r.to));
+    if (logFilter.user) qs.set("user", logFilter.user);
+    if (logFilter.purpose) qs.set("purpose", logFilter.purpose);
+    if (logFilter.model) qs.set("model", logFilter.model);
+    if (logFilter.status) qs.set("status", logFilter.status);
+    const { total, items } = await api("/agent-api/logs?"+qs.toString());
+    $("#l_meta").textContent = "共 " + total + " 条（已筛选）";
+    const rows = items.map(l=>`<tr class="clk" onclick="showLog('${l.id}')">
+      <td class="mut">${fmtTime(l.startedAt)}</td><td class="mut">${fmtTime(l.finishedAt)}</td>
+      <td class="mut" style="text-align:right">${l.durationMs!=null?(l.durationMs/1000).toFixed(1)+"s":"—"}</td>
+      <td>${esc(l.userName||"—")}</td><td title="${esc(l.purpose||"")}">${esc(purposeLabel(l.purpose))}</td>
+      <td class="mono">${esc(l.model||"—")}</td><td style="text-align:right">${l.cost!=null?l.cost:"—"}</td><td>${statusBadge(l.status)}</td></tr>`).join("");
+    if (reset) $("#l_body").innerHTML = rows || `<tr><td colspan="8" class="faint" style="text-align:center;padding:24px">该筛选条件下暂无记录</td></tr>`;
+    else $("#l_body").insertAdjacentHTML("beforeend", rows);
+  } catch(e){ $("#l_body").innerHTML = `<tr><td colspan="8" class="bad-t">${esc(e.message)}</td></tr>`; }
+}
+function moreLogs(){ logOffset += 50; loadLogs(false); }
+// 请求记录顶部简单统计条：按当前筛选（忽略状态）取聚合，四态计数都可见
+async function loadLogStatbar(){
+  const bar = $("#l_statbar"); if(!bar) return;
+  const r = computeRange(logFilter.rangeKey);
+  const qs = new URLSearchParams();
+  if (r.from!=null) qs.set("from", String(r.from));
+  if (r.to!=null) qs.set("to", String(r.to));
+  if (logFilter.user) qs.set("user", logFilter.user);
+  if (logFilter.purpose) qs.set("purpose", logFilter.purpose);
+  if (logFilter.model) qs.set("model", logFilter.model);
+  try {
+    const s = await api("/agent-api/logs/summary?"+qs.toString());
+    const kpis = [["消耗（积分）",s.credits],["成功数",s.success],["失败数",s.failed],["正在运行",s.running]];
+    bar.innerHTML = kpis.map(([k,v])=>`<div class="kpi"><div class="k">${k}</div><div class="v">${Number(v).toLocaleString()}</div></div>`).join("");
+  } catch { bar.innerHTML = ""; }
+}
+async function exportLogsCsv(){
+  readLogInputs();
+  const r = computeRange(logFilter.rangeKey);
+  const qs = new URLSearchParams();
+  if (r.from!=null) qs.set("from", String(r.from));
+  if (r.to!=null) qs.set("to", String(r.to));
+  if (logFilter.user) qs.set("user", logFilter.user);
+  if (logFilter.purpose) qs.set("purpose", logFilter.purpose);
+  if (logFilter.model) qs.set("model", logFilter.model);
+  if (logFilter.status) qs.set("status", logFilter.status);
+  let items;
+  try { items = (await api("/agent-api/logs/export?"+qs.toString())).items; }
+  catch(e){ toast("导出失败："+e.message,"bad"); return; }
+  if (!items.length){ toast("该筛选条件下暂无记录","bad"); return; }
+  const rows = [["用户","请求时间","完成时间","步骤","模型","消耗","结果","失败原因"]];
+  items.forEach(it=>rows.push([it.user,fmtTime(it.startedAt),fmtTime(it.finishedAt),it.purpose,it.model,it.cost,it.status,it.error]));
+  downloadCsv(rows, "qiji-agent-logs");
+}
+async function showLog(id, backUser){
+  const l = await api("/agent-api/logs/"+id);
+  const prunedTxt = "（详情报文已按保留策略清除：超过 3 天的记录仅保留请求记录本身）";
+  window.__logSegs = l.detailPruned ? { s1: prunedTxt, s2: prunedTxt } : { s1: JSON.stringify({ headers:l.requestHeaders, body:l.request }, null, 2), s2: JSON.stringify(l.response, null, 2) };
+  const meta = [["用户",esc(l.userName||"—")],["步骤",esc(purposeLabel(l.purpose))],["模型",`<span class="mono">${esc(l.model||"—")}</span>`],["消耗",l.cost!=null?l.cost+" 积分":"—"],["请求时间",fmtTime(l.startedAt)],["完成时间",fmtTime(l.finishedAt)],["耗时",l.durationMs!=null?(l.durationMs/1000).toFixed(1)+"s":"—"]];
+  // 只显 ①②（客户端请求 / 返回结果）；③④上游报文对渠道商隐藏
+  const cell = (t, seg) => `<div class="logcell"><div class="lc-t">${t} <button class="sm ghost icon" title="复制本段" onclick="copyText(window.__logSegs['${seg}'],'本段已复制')"><svg><use href="#i-copy"/></svg></button></div><pre>${esc(window.__logSegs[seg])}</pre></div>`;
+  $("#dlgTitle").innerHTML = `请求详情 &nbsp;${statusBadge(l.status)}`;
+  $("#dlgBody").innerHTML = `
+    ${backUser&&ULOG?`<div style="margin-bottom:10px"><button class="sm" onclick="openUserLogs(ULOG.id, ULOG.name)">← 返回该用户请求记录</button></div>`:""}
+    <div class="metagrid">${meta.map(([k,v])=>`<div><div class="k">${k}</div><div class="v">${v}</div></div>`).join("")}</div>
+    ${l.error?`<div class="badge bad" style="margin-bottom:12px;max-width:100%;white-space:normal">错误：${esc(l.error)}</div>`:""}
+    ${l.detailPruned?`<div class="badge run" style="margin-bottom:12px;max-width:100%;white-space:normal">详情报文已清除（完整详情仅保留 3 天）</div>`:""}
+    <div class="loggrid">${cell("① 客户端请求","s1")}${cell("② 返回结果","s2")}</div>`;
+  dlg.classList.add("wide"); dlg.showModal();
+}
+/* ── 单用户请求记录（第121轮「每个用户的请求记录」）：仅名下用户；详情=①②两段（上游报文不可见） ── */
+let ULOG = null, ULOG_OFFSET = 0, ULOG_TOTAL = 0;
+function openUserLogs(id, name){
+  ULOG = { id, name };
+  $("#dlgTitle").textContent = "请求记录 · " + name;
+  $("#dlgBody").innerHTML = `
+    <div class="tblwrap" style="margin:0">
+      <table>
+        <thead><tr><th>请求时间</th><th>步骤</th><th>模型</th><th style="text-align:right" title="该用户本单实扣的积分（统一定价，实时扣用户；失败已自动退款）">消耗</th><th>状态</th><th></th></tr></thead>
+        <tbody id="ulog_body"></tbody>
+      </table>
+      <div class="tfoot"><span id="ulog_meta"></span><span class="sp"></span><button class="sm ghost" id="ulog_more" style="display:none" onclick="loadUserLogs(true)">加载更多</button><span class="mut" style="font-size:11.5px">详情仅含 ①客户端请求 ②返回结果</span></div>
+    </div>`;
+  dlg.classList.add("wide"); dlg.showModal();
+  loadUserLogs();
+}
+async function loadUserLogs(append){
+  if (!ULOG || !$("#ulog_body")) return;
+  if (!append){
+    ULOG_OFFSET = 0;
+    $("#ulog_body").innerHTML = `<tr><td colspan="6" class="mut" style="text-align:center;padding:16px">加载中…</td></tr>`;
+  }
+  try {
+    const r = await api("/agent-api/logs?userId="+encodeURIComponent(ULOG.id)+"&limit=30&offset="+ULOG_OFFSET);
+    ULOG_TOTAL = r.total;
+    const rows = (r.items||[]).map(l=>`<tr>
+      <td class="mut" style="white-space:nowrap">${fmtTime(l.startedAt)}</td>
+      <td>${esc(purposeLabel(l.purpose))}</td>
+      <td class="mono">${esc(l.model||"—")}</td>
+      <td style="text-align:right">${l.cost!=null?l.cost:"—"}</td>
+      <td>${statusBadge(l.status)}</td>
+      <td style="text-align:right"><button class="sm" onclick="showLog('${l.id}',true)">详情</button></td>
+    </tr>`).join("");
+    if (append) $("#ulog_body").insertAdjacentHTML("beforeend", rows);
+    else $("#ulog_body").innerHTML = rows || `<tr><td colspan="6" class="mut" style="text-align:center;padding:16px">该用户还没有请求记录</td></tr>`;
+    ULOG_OFFSET += (r.items||[]).length;
+    $("#ulog_meta").textContent = `共 ${ULOG_TOTAL} 条 · 已显示 ${ULOG_OFFSET}`;
+    $("#ulog_more").style.display = ULOG_OFFSET < ULOG_TOTAL ? "" : "none";
+  } catch(e){ $("#ulog_body").innerHTML = `<tr><td colspan="6" class="bad-t">${esc(e.message)}</td></tr>`; }
+}
+
+document.addEventListener("keydown", (e)=>{ if(e.key==="Escape" && $("#drawer").classList.contains("on")) closeDrawer(); });
+
+/* ── 启动 ── */
+/* 管理端「查看信息」免密直登：URL 带 ?imp=<token>（管理员经 /admin-api/agents/:id/impersonate 签发的
+   门户会话 token）→ 直接采用为本页会话并从地址栏抹掉（防复制链接泄漏），所见与渠道商本人登录完全一致。 */
+(() => {
+  const imp = new URLSearchParams(location.search).get("imp");
+  if (imp) {
+    TOKEN = imp;
+    localStorage.setItem("qiji_agent_token", TOKEN);
+    history.replaceState(null, "", location.pathname);
+  }
+})();
+if (TOKEN) { refreshMe().then(showApp).catch(showLogin); } else { showLogin(); }
+</script>
+</body>
+</html>

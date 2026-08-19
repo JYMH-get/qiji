@@ -7,45 +7,55 @@
  *
  * 这里只保留"模型列表 / 默认模型 / 生效模型 key"的纯解析逻辑，数据源从
  * settingsStore.channels 切换为 catalogStore（管理端目录）。导出名保持不变，
- * 以免改动 panels / Frame 视图 / batchExecutor / pluginRegistry。
+ * 以免改动 panels / Frame 视图 / pluginRegistry。
  */
 
 import type { NodeType } from "@/types";
-import type { Capability } from "@/contract";
+import { SEEDANCE_FAMILY_ID, type Capability } from "@/contract";
 import { getAdapter } from "./registry";
-import { useSettingsStore } from "@/store/settingsStore";
+import { libtvModelOptions } from "./libtvAdapter";
+import { dreaminaModelOptions } from "./dreaminaAdapter";
 import { useCatalogStore } from "@/store/catalogStore";
+import { useConnectionStore } from "@/store/connectionStore";
+import { capabilityForNodeType } from "@/nodes/nodeSpecs";
 
-/** 节点类型 → 能力分类（用于从 catalog/defaults 取对应模型） */
-const NODE_TYPE_TO_CAT: Record<string, Capability> = {
-  text: "text",
-  script: "text",
-  image: "image",
-  video: "video",
-  audio: "audio",
-};
-
-/** 面板使用的模型选项（保持旧形状以兼容现有 UI） */
+/** 面板使用的模型选项（保持旧形状以兼容现有 UI；modeId/modeName 供按模式分组折叠，第131轮；
+ *  familyId/familyName 供「家族→渠道/线路→模型」三级折叠，第163轮） */
 export interface ModelOption {
   id: string; // 逻辑模型 id（= catalog model.id，也是 adapter.key）
   label: string;
   channelName: string;
   modelName: string;
+  modeId?: string;
+  modeName?: string;
+  familyId?: string;
+  familyName?: string;
 }
 
 function catalogModelsForCapability(cap: Capability): ModelOption[] {
-  return useCatalogStore
-    .getState()
+  const st = useCatalogStore.getState();
+  const modes = st.catalog?.modes;
+  const fams = st.catalog?.families;
+  return st
     .modelsByCapability(cap)
     .map((m) => ({
       id: m.id,
       label: m.label,
       channelName: "管理端",
       modelName: m.label,
+      modeId: m.modeId,
+      modeName: m.modeId ? modes?.find((x) => x.id === m.modeId)?.name || m.modeId : undefined,
+      familyId: m.familyId,
+      familyName: m.familyId ? fams?.find((x) => x.id === m.familyId)?.name || m.familyId : undefined,
     }));
 }
 
-/** 某能力的全部 catalog 模型（设置里"启用模型"多选器用，不受 selectedModels 影响） */
+/** 家族排序（catalog.families 序）——「家族→渠道/线路→模型」折叠的一级下拉顺序（非 hook，面板 memo 内用） */
+export function catalogFamilyOrder(): string[] {
+  return (useCatalogStore.getState().catalog?.families ?? []).map((f) => f.id);
+}
+
+/** 某能力的全部 catalog 模型（设置「模型」页统计/展示用） */
 export function getModelsForCapability(cap: Capability): ModelOption[] {
   return catalogModelsForCapability(cap);
 }
@@ -62,30 +72,38 @@ export function getAllChannelModels(): ModelOption[] {
 
 /**
  * 某节点类型可选的模型（面板下拉数据源）。
- * 若用户在设置里勾选了子集（selectedModels），按勾选过滤；未勾选则展示该能力全部。
+ * catalog 全量 × 模式门禁（第132轮删除「启用模型」子集——管理端下发即全部可用）。
  */
 export function getChannelModelsForNodeType(nodeType: NodeType): ModelOption[] {
-  const cat = NODE_TYPE_TO_CAT[nodeType] ?? "text";
+  const cat = capabilityForNodeType(nodeType);
   const all = catalogModelsForCapability(cat);
-  const selected = useSettingsStore.getState().selectedModels[cat] ?? [];
-  if (selected.length === 0) return all;
-  const allow = new Set(selected);
-  return all.filter((m) => allow.has(m.id));
+  // 模式门禁（第131轮，与 useCapModelOptions 同尺）：features.modes[modeId]===false 的模式整组隐藏
+  const modeGates = useConnectionStore.getState().user?.features?.modes;
+  const filtered = all.filter((m) => !m.modeId || modeGates?.[m.modeId] !== false);
+  // 本地模型注入：LibTV/即梦 不是 catalog 模型（已授权且管理端未关入口时才出现；请求走本机 CLI 不经管理端）。
+  // 家族归属（第163轮）：选项自带 familyId（LibTV 按款：Seedance/MiniMax；即梦全系 Seedance），
+  // catalog 有同 id 家族时显示名跟随，否则用选项自带兜底名
+  const fams = useCatalogStore.getState().catalog?.families;
+  const locals = [...libtvModelOptions(cat), ...dreaminaModelOptions(cat)].map((o) => ({
+    ...o,
+    familyId: o.familyId ?? SEEDANCE_FAMILY_ID,
+    familyName: fams?.find((f) => f.id === (o.familyId ?? SEEDANCE_FAMILY_ID))?.name || o.familyName || "Seedance 2.0",
+  }));
+  return [...filtered, ...locals];
 }
 
-/** 获取某节点类型 / 能力分类的默认模型 id（来自设置） */
+/** 获取某节点类型 / 能力分类的默认模型 id（第132轮：设置「模型」页已删、无全局默认——自动取该能力第一个可用模型，
+ *  与 ModelPicker.effectiveModelKey 的兜底同语义；catalog 无该能力模型时为 ""） */
 export function getDefaultModelKey(nodeType: NodeType | Capability): string {
-  const { imageDefaults, videoDefaults, textDefaults, audioDefaults } = useSettingsStore.getState();
-  const cat = NODE_TYPE_TO_CAT[nodeType] ?? "text";
-  const defaults = { image: imageDefaults, video: videoDefaults, text: textDefaults, audio: audioDefaults }[cat];
-  return defaults?.defaultModelId ?? "";
+  return getChannelModelsForNodeType(nodeType as NodeType)[0]?.id ?? "";
 }
 
 const PLACEHOLDER_KEYS = new Set(["", "default", "auto"]);
 
 /**
  * 解析画布节点真正生效的模型 key。
- * 只有两层、无任何兜底：① 节点自带模型 → ② 设置面板里选的模型；都没有 → 返回 ""（调用方报错，不给假模型）。
+ * 两层：① 节点自带模型 → ② 该能力第一个可用模型（第132轮起的自动默认——真实 catalog 模型，非假值）；
+ * 都没有（catalog 无该能力模型）→ 返回 ""（调用方报错，绝不给 mock/假模型——零兜底原则针对的是假值）。
  * 第三个参数仅用于识别"节点 model 是占位/mock 值"，不再作为回退结果。
  */
 export function resolveActiveModelKey(
@@ -93,10 +111,12 @@ export function resolveActiveModelKey(
   modelParam: unknown,
   placeholderModel?: string,
 ): string {
-  // 1. 节点自带的具体模型配置优先
+  // 1. 节点自带的具体模型配置优先。
+  // `*__fallback` 是历史版本兜底适配器写进节点的假值（适配器已删）——视为未选择，存量项目自愈。
   if (
     typeof modelParam === "string" &&
     !PLACEHOLDER_KEYS.has(modelParam) &&
+    !modelParam.endsWith("__fallback") &&
     modelParam !== placeholderModel
   ) {
     return modelParam;
@@ -114,7 +134,7 @@ export function resolveActiveModelKey(
 
 /**
  * 解析资产 / 表格模式下生效的模型 key。
- * 单一配置层（设置面板）；无则返回 ""（调用方报错，不兜底）。
+ * 第132轮：自动取该能力第一个可用模型；无（catalog 无该能力模型）则返回 ""（调用方报错，不给假模型）。
  */
 export function resolveAssetModelKey(category: Capability): string {
   const defaultSettingKey = getDefaultModelKey(category);
@@ -134,5 +154,3 @@ export function parseAdapterKey(key: string): { channelId: string; modelName: st
   if (!key) return null;
   return { channelId: "", modelName: key };
 }
-
-export { NODE_TYPE_TO_CAT };

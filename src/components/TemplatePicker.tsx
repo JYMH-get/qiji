@@ -20,16 +20,19 @@ interface TemplatePickerProps {
 export default function TemplatePicker({ purpose, value, onChange, label = "提示词模板", style }: TemplatePickerProps) {
 	const all = useCatalogStore((s) => s.catalog?.templates);
 	const opts = useMemo(() => (all ?? []).filter((t) => t.purpose === purpose), [all, purpose]);
+	// 空值=用默认模板；直接显示「实际使用」的模板名（空值映射到默认模板），不再显示「跟随默认」这类占位
+	const def = useMemo(() => opts.find((t) => t.isDefault) ?? opts[0], [opts]);
+	const displayValue = value || def?.id || "";
 
 	return (
 		<label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "rgba(255,255,255,0.55)", ...style }}>
 			{label}
 			<select
-				value={value}
+				value={displayValue}
 				onChange={(e) => onChange(e.target.value)}
-				style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, color: "#fff", padding: "6px 8px", fontSize: 12, outline: "none", cursor: "pointer" }}
+				style={{ flex: 1, minWidth: 0, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, color: "#fff", padding: "6px 8px", fontSize: 12, outline: "none", cursor: "pointer" }}
 			>
-				<option value="" style={{ background: "#1f1f2e" }}>跟随默认</option>
+				{opts.length === 0 && <option value="" style={{ background: "#1f1f2e" }}>（无可用模板）</option>}
 				{opts.map((t) => (
 					<option key={t.id} value={t.id} style={{ background: "#1f1f2e" }}>{t.name}</option>
 				))}

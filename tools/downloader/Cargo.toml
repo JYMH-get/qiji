@@ -1,0 +1,20 @@
+[package]
+name = "qiji-downloader"
+version = "0.1.0"
+edition = "2021"
+description = "Qiji 批量下载器：吃管理端导出的清单，把产物并发抓到本地"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+# native-tls → Windows 用 schannel，无需 OpenSSL/C 工具链（与主程序同一取舍）
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "stream"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

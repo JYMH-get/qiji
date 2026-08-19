@@ -6,7 +6,10 @@
     "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true,
     "strict": true,
-    "types": ["node"]
+    "types": ["node"],
+    // ⚠ 编译产物必须挪出仓库根（第144轮教训）：`tsc -b` 曾把 vite.config.ts 编译成根目录 vite.config.js，
+    // 而 vite 配置解析 **.js 优先于 .ts** ——之后对 vite.config.ts 的一切修改（define/插件）被旧 .js 静默遮蔽。
+    "outDir": "node_modules/.cache/tsc-node"
   },
-  "include": ["vite.config.ts"]
+  "include": ["vite.config.ts", "appVersionPlugin.ts"]
 }

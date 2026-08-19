@@ -46,6 +46,12 @@ async function sha256(message: string): Promise<string> {
   return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** commitId → 内容哈希缓存：免去每次自动保存都把"当前 head 提交"再整个 stringify+哈希一遍 */
+const commitHashCache = new Map<string, string>();
+
+/** 提交链上限：自动保存每次变更都会追加全量画布快照，不设上限项目文件会无限膨胀、保存越来越慢 */
+const MAX_COMMITS = 30;
+
 export const useCommitStore = create<CommitState>((set, get) => ({
   head: "commit-init",
   commits: createInitialCommits(),
@@ -74,14 +80,19 @@ export const useCommitStore = create<CommitState>((set, get) => ({
 
     let hasChanges = true;
     if (currentCommit) {
-      const currentContent = JSON.stringify({
-        nodes: currentCommit.canvas.nodes,
-        edges: currentCommit.canvas.edges,
-        groups: currentCommit.canvas.groups,
-        viewport: currentCommit.canvas.viewport,
-        assets: currentCommit.assets,
-      });
-      const currentHash = await sha256(currentContent);
+      // 优先用缓存的哈希：免去把当前 head 提交再整个 stringify+哈希（自动保存高频路径）
+      let currentHash = commitHashCache.get(currentCommitId);
+      if (!currentHash) {
+        const currentContent = JSON.stringify({
+          nodes: currentCommit.canvas.nodes,
+          edges: currentCommit.canvas.edges,
+          groups: currentCommit.canvas.groups,
+          viewport: currentCommit.canvas.viewport,
+          assets: currentCommit.assets,
+        });
+        currentHash = await sha256(currentContent);
+        commitHashCache.set(currentCommitId, currentHash);
+      }
       if (currentHash === contentHash) {
         hasChanges = false;
       }
@@ -102,11 +113,26 @@ export const useCommitStore = create<CommitState>((set, get) => ({
         },
         assets: { ...assets },
       };
+      commitHashCache.set(commitId, contentHash);
 
-      set({
-        head: commitId,
-        commits: { ...s.commits, [commitId]: newCommit },
-      });
+      // 上限裁剪：只留最近 MAX_COMMITS 条（按时间倒序；恒保留新 head 与 commit-init）。
+      // parentIds 仅作展示用途，指向被裁剪提交也无碍（checkout 只读 commit.canvas）。
+      let commits: Record<string, CommitSnapshot> = { ...s.commits, [commitId]: newCommit };
+      const all = Object.values(commits);
+      if (all.length > MAX_COMMITS) {
+        const keep = new Set(
+          all
+            .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+            .slice(0, MAX_COMMITS)
+            .map((c) => c.commitId),
+        );
+        keep.add(commitId);
+        keep.add("commit-init");
+        commits = {};
+        for (const c of all) if (keep.has(c.commitId)) commits[c.commitId] = c;
+      }
+
+      set({ head: commitId, commits });
       return commitId;
     }
 

@@ -4,7 +4,7 @@
 
 /* ===== 设计 token（深色玻璃拟态，源自上传 UI theme.css） ===== */
 :root {
-  --background: #0a0b0f;
+  --background: #06070c;
   --foreground: #e8eaf0;
   --card: #12141a;
   --card-foreground: #e8eaf0;
@@ -25,13 +25,18 @@
   --ring: #5b8df6;
   --radius: 0.75rem;
 
-  /* 六类节点色 */
+  /* 节点色 */
   --node-script: #f06b6b;
   --node-text: #56cfb2;
   --node-image: #5b8df6;
   --node-video: #f0a05a;
   --node-audio: #b57bee;
   --node-file: #e8a44a;
+  /* 业务节点新增色 */
+  --node-asset: #e0b341;
+  --node-storyboard: #e87fb0;
+  --node-chat: #5fd47e;
+  --node-seed: #8fa0b8;
 }
 
 @theme {
@@ -97,6 +102,16 @@
   height: 100%;
 }
 
+/* 起拖/起平移瞬间卡顿的关键：提前把视口层与节点提升为独立合成层。
+   否则空闲后首次 transform 变化（右击起拖平移/开始拖节点）要当场做图层提升+整层重栅格化，
+   表现为"动的第一下卡一顿，之后流畅"。will-change 让层常驻，起步即 GPU 平移。 */
+.react-flow__viewport {
+  will-change: transform;
+}
+.react-flow__node {
+  will-change: transform;
+}
+
 /* 点阵 + 径向渐变背景 */
 .react-flow__background {
   background-color: var(--background);
@@ -107,12 +122,17 @@
   );
 }
 
-/* 连线：贝塞尔 + 流动光效（取消箭头） */
+/* 连线：贝塞尔虚线（静态，取消箭头）。
+   性能红线：流动动画只给 激活/选中/悬停/续传 的少数边——常驻 dash 动画会让**全部连线永远逐帧重绘**
+   （SVG stroke-dashoffset 无法 GPU 合成），是画布空转耗电与平移闪烁的主因，勿改回全局。 */
 .react-flow__edge-path {
-  stroke: rgba(255, 255, 255, 0.25);
+  stroke: rgba(170, 190, 230, 0.5);
   stroke-width: 2.2;
   stroke-dasharray: 6, 6;
-  animation: Qiji-edge-flow 1.5s linear infinite;
+}
+/* 选中节点的上下游连线：流动 + 发光（发光由 ButtonEdge data.active 控制） */
+.react-flow__edge.Qiji-edge--active .react-flow__edge-path {
+  animation: Qiji-edge-flow 0.8s linear infinite;
 }
 
 @keyframes Qiji-edge-flow {
@@ -124,74 +144,77 @@
   }
 }
 
-.react-flow__edge.selected .react-flow__edge-path {
+.react-flow__edge.selected .react-flow__edge-path,
+/* 框选选中的连线（uiStore.selectedEdgeIds → className，不走 RF 内部 selected——见 Canvas.tsx 死循环坑注释） */
+.react-flow__edge.Qiji-edge--picked .react-flow__edge-path {
   stroke: var(--primary);
   stroke-width: 2.8;
   filter: drop-shadow(0 0 3px var(--primary));
-  animation-duration: 0.8s;
+  animation: Qiji-edge-flow 0.8s linear infinite;
 }
 
 .react-flow__edge:hover .react-flow__edge-path {
   stroke: var(--primary);
   stroke-width: 2.8;
+  animation: Qiji-edge-flow 0.8s linear infinite;
 }
 
 .react-flow__edge.animated .react-flow__edge-path {
   stroke: var(--node-video);
   filter: drop-shadow(0 0 2px var(--node-video));
+  animation: Qiji-edge-flow 1.5s linear infinite;
 }
 
 .react-flow__arrowhead {
   display: none;
 }
 
-/* ===== Handle 连线按鈕（常态显示，悬浮在外） ===== */
+/* ===== 连接点（无图标的纯圆点，直接拖拽连线） ===== */
 .react-flow__handle {
-  width: 22px !important;
-  height: 22px !important;
+  width: 12px !important;
+  height: 12px !important;
   border-radius: 50% !important;
-  background: rgba(18, 20, 26, 0.85) !important;
-  border: 1px solid rgba(255, 255, 255, 0.12) !important;
-  backdrop-filter: blur(8px);
-  display: flex !important;
-  align-items: center;
-  justify-content: center;
-  opacity: 1 !important;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
-  cursor: pointer;
+  background: var(--node-accent, var(--primary)) !important;
+  border: 2px solid rgba(8, 9, 13, 0.95) !important;
+  opacity: 0.55 !important;
+  transition: transform 0.15s ease, opacity 0.15s ease, box-shadow 0.15s ease !important;
+  cursor: crosshair;
   z-index: 30 !important;
-  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--node-accent, var(--primary)) 55%, transparent);
 }
-/* 节点按鈕 + 图标 */
-.Qiji-handle-btn__icon {
-  width: 11px;
-  height: 11px;
-  pointer-events: none;
-  flex-shrink: 0;
+/* 扩大连接点的可抓取/拖拽热区（圆点小但热区 ~34px，便于抓住输出点起线） */
+.react-flow__handle::before {
+  content: "";
+  position: absolute;
+  inset: -11px;
+  border-radius: 50%;
+}
+/* 悬停节点或选中时，连接点更明显（便于直接拖拽连接） */
+.react-flow__node:hover .react-flow__handle,
+.react-flow__node.selected .react-flow__handle {
+  opacity: 1 !important;
 }
 /* 悬浮在外面，并且使用 translate 确保在连线上完美居中 */
 .react-flow__handle-left {
-  left: -13px !important;
+  left: -7px !important;
   transform: translate(-50%, -50%) scale(1) !important;
 }
 .react-flow__handle-left:hover {
-  border-color: var(--node-accent, var(--primary)) !important;
-  transform: translate(-50%, -50%) scale(1.15) !important;
-  box-shadow: 0 0 10px 2px
-    color-mix(in srgb, var(--node-accent, var(--primary)) 40%, transparent);
-  background: rgba(26, 29, 38, 0.95) !important;
+  opacity: 1 !important;
+  transform: translate(-50%, -50%) scale(1.35) !important;
+  box-shadow: 0 0 12px 3px
+    color-mix(in srgb, var(--node-accent, var(--primary)) 70%, transparent);
 }
 
 .react-flow__handle-right {
-  right: -13px !important;
+  right: -7px !important;
   transform: translate(50%, -50%) scale(1) !important;
 }
 .react-flow__handle-right:hover {
-  border-color: var(--node-accent, var(--primary)) !important;
-  transform: translate(50%, -50%) scale(1.15) !important;
-  box-shadow: 0 0 10px 2px
-    color-mix(in srgb, var(--node-accent, var(--primary)) 40%, transparent);
-  background: rgba(26, 29, 38, 0.95) !important;
+  opacity: 1 !important;
+  transform: translate(50%, -50%) scale(1.35) !important;
+  box-shadow: 0 0 12px 3px
+    color-mix(in srgb, var(--node-accent, var(--primary)) 70%, transparent);
 }
 
 /* 彻底解决 React Flow 节点包裹容器裁剪悬浮连接处的问题 */
@@ -199,7 +222,10 @@
   overflow: visible !important;
 }
 
-/* ===== 节点玻璃卡片（节点对外只展示结果） ===== */
+/* ===== 节点卡片（节点对外只展示结果） =====
+   性能红线：画布内随视口移动的元素（节点卡/角标/分组）一律**不用 backdrop-filter**——
+   平移时每个带毛玻璃的元素每帧都要对身后点阵重新采样+模糊（WebView2 闪烁/卡顿主因），
+   而节点背景本就 ≥92% 不透明，模糊视觉上几乎不可见。背景直接用不透明色。 */
 .Qiji-node {
   --node-accent: var(--primary);
   position: relative;
@@ -207,11 +233,10 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: rgba(15, 16, 22, 0.92);
+  background: rgb(15, 16, 22);
   border: none !important;
   border-radius: 11px;
   overflow: visible !important;
-  backdrop-filter: blur(8px);
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
   transition: box-shadow 0.15s ease;
 }
@@ -268,17 +293,17 @@
 
 /* ===== 精简模式（未激活时） ===== */
 .Qiji-node--compact {
-  /* 深圆色背景，明显区别于画布 */
-  background: rgba(22, 24, 34, 0.94);
-  border: none !important;
-  backdrop-filter: blur(6px);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  /* 更亮的卡片背景 + 细描边，和深色画布对比更明显（不透明+无毛玻璃，见上方性能红线） */
+  background: rgb(32, 36, 48);
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.55);
   cursor: pointer;
 }
 .Qiji-node--compact:hover {
+  border-color: color-mix(in srgb, var(--node-accent) 45%, rgba(255, 255, 255, 0.1)) !important;
   box-shadow:
-    0 6px 28px rgba(0, 0, 0, 0.5),
-    0 0 12px rgba(255, 255, 255, 0.08);
+    0 8px 30px rgba(0, 0, 0, 0.6),
+    0 0 14px rgba(255, 255, 255, 0.1);
 }
 /* compact 内 result 边框较轻 */
 .Qiji-node--compact .Qiji-result {
@@ -291,34 +316,34 @@
   background: transparent;
 }
 
-/* ===== 堆叠卡片样式 ===== */
+/* ===== 堆叠卡片样式（浅色底 + 微微旋转：深色画布上像一叠微错位的照片） ===== */
 .Qiji-node--stacked::before,
 .Qiji-node--stacked::after {
   content: "";
   position: absolute;
   inset: 0;
   border-radius: 11px;
-  background: rgba(18, 20, 26, 0.75);
-  backdrop-filter: blur(4px);
+  background: rgba(216, 225, 240, 0.6);
   z-index: -1;
   transition: transform 0.15s ease;
   pointer-events: none;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
 }
 .Qiji-node--stacked::before {
-  transform: translate(5px, 5px);
+  transform: translate(6px, 7px) rotate(1.6deg);
   z-index: -1;
 }
 .Qiji-node--stacked::after {
-  transform: translate(10px, 10px);
+  transform: translate(13px, 14px) rotate(-2.2deg);
+  background: rgba(216, 225, 240, 0.32);
   z-index: -2;
 }
 .Qiji-node--stacked:hover::before {
-  transform: translate(7px, 7px);
+  transform: translate(8px, 9px) rotate(2.4deg);
 }
 .Qiji-node--stacked:hover::after {
-  transform: translate(14px, 14px);
+  transform: translate(17px, 18px) rotate(-3.2deg);
 }
 
 /* 左上角悬浮徽章（compact 时始终可见） */
@@ -342,7 +367,6 @@
     var(--node-accent, var(--primary)) 20%,
     rgba(0, 0, 0, 0.6)
   );
-  backdrop-filter: blur(4px);
   pointer-events: none;
 }
 
@@ -382,6 +406,37 @@
 .Qiji-node[data-status="scheduled"],
 .Qiji-node[data-status="failed"] {
   border: none !important;
+}
+
+/* ===== 运行态：流动绿色边框（生成中/执行中节点） =====
+   独立子元素（避免与 --stacked 的伪元素冲突），z-index:-1 画在节点不透明底色后面、只露出 3px 环。
+   conic 渐变角度动画需逐帧重绘，但仅挂在**运行中的少数节点**上（与脉冲条同期存在），符合 §9 动画约束。 */
+@property --Qiji-run-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+.Qiji-node__runring {
+  position: absolute;
+  inset: -3px;
+  border-radius: 14px;
+  z-index: -1;
+  pointer-events: none;
+  background: conic-gradient(
+    from var(--Qiji-run-angle),
+    rgba(52, 211, 153, 0.1),
+    rgba(52, 211, 153, 0.85) 30%,
+    rgba(167, 243, 208, 1) 50%,
+    rgba(52, 211, 153, 0.85) 70%,
+    rgba(52, 211, 153, 0.1)
+  );
+  box-shadow: 0 0 16px rgba(52, 211, 153, 0.3);
+  animation: Qiji-run-spin 2.2s linear infinite;
+}
+@keyframes Qiji-run-spin {
+  to {
+    --Qiji-run-angle: 360deg;
+  }
 }
 
 /* 结果展示区 */
@@ -449,15 +504,7 @@
   object-fit: contain;
   border-radius: 8px;
 }
-.Qiji-result__audio-wrap {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
-  width: 100%;
-  color: var(--foreground);
-}
+/* .Qiji-result__audio-wrap 已随音频卡重做（AudioWave.tsx 波形+播放钮）删除（第145轮） */
 
 /* ===== 文件节点 ===== */
 .Qiji-file-node {
@@ -621,13 +668,48 @@
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
 }
 
-.Qiji-scroll-thin::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+/* ===== 全局滚动条：单线（细中线）+ 光点（发光小胶囊），极致压缩宽度 =====
+   适用于所有可滚动元素（.Qiji-scroll-thin 亦复用此全局样式，不再单独加宽）。 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(150, 180, 255, 0.55) transparent;
 }
-.Qiji-scroll-thin::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+/* 轨道中央一条 1px 细线（竖向条纵线 / 横向条横线）*/
+::-webkit-scrollbar-track:vertical {
+  background: linear-gradient(to right, transparent calc(50% - 0.5px), rgba(255, 255, 255, 0.10) calc(50% - 0.5px), rgba(255, 255, 255, 0.10) calc(50% + 0.5px), transparent calc(50% + 0.5px));
+}
+::-webkit-scrollbar-track:horizontal {
+  background: linear-gradient(to bottom, transparent calc(50% - 0.5px), rgba(255, 255, 255, 0.10) calc(50% - 0.5px), rgba(255, 255, 255, 0.10) calc(50% + 0.5px), transparent calc(50% + 0.5px));
+}
+/* 滑块=细线上的发光光点（透明边框 + padding-box 收窄到约 3px，box-shadow 发光）*/
+::-webkit-scrollbar-thumb {
+  background: rgba(160, 190, 255, 0.85);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  min-height: 20px;
+  min-width: 20px;
+  box-shadow: 0 0 6px rgba(150, 180, 255, 0.55);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(205, 220, 255, 1);
+  background-clip: padding-box;
+  box-shadow: 0 0 9px rgba(185, 210, 255, 0.85);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .react-flow__minimap {
@@ -728,6 +810,16 @@
   color: var(--primary);
   font-weight: 700;
   letter-spacing: 0.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.Qiji-titlebar__logo img {
+  height: 15px;
+  width: auto;
+  display: block;
+  -webkit-user-drag: none;
 }
 
 .Qiji-titlebar__sep {
@@ -899,16 +991,15 @@
   height: 100%;
   width: 100%;
   border-radius: 1rem;
-  border: 1.5px dashed rgba(255, 255, 255, 0.16);
-  background-color: rgba(255, 255, 255, 0.015);
-  backdrop-filter: blur(2px);
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  background-color: rgba(140, 160, 200, 0.10);
   padding: 1rem;
   transition: all 0.2s ease;
 }
 
 .Qiji-group-node:hover {
-  border-color: rgba(91, 141, 246, 0.45);
-  background-color: rgba(91, 141, 246, 0.01);
+  border-color: #ffffff;
+  background-color: rgba(140, 160, 200, 0.14);
 }
 
 .react-flow__node.selected .Qiji-group-node,
@@ -949,6 +1040,34 @@
   to {
     transform: rotate(360deg);
   }
+}
+
+/* 节点运行态条状脉冲（仅运行中的节点挂载；transform/opacity 动画可 GPU 合成，符合 §9 渲染规则） */
+.Qiji-pulsebars {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+}
+.Qiji-pulsebars span {
+  width: 5px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--node-accent, var(--primary));
+  animation: Qiji-pulsebar 0.9s ease-in-out infinite;
+}
+.Qiji-pulsebars span:nth-child(2) { animation-delay: 0.1s; }
+.Qiji-pulsebars span:nth-child(3) { animation-delay: 0.2s; }
+.Qiji-pulsebars span:nth-child(4) { animation-delay: 0.3s; }
+.Qiji-pulsebars span:nth-child(5) { animation-delay: 0.4s; }
+@keyframes Qiji-pulsebar {
+  0%, 100% { transform: scaleY(1); opacity: 0.4; }
+  50% { transform: scaleY(2.4); opacity: 1; }
+}
+/* 全局旋转类（素材上传占位转圈等复用；原仅在视频界面内联定义，改为全局，画布面板也可用）*/
+.sb-spin {
+  display: inline-block;
+  animation: Qiji-spin 0.8s linear infinite;
 }
 
 /* ===== PromptComposer: textarea + backdrop highlight ===== */

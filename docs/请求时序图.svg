@@ -1,0 +1,118 @@
+<svg viewBox="0 0 880 792" xmlns="http://www.w3.org/2000/svg" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+  <title>Qiji 用户端 ↔ 管理端 ↔ 上游 API 请求时序图</title>
+  <desc>用户端提交生成请求,管理端立即回 taskId 并在后台转发上游;上游按文本流式/图像一次性/视频轮询三种形态回管理端;用户端轮询 taskId 取部分正文与结果,最后结构化解析展示。</desc>
+
+  <style>
+    .lab    { fill: var(--color-text-primary, #1a1a1a); font-size: 13px; }
+    .sub    { fill: var(--color-text-secondary, #6b6b6b); font-size: 11px; }
+    .head   { fill: var(--color-text-primary, #1a1a1a); font-size: 14px; font-weight: 600; }
+    .frag   { fill: var(--color-text-info, #5b7cfa); font-size: 11px; font-weight: 600; }
+    .step   { fill: var(--color-text-info, #5b7cfa); font-size: 13px; font-weight: 700; }
+    .ll     { stroke: var(--color-border-tertiary, #c9c9c9); stroke-width: 1.5; }
+    .box    { fill: var(--color-background-primary, #fff); stroke: var(--color-border-secondary, #b0b0b0); stroke-width: 1.5; }
+    .act    { fill: var(--color-text-info, #5b7cfa); opacity: 0.10; }
+    .solid  { stroke: var(--color-text-primary, #1a1a1a); stroke-width: 1.6; fill: none; }
+    .ret    { stroke: var(--color-text-secondary, #6b6b6b); stroke-width: 1.4; fill: none; stroke-dasharray: 5 4; }
+    .fbox   { fill: none; stroke: var(--color-border-secondary, #b0b0b0); stroke-width: 1.2; stroke-dasharray: 3 3; }
+    .ftab   { fill: var(--color-background-primary, #fff); stroke: var(--color-border-secondary, #b0b0b0); stroke-width: 1; }
+    .div    { stroke: var(--color-border-tertiary, #c9c9c9); stroke-width: 1; stroke-dasharray: 2 4; }
+    .note   { fill: var(--color-text-info, #5b7cfa); opacity: 0.08; }
+    .noteb  { fill: none; stroke: var(--color-text-info, #5b7cfa); stroke-width: 1; opacity: 0.5; }
+  </style>
+
+  <defs>
+    <marker id="ah" markerWidth="9" markerHeight="9" refX="7.5" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="var(--color-text-primary, #1a1a1a)"/>
+    </marker>
+    <marker id="ahr" markerWidth="9" markerHeight="9" refX="7.5" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="var(--color-text-secondary, #6b6b6b)"/>
+    </marker>
+  </defs>
+
+  <!-- lifelines -->
+  <line class="ll" x1="110" y1="56" x2="110" y2="760"/>
+  <line class="ll" x1="440" y1="56" x2="440" y2="760"/>
+  <line class="ll" x1="770" y1="56" x2="770" y2="760"/>
+
+  <!-- activation on 管理端 -->
+  <rect class="act" x="436" y="92" width="8" height="528"/>
+
+  <!-- headers -->
+  <rect class="box" x="35"  y="16" width="150" height="38" rx="6"/>
+  <text class="head" x="110" y="40" text-anchor="middle">用户端 (Tauri)</text>
+  <rect class="box" x="365" y="16" width="150" height="38" rx="6"/>
+  <text class="head" x="440" y="40" text-anchor="middle">管理端 (server)</text>
+  <rect class="box" x="695" y="16" width="150" height="38" rx="6"/>
+  <text class="head" x="770" y="40" text-anchor="middle">上游 API</text>
+  <text class="sub" x="770" y="72" text-anchor="middle">g-aisc / 简梦</text>
+
+  <!-- ① C→S generate -->
+  <text class="step" x="115" y="86">①</text>
+  <text class="lab"  x="275" y="86" text-anchor="middle">POST /v1/generate</text>
+  <text class="sub"  x="275" y="100" text-anchor="middle">purpose · model · 变量 · params · 素材id</text>
+  <line class="solid" x1="110" y1="106" x2="436" y2="106" marker-end="url(#ah)"/>
+
+  <!-- S self: build + create task -->
+  <rect class="box" x="448" y="120" width="232" height="34" rx="5"/>
+  <text class="sub" x="464" y="135">拼接上游请求体</text>
+  <text class="sub" x="464" y="149">+ createRunningTask → 生成 taskId</text>
+
+  <!-- ② S→C return taskId -->
+  <text class="step" x="385" y="180" text-anchor="end">②</text>
+  <text class="lab"  x="275" y="180" text-anchor="middle">{ taskId } 立即返回</text>
+  <text class="sub"  x="275" y="194" text-anchor="middle">不阻塞 · 文本/图/视频都异步</text>
+  <line class="ret" x1="436" y1="200" x2="112" y2="200" marker-end="url(#ahr)"/>
+
+  <!-- ③ S→U forward -->
+  <text class="step" x="450" y="226">③</text>
+  <text class="lab"  x="605" y="226" text-anchor="middle">后台转发真请求</text>
+  <line class="solid" x1="444" y1="232" x2="766" y2="232" marker-end="url(#ah)"/>
+
+  <!-- ALT fragment: upstream → server, 3 modes -->
+  <rect class="fbox" x="455" y="248" width="375" height="190" rx="4"/>
+  <rect class="ftab" x="455" y="248" width="86" height="18"/>
+  <text class="frag" x="463" y="261">上游响应 · 三选一</text>
+
+  <!-- 文本 SSE -->
+  <text class="sub" x="463" y="285">文本 · SSE 流式</text>
+  <line class="solid" x1="766" y1="300" x2="446" y2="300" marker-end="url(#ah)"/>
+  <line class="solid" x1="766" y1="308" x2="446" y2="308" marker-end="url(#ah)"/>
+  <text class="sub" x="605" y="296" text-anchor="middle">delta 增量 → appendTaskText</text>
+
+  <line class="div" x1="463" y1="322" x2="822" y2="322"/>
+  <!-- 图像 one-shot -->
+  <text class="sub" x="463" y="343">图像 · 一次性</text>
+  <line class="solid" x1="766" y1="358" x2="446" y2="358" marker-end="url(#ah)"/>
+  <text class="sub" x="605" y="354" text-anchor="middle">完整图 → 下载落资产</text>
+
+  <line class="div" x1="463" y1="372" x2="822" y2="372"/>
+  <!-- 视频 poll upstream -->
+  <text class="sub" x="463" y="393">视频 · 简梦轮询</text>
+  <line class="solid" x1="446" y1="406" x2="766" y2="406" marker-end="url(#ah)"/>
+  <text class="sub" x="605" y="402" text-anchor="middle">每 8s 轮上游</text>
+  <line class="ret" x1="766" y1="426" x2="448" y2="426" marker-end="url(#ahr)"/>
+  <text class="sub" x="605" y="422" text-anchor="middle">completed → video_url</text>
+
+  <!-- LOOP fragment: client polling -->
+  <rect class="fbox" x="60" y="462" width="384" height="150" rx="4"/>
+  <rect class="ftab" x="60" y="462" width="232" height="18"/>
+  <text class="frag" x="68" y="475">客户端轮询 · taskCenter 单例 (首2秒,之后5秒)</text>
+
+  <text class="step" x="115" y="502">④</text>
+  <text class="lab"  x="275" y="502" text-anchor="middle">GET /v1/tasks/{taskId}</text>
+  <line class="solid" x1="110" y1="510" x2="436" y2="510" marker-end="url(#ah)"/>
+
+  <line class="ret" x1="436" y1="540" x2="112" y2="540" marker-end="url(#ahr)"/>
+  <text class="lab" x="275" y="534" text-anchor="middle">{ status, progress, partialText | assets }</text>
+
+  <rect class="note"  x="92" y="556" width="300" height="40" rx="5"/>
+  <rect class="noteb" x="92" y="556" width="300" height="40" rx="5"/>
+  <text class="sub" x="242" y="572" text-anchor="middle">四态归一 · partialText 边收边显示</text>
+  <text class="sub" x="242" y="587" text-anchor="middle">未完成 → 继续下一轮</text>
+
+  <!-- ⑤ client parse + render -->
+  <text class="step" x="115" y="652">⑤</text>
+  <rect class="box" x="92" y="660" width="300" height="50" rx="6"/>
+  <text class="lab" x="110" y="680">结构化解析 + 展示</text>
+  <text class="sub" x="110" y="698">parseAssetExtraction · 落资产库 · 渲染</text>
+</svg>

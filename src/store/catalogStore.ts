@@ -3,6 +3,7 @@ import type {
 	Catalog,
 	CatalogModel,
 	CatalogTemplate,
+	CatalogPreset,
 	CatalogImageTemplate,
 	CatalogVariantPrefix,
 	Capability,
@@ -54,7 +55,9 @@ interface CatalogState {
 	templatesByNode: (nodeType: string) => CatalogTemplate[];
 	/** 按分类取模板（如 "画风"），按 order/name 排序 */
 	templatesByCategory: (category: string) => CatalogTemplate[];
-	/** 画风预设列表（category==="画风" 的模板，供新建项目选用） */
+	/** 预设清单（第174轮独立实体；旧服务端无 presets 字段=空数组，消费方需自带模板回退） */
+	presets: () => CatalogPreset[];
+	/** 画风预设列表（新服务端=presets 分组「画风」；旧服务端回退 category==="画风" 的模板），供新建项目选用 */
 	artStyles: () => CatalogTemplate[];
 	/** 取某 purpose（可叠加节点类型）下的默认模板（isDefault 优先，否则第一个） */
 	defaultTemplate: (p: Purpose, nodeType?: string) => CatalogTemplate | undefined;
@@ -84,14 +87,6 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
 			// 目录变化后，重新注册模型适配器
 			const { syncManagedAdapters } = await import("@/services/adapters/managedAdapter");
 			syncManagedAdapters();
-			// 清理设置里失效的旧"已选模型"id（避免计数虚高、过滤异常）
-			const cat = get().catalog;
-			if (cat?.models?.length) {
-				const byCap: Record<string, string[]> = {};
-				for (const m of cat.models) (byCap[m.capability] ??= []).push(m.id);
-				const { useSettingsStore } = await import("@/store/settingsStore");
-				useSettingsStore.getState().pruneSelectedModels(byCap);
-			}
 		} catch (err) {
 			set({ error: (err as Error).message });
 		} finally {
@@ -112,7 +107,26 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
 		),
 	templatesByCategory: (category) =>
 		(get().catalog?.templates ?? []).filter((t) => (t.category ?? "") === category),
-	artStyles: () => (get().catalog?.templates ?? []).filter((t) => (t.category ?? "") === "画风"),
+	presets: () => get().catalog?.presets ?? [],
+	// 画风：新服务端从独立预设库取（映射成 CatalogTemplate 形状，消费方 Frame164 等零改动）；
+	// 旧服务端（无 presets 字段）回退旧口径（画风还在模板清单里）。
+	artStyles: () => {
+		const presets = get().catalog?.presets;
+		if (presets) {
+			return presets
+				.filter((p) => (p.category ?? "") === "画风")
+				.map((p) => ({
+					id: p.id,
+					name: p.name,
+					capability: "image" as Capability,
+					variables: [],
+					category: "画风",
+					body: p.body,
+					images: p.images,
+				}));
+		}
+		return (get().catalog?.templates ?? []).filter((t) => (t.category ?? "") === "画风");
+	},
 	defaultTemplate: (p, nodeType) => {
 		const pool = (get().catalog?.templates ?? []).filter(
 			(t) =>

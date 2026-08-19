@@ -8,6 +8,7 @@
  * 仅 Tauri 环境生效；浏览器/失败时返回 null（调用方退回直接用 url）。
  */
 import { useProjectStore } from "@/store/projectStore";
+import { isWebviewLocalUri } from "@/lib/publicUrl";
 import type { AssetBlob } from "@/services/projectFile";
 
 function isTauri(): boolean {
@@ -149,7 +150,9 @@ export async function ensureLocalOriginal(uri: string, opts?: { hintId?: string;
 		const { convertFileSrc } = await import("@tauri-apps/api/core");
 		const localUri = convertFileSrc(dest);
 		await registerWithServer(id, dest);
-		const blob: AssetBlob = { id, url: /^https?:/.test(uri) ? uri : existing?.url, srcUri: uri, localPath: dest, localUri, ext, mime };
+		// blob.url 绝不能记 webview 伪域直链（http://asset.localhost/...）——会被 ensurePublicUrl
+		// 当缓存公网链发给上游（「发给火山 Invalid parameter」事故根源之一）；srcUri 仍记原 uri 供反查。
+		const blob: AssetBlob = { id, url: /^https?:/.test(uri) && !isWebviewLocalUri(uri) ? uri : existing?.url, srcUri: uri, localPath: dest, localUri, ext, mime };
 		useProjectStore.getState().registerAssetBlob(blob);
 		return blob;
 	} catch (e) {
@@ -159,27 +162,183 @@ export async function ensureLocalOriginal(uri: string, opts?: { hintId?: string;
 }
 
 /**
- * 下载远程资产到本地并登记。返回三元映射 blob；失败/非 Tauri 返回 null。
+ * 本地上传的素材（垫图/参考图）也落一份本地原件：把用户选中的 File 字节写到 <assets>/<id>.<ext>，
+ * 登记三元映射（id / OSS url / 本地路径+可显示 uri）。返回 blob；非 Tauri 或失败返回 null。
+ *
+ * 目的：显示层改用 asset:// 本地 uri，而不是 base64 dataURL——base64 会被整段写进 project.Qiji
+ * （genMeta/assetRefImages），是项目文件膨胀到百 MB、进而保存中断损坏的根源。
+ * 字节直接来自 File（无需二次下载），比 ensureLocalOriginal(fetch data:) 更省。
  */
-export async function saveRemoteAsset(assetId: string, url: string): Promise<AssetBlob | null> {
-	if (!isTauri() || !url || /^(data:|blob:)/.test(url)) return null;
+export async function saveUploadedLocal(file: Blob, id: string, url?: string, name?: string): Promise<AssetBlob | null> {
+	if (!isTauri()) return null;
 	try {
-		const resp = await fetch(url);
-		if (!resp.ok) return null;
-		const mime = resp.headers.get("content-type") || undefined;
-		const bytes = new Uint8Array(await resp.arrayBuffer());
-		const ext = extOf(url, mime);
+		const bytes = new Uint8Array(await file.arrayBuffer());
+		const mime = file.type || undefined;
+		const ext = extOf(name || (file as File).name || "", mime);
 		const dir = await projectAssetsDir();
 		const { join } = await import("@tauri-apps/api/path");
-		const dest = await join(dir, `${assetId}.${ext}`);
+		const dest = await join(dir, `${id}.${ext}`);
 		const { writeFile } = await import("@tauri-apps/plugin-fs");
 		await writeFile(dest, bytes);
 		const { convertFileSrc } = await import("@tauri-apps/api/core");
 		const localUri = convertFileSrc(dest);
-		await registerWithServer(assetId, dest);
-		return { id: assetId, url, localPath: dest, localUri, ext, mime };
+		await registerWithServer(id, dest);
+		// url 只记真公网链（不记 webview 伪域，防毒化 ensurePublicUrl 缓存，同 saveRemoteAsset）
+		const blob: AssetBlob = {
+			id,
+			url: url && /^https?:/.test(url) && !isWebviewLocalUri(url) ? url : undefined,
+			localPath: dest, localUri, ext, mime,
+		};
+		useProjectStore.getState().registerAssetBlob(blob);
+		return blob;
+	} catch (e) {
+		console.warn("[assetPersist] saveUploadedLocal failed:", e);
+		return null;
+	}
+}
+
+/**
+ * 原生下载（绕过 webview CORS）：调 Rust download_url 把远程 url 落成系统临时文件，
+ * 返回临时路径 + content-type。命令不存在/失败/非 Tauri → 返回 null（调用方回退 webview fetch）。
+ * timeoutSecs：单次下载超时秒数（缺省由 Rust 侧 180s 兜底）。
+ */
+async function nativeDownload(url: string, timeoutSecs?: number): Promise<{ path: string; contentType: string } | null> {
+	if (!isTauri()) return null;
+	try {
+		const { invoke } = await import("@tauri-apps/api/core");
+		const r = await invoke<{ path: string; content_type: string }>("download_url", { url, timeoutSecs });
+		return r?.path ? { path: r.path, contentType: r.content_type || "" } : null;
+	} catch (e) {
+		console.warn("[assetPersist] nativeDownload failed:", e);
+		return null;
+	}
+}
+
+/** 远程下载选项（第158轮）：服务端未转存的原始直链结果用 图3×30s / 视频2×120s 快重试 */
+export interface RemoteFetchOpts {
+	/** 下载尝试次数（缺省 1，保持既有行为——大视频/OSS 直链单次 180s 已够） */
+	attempts?: number;
+	/** 单次下载超时秒数（缺省 180） */
+	timeoutSecs?: number;
+}
+
+/**
+ * 下载远程资产到本地并登记。返回三元映射 blob；失败/非 Tauri 返回 null。
+ * 优先走 Rust 原生下载（绕 webview CORS，任何公网直链可达）；失败回退 webview fetch。
+ */
+export async function saveRemoteAsset(assetId: string, url: string, opts?: RemoteFetchOpts): Promise<AssetBlob | null> {
+	if (!isTauri() || !url || /^(data:|blob:)/.test(url)) return null;
+	const attempts = Math.max(1, opts?.attempts ?? 1);
+	try {
+		const dir = await projectAssetsDir();
+		const { join } = await import("@tauri-apps/api/path");
+		const fs = await import("@tauri-apps/plugin-fs");
+		for (let attempt = 1; attempt <= attempts; attempt++) {
+			try {
+				let mime: string | undefined;
+				let ext: string;
+				let dest: string;
+				const nd = await nativeDownload(url, opts?.timeoutSecs);
+				if (nd) {
+					mime = nd.contentType || undefined;
+					ext = extOf(url, mime);
+					dest = await join(dir, `${assetId}.${ext}`);
+					await fs.copyFile(nd.path, dest);
+					await fs.remove(nd.path).catch(() => {});
+				} else {
+					// 回退：webview fetch（受源站 CORS 约束，上游直链可能失败）
+					const resp = await fetch(url, { signal: AbortSignal.timeout((opts?.timeoutSecs ?? 180) * 1000) });
+					if (!resp.ok) throw new Error(`下载 HTTP ${resp.status}`);
+					mime = resp.headers.get("content-type") || undefined;
+					ext = extOf(url, mime);
+					dest = await join(dir, `${assetId}.${ext}`);
+					const bytes = new Uint8Array(await resp.arrayBuffer());
+					await fs.writeFile(dest, bytes);
+				}
+				const { convertFileSrc } = await import("@tauri-apps/api/core");
+				const localUri = convertFileSrc(dest);
+				await registerWithServer(assetId, dest);
+				// 缩略图（P1）：图片资产落地后顺手生成 256px WebP 传到 thumb/ 前缀。
+				// 用刚落好的本地副本降采样（零额外下载）；全程 best-effort，失败不影响任何事。
+				if (!mime || mime.startsWith("image/")) {
+					void import("./thumbGen").then((m) => m.ensureThumb(assetId, { localPath: dest, uri: localUri }, mime)).catch(() => {});
+				}
+				// url 不记 webview 伪域直链（同 ensureLocalOriginal：进 url 会毒化 ensurePublicUrl 缓存）
+				return { id: assetId, url: isWebviewLocalUri(url) ? undefined : url, localPath: dest, localUri, ext, mime };
+			} catch (e) {
+				if (attempt >= attempts) throw e;
+				await new Promise((r) => setTimeout(r, 1000 * attempt));
+			}
+		}
+		return null;
 	} catch (e) {
 		console.warn("[assetPersist] saveRemoteAsset failed:", e);
 		return null;
 	}
+}
+
+/** 按扩展名猜 mime（uploadBlobToOss 用；blob.mime 缺失时的兜底） */
+function mimeOfExt(ext?: string): string {
+	const m: Record<string, string> = {
+		png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif",
+		mp4: "video/mp4", webm: "video/webm", mov: "video/quicktime",
+		mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg",
+	};
+	return (ext && m[ext.toLowerCase()]) || "application/octet-stream";
+}
+
+/**
+ * 把已落本地的结果字节经「素材上传」接口（POST /v1/assets）传回服务端落 OSS，
+ * 返回把 id/url 替换为 OSS 台账记录的 blob（第158轮）。
+ * 场景：服务端下载上游成片失败（服务器到成片托管域网络不通）→ 任务以原始时效直链完成
+ * （meta.rehosted=false）→ 客户端本机网络下载成功后由这里补上「转存 OSS」的缺口——
+ * 显示继续走本地副本，后续提交/垫图经三元映射拿到 OSS 永久直链（原始直链会过期）。
+ * 上传失败返回原 blob（本地可显示；url 仍是时效直链，过期后凭本地副本仍可重传）。
+ * taskId：来源任务 id——上传成功后回报服务端改写该任务响应体（原始直链→真 OSS 资产，
+ * rehosted→true）：断连找回/重连原任务再取结果拿到永久直链，不再重复「下载+上传」；best-effort。
+ */
+export async function uploadBlobToOss(blob: AssetBlob, name?: string, prefix?: string, taskId?: string): Promise<AssetBlob> {
+	if (!isTauri() || !blob.localPath) return blob;
+	try {
+		const fs = await import("@tauri-apps/plugin-fs");
+		const bytes = await fs.readFile(blob.localPath);
+		const mime = blob.mime || mimeOfExt(blob.ext);
+		const file = new Blob([bytes as unknown as BlobPart], { type: mime });
+		const filename = `${(name || blob.id).replace(/[\\/:*?"<>|]/g, "_")}.${blob.ext || "bin"}`;
+		const { managedClient } = await import("@/services/managedClient");
+		// 上传重试 2 次：客户端↔服务端链路一般是通的（刚轮询完任务拿到结果），偶发抖动补一次即可；
+		// 两次都失败才放弃（返回原 blob——映射里暂留时效原链，本地副本在，过期后可经「检查素材」重传）
+		let up: { id: string; url: string } | null = null;
+		for (let attempt = 1; attempt <= 2 && !up; attempt++) {
+			try {
+				up = await managedClient.uploadAsset(file, filename, prefix);
+			} catch (e) {
+				if (attempt >= 2) throw e;
+				await new Promise((r) => setTimeout(r, 1500));
+			}
+		}
+		if (up?.id && up?.url) {
+			// 本地文件改名为 OSS 台账 id（§12.2「文件名=id」惯例——下载时用的是 img-<taskId> 合成名）；
+			// 改名失败沿用原文件名，三元映射（id↔url↔localPath）仍正确
+			let localPath = blob.localPath;
+			let localUri = blob.localUri;
+			try {
+				const { join, dirname } = await import("@tauri-apps/api/path");
+				const dest = await join(await dirname(blob.localPath), `${up.id}.${blob.ext || "bin"}`);
+				if (dest !== blob.localPath) {
+					await fs.rename(blob.localPath, dest);
+					localPath = dest;
+					const { convertFileSrc } = await import("@tauri-apps/api/core");
+					localUri = convertFileSrc(dest);
+				}
+			} catch { /* 改名失败：不影响映射正确性 */ }
+			await registerWithServer(up.id, localPath);
+			// 回报服务端改写任务响应体（best-effort：失败只影响断连找回时多走一次接力转存，映射已正确）
+			if (taskId) await managedClient.rewriteTaskResult(taskId, up.id).catch(() => false);
+			return { ...blob, id: up.id, url: up.url, localPath, localUri };
+		}
+	} catch (e) {
+		console.warn("[assetPersist] uploadBlobToOss failed:", e);
+	}
+	return blob;
 }

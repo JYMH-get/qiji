@@ -1,158 +1,75 @@
 import { useNavigate } from "react-router";
+import { FileText, User, Users, Image, PawPrint, Package, Video, Settings, UserCircle } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useUiStore } from "@/store/uiStore";
 
+type TabName = "剧本" | "角色" | "群像" | "场景" | "生物" | "物品" | "视频";
+
 interface EditorSidebarProps {
-    activeTab: "剧本" | "角色" | "群像" | "场景" | "生物" | "物品" | "视频" | "画布";
+    activeTab: TabName;
 }
+
+const ACTIVE = "rgba(139, 92, 246, 1)";   // 紫
+const INACTIVE = "rgba(156, 163, 175, 1)"; // 灰
+
+// 表格模式各页签（画布已移至顶部标题栏的「表格/画布」切换）
+const TABS: { name: TabName; route: string; icon: LucideIcon }[] = [
+    { name: "剧本", route: "/frame1693", icon: FileText },
+    { name: "角色", route: "/frame16285", icon: User },
+    { name: "群像", route: "/frame-group", icon: Users },
+    { name: "场景", route: "/frame16550", icon: Image },
+    { name: "生物", route: "/frame16780", icon: PawPrint },
+    { name: "物品", route: "/frame161000", icon: Package },
+    { name: "视频", route: "/frame161195", icon: Video },
+];
 
 const EditorSidebar = ({ activeTab }: EditorSidebarProps) => {
     const navigate = useNavigate();
 
-    // Helper to get active classes
-    const getTabClasses = (tabName: string) => {
-        const isActive = activeTab === tabName;
-        return {
-            container: isActive ? "Pixso-frame-16_131 active" : "Pixso-frame-16_139",
-            text: isActive ? "Pixso-paragraph-16_138" : "Pixso-paragraph-16_143"
-        };
-    };
+    // 统一的侧栏按钮：选中=紫（图标+文字+底色），未选中=灰
+    const Item = ({ icon: Icon, label, active, onClick }: { icon: LucideIcon; label: string; active: boolean; onClick: () => void }) => (
+        <div
+            onClick={onClick}
+            style={{
+                width: 40,
+                minHeight: 44,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 3,
+                borderRadius: 6,
+                cursor: "pointer",
+                background: active ? "rgba(139, 92, 246, 0.16)" : "transparent",
+                transition: "background 0.15s",
+            }}
+            onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = "rgba(255,255,255,0.06)"; }}
+            onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}
+        >
+            <Icon size={16} color={active ? ACTIVE : INACTIVE} strokeWidth={active ? 2.4 : 2} />
+            <span style={{ fontSize: 10, fontWeight: active ? 600 : 400, color: active ? ACTIVE : INACTIVE, whiteSpace: "nowrap" }}>{label}</span>
+        </div>
+    );
 
     return (
-        <div id="16_124" className="stroke-wrapper-16_124">
+        <div id="16_124" className="stroke-wrapper-16_124" style={{ alignSelf: "stretch", height: "100%" }}>
             <div className="Pixso-frame-16_124" style={{ height: "100%" }}>
-                <div className="frame-content-16_124">
-                    {/* Settings Option */}
-                    <div
-                        id="16_125"
-                        className="Pixso-frame-16_125 cursor-pointer hover:bg-white/5 transition-colors"
-                        onClick={() => useUiStore.getState().setSettingsOpen(true)}
-                        style={{ cursor: "pointer" }}
-                    >
-                        <div className="frame-content-16_125">
-                            <div id="16_126" className="Pixso-frame-16_126">
-                                <div id="16_127" className="stroke-wrapper-16_127">
-                                    <div className="Pixso-rectangle-16_127"></div>
-                                    <div className="stroke-16_127"></div>
-                                </div>
-                                <div id="16_128" className="stroke-wrapper-16_128">
-                                    <div className="Pixso-rectangle-16_128"></div>
-                                    <div className="stroke-16_128"></div>
-                                </div>
-                                <div id="16_129" className="stroke-wrapper-16_129">
-                                    <div className="Pixso-rectangle-16_129"></div>
-                                    <div className="stroke-16_129"></div>
-                                </div>
-                            </div>
-                            <p id="16_130" className="Pixso-paragraph-16_130">{"设置"}</p>
-                        </div>
-                    </div>
+                <div className="frame-content-16_124" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+                    {/* 顶部：表格模式各页签 */}
+                    {TABS.map((t) => (
+                        <Item
+                            key={t.name}
+                            icon={t.icon}
+                            label={t.name}
+                            active={activeTab === t.name}
+                            onClick={() => navigate(t.route)}
+                        />
+                    ))}
 
-                    {/* 1. 剧本 */}
-                    <div
-                        id="16_131"
-                        className={getTabClasses("剧本").container}
-                        onClick={() => navigate("/frame1693")}
-                        style={{ cursor: "pointer" }}
-                    >
-                        <div className="frame-content-16_131">
-                            <div id="16_132" className="Pixso-vector-16_132"></div>
-                            <p id="16_138" className={getTabClasses("剧本").text}>{"剧本"}</p>
-                        </div>
-                    </div>
-
-                    {/* 2. 角色 */}
-                    <div
-                        id="16_139"
-                        className={getTabClasses("角色").container}
-                        onClick={() => navigate("/frame16285")}
-                        style={{ cursor: "pointer" }}
-                    >
-                        <div className="frame-content-16_139">
-                            <div id="16_140" className="Pixso-vector-16_140"></div>
-                            <p id="16_143" className={getTabClasses("角色").text}>{"角色"}</p>
-                        </div>
-                    </div>
-
-                    {/* 2.5 群像 */}
-                    <div
-                        className={getTabClasses("群像").container}
-                        onClick={() => navigate("/frame-group")}
-                        style={{ cursor: "pointer" }}
-                    >
-                        <div className="frame-content-16_139">
-                            <div className="Pixso-vector-16_140"></div>
-                            <p className={getTabClasses("群像").text}>{"群像"}</p>
-                        </div>
-                    </div>
-
-                    {/* 3. 场景 */}
-                    <div
-                        id="16_144"
-                        className={getTabClasses("场景").container}
-                        onClick={() => navigate("/frame16550")}
-                        style={{ cursor: "pointer" }}
-                    >
-                        <div className="frame-content-16_144">
-                            <div id="16_145" className="Pixso-vector-16_145"></div>
-                            <p id="16_148" className={getTabClasses("场景").text}>{"场景"}</p>
-                        </div>
-                    </div>
-
-                    {/* 4. 生物 */}
-                    <div
-                        id="16_149"
-                        className={getTabClasses("生物").container}
-                        onClick={() => navigate("/frame16780")}
-                        style={{ cursor: "pointer" }}
-                    >
-                        <div className="frame-content-16_149">
-                            <div id="16_150" className="Pixso-vector-16_150"></div>
-                            <p id="16_162" className={getTabClasses("生物").text}>{"生物"}</p>
-                        </div>
-                    </div>
-
-                    {/* 5. 物品 */}
-                    <div
-                        id="16_163"
-                        className={getTabClasses("物品").container}
-                        onClick={() => navigate("/frame161000")}
-                        style={{ cursor: "pointer" }}
-                    >
-                        <div className="frame-content-16_163">
-                            <div id="16_164" className="Pixso-vector-16_164"></div>
-                            <p id="16_169" className={getTabClasses("物品").text}>{"物品"}</p>
-                        </div>
-                    </div>
-
-                    {/* 6. 视频 */}
-                    <div
-                        id="16_170"
-                        className={getTabClasses("视频").container}
-                        onClick={() => navigate("/frame161195")}
-                        style={{ cursor: "pointer" }}
-                    >
-                        <div className="frame-content-16_170">
-                            <div id="16_171" className="Pixso-frame-16_171">
-                                <div id="16_172" className="Pixso-vector-16_172"></div>
-                                <div id="16_173" className="stroke-wrapper-16_173">
-                                    <div className="Pixso-rectangle-16_173"></div>
-                                    <div className="stroke-16_173"></div>
-                                </div>
-                            </div>
-                            <p id="16_174" className={getTabClasses("视频").text}>{"视频"}</p>
-                        </div>
-                    </div>
-
-                    {/* 8. 画布 */}
-                    <div
-                        className={getTabClasses("画布").container}
-                        onClick={() => navigate("/frame-canvas")}
-                        style={{ cursor: "pointer" }}
-                    >
-                        <div className="frame-content-16_139">
-                            <div className="Pixso-vector-16_132" style={{ backgroundImage: "url(@/assets/images/zap.svg)" }}></div>
-                            <p className={getTabClasses("画布").text}>{"画布"}</p>
-                        </div>
+                    {/* 底部：设置 + 个人中心（始终非激活态/灰色） */}
+                    <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 4, alignItems: "center", paddingTop: 8 }}>
+                        <Item icon={Settings} label="设置" active={false} onClick={() => useUiStore.getState().setSettingsOpen(true)} />
+                        <Item icon={UserCircle} label="个人中心" active={false} onClick={() => useUiStore.getState().setPersonalCenterOpen(true)} />
                     </div>
                 </div>
             </div>

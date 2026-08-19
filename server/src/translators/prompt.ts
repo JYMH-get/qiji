@@ -7,9 +7,22 @@
 import type { GenerateRequest, AssetType } from "../contract.ts";
 import { getTemplateDef, getDefaultTemplate } from "../store/templates.ts";
 import { getVariantPrefix } from "../catalog.ts";
+import { renderViewAnglePrompt } from "./viewAnglePrompt.ts";
+import { renderPanoramaPrompt } from "./panoramaPrompt.ts";
+import { renderJianyiSummaryPrompt } from "./jianyiSummaryPrompt.ts";
 
 /** asset.{character|scene|creature|prop}.variant → 资产类型 */
 const VARIANT_RE = /^asset\.(character|scene|creature|prop)\.variant$/;
+
+/**
+ * 取请求里可公网访问的图片 url（供文本模型的多模态消息使用）。
+ * 仅 http(s) 直链可用：本地 asset:// 或 localhost /raw 上游不可达（须配 OSS 公网直链）。
+ */
+export function collectImageUrls(req: GenerateRequest): string[] {
+	return (req.inputs?.images ?? [])
+		.map((r) => r.url)
+		.filter((u): u is string => !!u && /^https?:\/\//i.test(u));
+}
 
 /** 用变量填充 {{占位}}；缺失的占位替换为空串 */
 export function fillTemplate(body: string, vars: Record<string, string>): string {
@@ -23,6 +36,22 @@ export function fillTemplate(body: string, vars: Record<string, string>): string
 export function buildPrompt(req: GenerateRequest): string {
 	if (req.promptOverride && req.promptOverride.trim()) return req.promptOverride;
 	const v = req.variables ?? {};
+
+	// 转视角（第193轮）：客户端只传机位参数（params.viewAngle），提示词全在服务端渲染
+	// （模板 viewangle.* 管理端可调；正文与预览都不下发客户端）。参数形状不对→走下方普通路径。
+	if (req.purpose === "image.viewangle") {
+		const p = renderViewAnglePrompt(req.params?.viewAngle);
+		if (p) return p;
+	}
+	// 720°全景（第194轮）：前置提示词同规服务端渲染（模板 panorama.main；无必需参数恒可渲染）
+	if (req.purpose === "image.panorama") return renderPanoramaPrompt(req.params?.panorama);
+
+	// 简一助手总结（第201轮）：完整对话转录原样填入模板（用户定稿零采样零截断；
+	// 本分支的价值=模板被管理端删除时的代码兜底）。形状不对→走下方普通路径。
+	if (req.purpose === "chat.summarize") {
+		const p = renderJianyiSummaryPrompt(req);
+		if (p) return p;
+	}
 
 	// 变体（图生图）：用 catalog 变体前缀"保 DNA 不变"合成（{{变体描述}}{{视觉风格}} 填充）
 	const vm = req.purpose?.match(VARIANT_RE);

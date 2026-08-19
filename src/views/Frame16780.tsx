@@ -8,7 +8,7 @@ const Frame16780 = () => {
     return (
         <div className="scroll-container">
             <div id="16_285" className="Pixso-frame-16_285">
-                <EditorHeader title="生物配置" />
+                <EditorHeader title="生物配置" showAssetCheck />
                 <div id="16_309" className="Pixso-frame-16_309">
                     <div className="frame-content-16_309" style={{ display: "flex", height: "100%" }}>
                         <EditorSidebar activeTab="生物" />

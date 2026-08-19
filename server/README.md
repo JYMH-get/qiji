@@ -26,7 +26,7 @@ npm run dev               # tsx watch，默认 http://localhost:8787
 - **模型加载**：增删改模型，编辑"翻译格式"——`protocol`（echo / openai-chat / anthropic-messages / openai-image / gemini-image / stub）+ 上游模型名 + 可选 `baseUrl`/`apiKey` 覆盖（留空走网关）。改动即时反映到用户端 catalog（version 自增）。
 - **请求记录**：每次 `/generate` 的请求时间、完成时间、用户、步骤(`purpose`)、模型、状态、耗时；点详情看完整请求 + 完整响应/结果。
 
-数据持久化在 `server/data/`（users.json / models.json / logs.jsonl），重启不丢，`.gitignore` 已忽略。
+数据持久化在 `server/data/`（users.json / models.json / 请求记录按天分文件 logs-index/<日期>.jsonl + 详情 logs/<id>.json），重启不丢，`.gitignore` 已忽略。
 
 ## 登录与心跳（用户端）
 

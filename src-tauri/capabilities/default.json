@@ -3,7 +3,9 @@
   "identifier": "default",
   "description": "enables the default permissions",
   "windows": [
-    "main"
+    "main",
+    "main-*",
+    "popout-*"
   ],
   "permissions": [
     "core:default",
@@ -12,8 +14,10 @@
     "core:window:allow-maximize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
+    "core:window:allow-set-focus",
     "core:window:allow-start-dragging",
     "core:webview:default",
+    "core:webview:allow-create-webview-window",
     "dialog:default",
     "drag:default",
     "fs:allow-read",
@@ -23,6 +27,7 @@
     "fs:allow-copy-file",
     "fs:allow-mkdir",
     "fs:allow-remove",
+    "fs:allow-rename",
     "fs:allow-exists",
     {
       "identifier": "fs:scope",

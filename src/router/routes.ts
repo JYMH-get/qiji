@@ -8,6 +8,7 @@ import Frame16550 from "@/views/Frame16550";
 import Frame21 from "@/views/Frame21";
 import FrameGroup from "@/views/FrameGroup";
 import FrameCanvas from "@/views/FrameCanvas";
+import FrameEditor from "@/views/FrameEditor";
 
 export const routes = [
   {
@@ -54,6 +55,11 @@ export const routes = [
     path: "/frame-canvas",
     component: FrameCanvas,
     guid: "16:canvas",
+  },
+  {
+    path: "/frame-editor",
+    component: FrameEditor,
+    guid: "16:editor",
   },
   {
     path: "/",

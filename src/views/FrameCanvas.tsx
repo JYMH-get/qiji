@@ -5,7 +5,6 @@ import { AssetPanel } from "@/canvas/AssetPanel";
 import { ContextMenu } from "@/canvas/ContextMenu";
 import { StatusBar } from "@/canvas/StatusBar";
 import { ErrorBoundary } from "@/canvas/ErrorBoundary";
-import { AssistantPanel } from "@/canvas/AssistantPanel";
 import "@/styles.css"; // Load Canvas styling
 
 const FrameCanvas = () => {
@@ -20,7 +19,6 @@ const FrameCanvas = () => {
                     <AssetPanel />
                     <StatusBar />
                     <ContextMenu />
-                    <AssistantPanel />
                 </div>
             </ReactFlowProvider>
         </div>

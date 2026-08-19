@@ -2,6 +2,8 @@ import { useNavigate } from "react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useProjectStore } from "@/store/projectStore";
 import { useCatalogStore } from "@/store/catalogStore";
+import { useModeFeatures } from "@/store/connectionStore";
+import { restoreRouteAfterLoad } from "@/views/utils/utils";
 import "@/styles/Frame164.css";
 
 /** 未配置管理端 / catalog 未含画风时的本地兜底画风（与管理端默认画风预设一致） */
@@ -44,6 +46,9 @@ async function fileToThumbnail(file: File, maxSize = 512): Promise<string> {
 
 const Frame164 = () => {
     const navigate = useNavigate();
+    // 模式开关（服务端按用户下发）：被关的模式隐藏对应「进入」按钮；仅开单模式时按钮文案退化为「创建项目」
+    const { assetMode, canvasMode, editorMode } = useModeFeatures();
+    const multiMode = [assetMode, canvasMode, editorMode].filter(Boolean).length > 1;
 
     const artStylesRaw = useCatalogStore((s) => s.artStyles());
 
@@ -101,6 +106,9 @@ const Frame164 = () => {
         store.setName(projName);
         store.setCoverImage(cover);
         store.setVisualStyle(selectedStyle?.style || "国漫电影感");
+        // 第174轮：记录所选画风预设 id（决定资产拆分自动附加的【画风前缀】胶囊）。
+        // 仅 catalog 画风有真实预设 id；本地兜底画风（未连管理端）id 不在预设库 → 存空、不挂胶囊。
+        store.setVisualStyleId(artStylesRaw.length > 0 && selectedStyle ? selectedStyle.id : "");
 
         await store.save(true);
     };
@@ -115,8 +123,19 @@ const Frame164 = () => {
         navigate("/frame-canvas");
     };
 
+    const handleEnterEditor = async () => {
+        await createProject();
+        navigate("/frame-editor");
+    };
+
     const handleCancel = () => {
         navigate("/");
+    };
+
+    // 导入已有项目（.Qiji）：新建项目并复制素材（源项目不动），成功即进入新项目
+    const handleImport = async () => {
+        const ok = await useProjectStore.getState().importProject();
+        if (ok) navigate(restoreRouteAfterLoad());
     };
 
     return (
@@ -278,7 +297,7 @@ const Frame164 = () => {
                                                 <div id="16_80" className="stroke-wrapper-16_80" style={{ flex: 1 }}>
                                                     <div className="Pixso-frame-16_80">
                                                         <div className="frame-content-16_80">
-                                                            <p id="16_81" className="Pixso-paragraph-16_81">{"默认画风"}</p>
+                                                            <p id="16_81" className="Pixso-paragraph-16_81">{"画风"}</p>
                                                             <p id="16_82" className="Pixso-paragraph-16_82">{"生成分镜画面的基础画风风格。"}</p>
                                                             <div id="16_83" className="stroke-wrapper-16_83">
                                                                 <div className="Pixso-frame-16_83">
@@ -319,6 +338,22 @@ const Frame164 = () => {
                         <div id="16_87" className="stroke-wrapper-16_87">
                             <div className="Pixso-frame-16_87">
                                 <div className="frame-content-16_87">
+                                    {/* 导入已有项目：不填表单、直接选 .Qiji 复制为新项目（靠左，与创建按钮组分开） */}
+                                    <div className="stroke-wrapper-16_88" style={{ marginRight: "auto" }}>
+                                        <div
+                                            className="Pixso-frame-16_88"
+                                            onClick={handleImport}
+                                            style={{ cursor: "pointer" }}
+                                            title="选择 .Qiji 项目文件，复制为一个全新项目导入（不影响原项目）"
+                                        >
+                                            <div className="frame-content-16_88">
+                                                <p className="Pixso-paragraph-16_89">
+                                                    {"导入已有项目 (.Qiji)"}
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div className="stroke-16_88" style={{ borderStyle: "dashed" }}></div>
+                                    </div>
                                     <div id="16_88" className="stroke-wrapper-16_88">
                                         <div
                                             className="Pixso-frame-16_88"
@@ -333,29 +368,46 @@ const Frame164 = () => {
                                         </div>
                                         <div className="stroke-16_88"></div>
                                     </div>
-                                    <div
-                                        className="Pixso-frame-16_90"
-                                        onClick={handleEnterAsset}
-                                        style={{ cursor: "pointer" }}
-                                    >
-                                        <div className="frame-content-16_90">
-                                            <p className="Pixso-paragraph-16_91">
-                                                {"进入资产模式"}
-                                            </p>
+                                    {assetMode && (
+                                        <div
+                                            className="Pixso-frame-16_90"
+                                            onClick={handleEnterAsset}
+                                            style={{ cursor: "pointer" }}
+                                        >
+                                            <div className="frame-content-16_90">
+                                                <p className="Pixso-paragraph-16_91">
+                                                    {multiMode ? "进入资产模式" : "创建项目"}
+                                                </p>
+                                            </div>
                                         </div>
-                                    </div>
-                                    <div
-                                        id="16_90"
-                                        className="Pixso-frame-16_90"
-                                        onClick={handleEnterCanvas}
-                                        style={{ cursor: "pointer" }}
-                                    >
-                                        <div className="frame-content-16_90">
-                                            <p id="16_91" className="Pixso-paragraph-16_91">
-                                                {"进入画布模式"}
-                                            </p>
+                                    )}
+                                    {canvasMode && (
+                                        <div
+                                            id="16_90"
+                                            className="Pixso-frame-16_90"
+                                            onClick={handleEnterCanvas}
+                                            style={{ cursor: "pointer" }}
+                                        >
+                                            <div className="frame-content-16_90">
+                                                <p id="16_91" className="Pixso-paragraph-16_91">
+                                                    {multiMode ? "进入画布模式" : "创建项目"}
+                                                </p>
+                                            </div>
                                         </div>
-                                    </div>
+                                    )}
+                                    {editorMode && (
+                                        <div
+                                            className="Pixso-frame-16_90"
+                                            onClick={handleEnterEditor}
+                                            style={{ cursor: "pointer" }}
+                                        >
+                                            <div className="frame-content-16_90">
+                                                <p className="Pixso-paragraph-16_91">
+                                                    {multiMode ? "进入实时剪辑" : "创建项目"}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                             <div className="stroke-16_87"></div>
