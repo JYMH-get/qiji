@@ -4,7 +4,8 @@
  *
  * 页签信息架构：
  *   - 属性：既有分派视图原样——rtcStore.selection（时间轴片段）非空 → 片段视图优先：
- *       placeholder + shotRef → RtcShotWorkbench（分镜行属性化：原文/提示词/垫图/模型/生成/历史）；
+ *       placeholder + shotRef → RtcShotWorkbench（中栏双页签改版后收敛为「AI 生成属性」：
+ *         生图/生视频要求+同源开关；提示词/垫图/生成动作在中栏「AI 工作台」页 RtcShotAiWorkbench）；
  *       media → RtcMediaProps（名称/轨道/时间码只读 + speed/volume/muted 编辑 + 素材源）；
  *       无 shotRef 的自由结果占位 → RtcFreeGenProps（提示词/垫素材/模型/生成·进度·重试）；
  *     其次 rtcAssetSelStore（左栏选中的项目资产）→ RtcAssetProps（出图不切回资产模式）；
@@ -51,7 +52,7 @@ function EmptyHint() {
 		<div style={{ padding: "24px 16px", fontSize: 12, color: "rgba(255,255,255,0.5)", lineHeight: 2 }}>
 			<div style={{ fontSize: 13, color: "rgba(255,255,255,0.8)", marginBottom: 6 }}>未选中片段</div>
 			在下方时间轴点击一个片段查看属性：
-			<br />· 选中{em("分镜占位符")} → 在这里推理提示词、生成故事板与视频（生成成功自动替换占位符）；
+			<br />· 选中{em("分镜占位符")} → 在这里选生图/生视频要求，提示词与垫图在中栏「AI 工作台」编辑（成片自动替换占位符）；
 			<br />· 选中{em("素材片段")} → 调整变速 / 音量 / 静音，查看素材源；
 			<br />· 点击左栏{em("项目资产卡")} → 编辑出图提示词、生成基础形象（无需切回资产模式）。
 			<div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
@@ -59,7 +60,7 @@ function EmptyHint() {
 				从{em("素材面板")}拖素材到时间轴直接剪；或从剧本一路生成——
 				<br />在{em("「剧本」页签")}：①编辑剧本 → ②剧集拆分 → ③资产拆分；
 				<br />再到{em("「分镜」页签")}：④逐集智能推理/智能拆分，「生成占位入轨」；
-				<br />最后在时间轴选中占位符，回到本页{em("推理提示词 → 生成故事板 → 生成视频")}（成片自动替换占位）。
+				<br />最后在时间轴选中占位符，到中栏「AI 工作台」{em("推理提示词 → 生成故事板 → 生成视频")}（成片自动替换占位）。
 			</div>
 		</div>
 	);
@@ -72,7 +73,7 @@ function PropsPage({ sel, assetSel }: { sel: RtcSelected | null; assetSel: RtcAs
 		return assetSel ? <RtcAssetProps key={`${assetSel.cat}:${assetSel.id}`} cat={assetSel.cat} id={assetSel.id} /> : <EmptyHint />;
 	}
 	if (sel.seg.kind === "placeholder" && sel.seg.shotRef) {
-		return <RtcShotWorkbench episodeId={sel.seg.shotRef.episodeId} shotId={sel.seg.shotRef.shotId} segId={sel.seg.id} />;
+		return <RtcShotWorkbench episodeId={sel.seg.shotRef.episodeId} shotId={sel.seg.shotRef.shotId} />;
 	}
 	// 第三批：字幕片段（text 轨）→ 字幕编辑视图（在 media 分支之前——字幕片段 kind 也是 media）
 	if (sel.track.type === "text" && sel.seg.kind === "media") {

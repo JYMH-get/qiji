@@ -1,20 +1,17 @@
 /**
- * 实时剪辑 · 中央区（三页签重构后定稿：**单一预览视口，无子栏**）：
- *   - 底层=时间指针预览（顺序预览播放器 RtcSequencePlayer，播放头画面+控制）；
- *   - 左栏素材面板选中素材（rtcAssetSelStore：五类资产=主图大图 / 视频·音频=AV 预览）时以**叠层覆盖**
- *     显示素材预览——时间轴选中片段不切换中栏内容（片段详情在右栏；播放头本身能看到片段画面）；
- *   - 五类资产预览时，叠层右缘竖排「生成历史」缩略条（主图+历史图，数据源与 RtcAssetProps 历史网格
- *     同源 asset.image/asset.images；观感对齐 AssetWorkbench 主图历史）：点缩略图=预览该张（不改主图）、
- *     当前预览项高亮、悬停「设为主图」（与 RtcAssetProps 同一 setAssetMainImage 调用）；
- *     时间指针预览态 / 视频·音频素材预览 / 资产无图 时不显示；
- *   - 原「AI 生成」引导子栏已**整体取消**：四步工作台移入右栏三页签窗口的「剧本/分镜」页
- *     （RtcAiFlow 的 RtcFlowScriptPage/RtcFlowShotsPage），占位符快捷生成在右栏「属性」页
- *     （RtcShotWorkbench 完整版）。
+ * 实时剪辑 · 中央区（双页签改版定稿：**顶部「AI 工作台 / 预览」双模式切换**）：
+ *   - 「预览」页 = 原单一预览视口：底层时间指针预览（RtcSequencePlayer）+ 左栏素材选中时的
+ *     素材预览叠层（AssetPreviewLayer，五类资产带右缘「生成历史」缩略条）；
+ *   - 「AI 工作台」页 = 不透明叠层覆盖视口（RtcShotAiWorkbench）：绑定时间轴选中的分镜占位符，
+ *     三栏布局（故事板预览 / 原文对照·右键编辑 / 提示词工作区+垫图+生成动作）；
+ *   - 页签自动切换（rtcCenterTabCore 纯函数，配单测）：新选中占位符→工作台；新选中左栏素材/资产
+ *     预览→预览；占位符被成片替换（同 segId placeholder→media）→预览；初始页签=doc 有可播片段?
+ *     预览:工作台；手动点页签永远生效。
  *
- * ⚠ 播放不中断（勿回退）：RtcSequencePlayer 挂在主区列里，素材预览的显隐是**叠层覆盖**（绝不条件
- * 卸载播放器）——切换素材选中/取消不打断播放。
+ * ⚠ 播放不中断（勿回退）：RtcSequencePlayer 常驻挂载在视口列里，「AI 工作台」与素材预览的显隐
+ * 都是**叠层覆盖/条件渲染叠层**（绝不条件卸载播放器）——切页签/切素材选中不打断播放。
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Music } from "lucide-react";
 import { useProjectStore } from "@/store/projectStore";
 import { useRtcStore } from "@/store/rtcStore";
@@ -24,6 +21,15 @@ import { RtcSequencePlayer } from "./RtcSequencePlayer";
 import { docHasAnySegment } from "./rtcPlayback";
 import { useRtcAssetSelStore } from "./rtcAssetSelStore";
 import { collectProjectImageItems } from "./asset/rtcAssetData";
+import { useRtcSelected } from "./panel/useRtcSelected";
+import { RtcShotAiWorkbench } from "./panel/RtcShotAiWorkbench";
+import {
+	CENTER_TABS,
+	type CenterSelSnapshot,
+	centerTabAutoSwitch,
+	initialCenterTab,
+} from "./panel/rtcCenterTabCore";
+import { useRtcCenterTabStore } from "./panel/rtcCenterTabStore";
 
 /** 顺序预览播放器挂载点：doc 有任何片段才显示；布尔选择器——选中/播放头变化不重渲本壳。 */
 function SequencePreviewSlot() {
@@ -31,7 +37,7 @@ function SequencePreviewSlot() {
 	return show ? <RtcSequencePlayer /> : null;
 }
 
-/* ════════════════ 主区（单一预览视口） ════════════════ */
+/* ════════════════ 预览页（单一预览视口） ════════════════ */
 
 /** 底层空态提示：仅时间轴无片段时占满视口（有片段=播放器自身撑满整列，不再渲染本块） */
 function ViewportIdleHint() {
@@ -155,16 +161,73 @@ function AssetPreviewLayer() {
 	);
 }
 
-/* ════════════════ 中央区壳 ════════════════ */
+/* ════════════════ 双页签：自动切换 + 初始页签 ════════════════ */
+
+/**
+ * 页签自动切换（规则见 rtcCenterTabCore 头注释）：快照 ref 比对「新的选中动作/占位符被替换」，
+ * 命中即 setTab（与 RtcPropertyPanel 的 shouldAutoSwitchToProps 同范式）。
+ */
+function useCenterTabAutoSwitch() {
+	const sel = useRtcSelected();
+	const assetSel = useRtcAssetSelStore((s) => s.selected);
+	const mediaSel = useRtcAssetSelStore((s) => s.mediaSel);
+	const segId = sel?.seg.id ?? null;
+	const segKind = sel?.seg.kind ?? null;
+	const isShotPlaceholder = !!(sel && sel.seg.kind === "placeholder" && sel.seg.shotRef);
+	const assetKey = assetSel ? `${assetSel.cat}:${assetSel.id}` : null;
+	const mediaKey = mediaSel?.key ?? null;
+	const snapRef = useRef<CenterSelSnapshot>({ segId, segKind, isShotPlaceholder, assetKey, mediaKey });
+	useEffect(() => {
+		const prev = snapRef.current;
+		const next: CenterSelSnapshot = { segId, segKind, isShotPlaceholder, assetKey, mediaKey };
+		snapRef.current = next;
+		const to = centerTabAutoSwitch(prev, next);
+		if (to) useRtcCenterTabStore.getState().setTab(to);
+	}, [segId, segKind, isShotPlaceholder, assetKey, mediaKey]);
+}
 
 export function RtcCenterStage() {
+	const tab = useRtcCenterTabStore((s) => s.tab);
+	useCenterTabAutoSwitch();
+	// 初始页签（规则 4，会话首次挂载定一次）：doc 已有可播片段（media/compound）=预览，否则=AI 工作台
+	useEffect(() => {
+		const doc = useRtcStore.getState().doc;
+		const hasPlayable = !!doc && doc.tracks.some((t) => t.segments.some((sg) => sg.kind !== "placeholder"));
+		useRtcCenterTabStore.getState().initTab(initialCenterTab(hasPlayable));
+	}, []);
+
 	return (
-		<main className="flex-1 min-w-0 min-h-0 flex overflow-hidden">
-			{/* ── 单一预览视口：底层=顺序播放器（时间指针预览），素材选中时叠层覆盖（播放器不卸载） ── */}
+		<main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
+			{/* ── 顶部双页签（观感对齐 RtcPropertyPanel 三页签 nav） ── */}
+			<nav className="h-8 shrink-0 flex items-stretch border-b border-white/8 select-none">
+				{CENTER_TABS.map((t) => {
+					const active = t.id === tab;
+					return (
+						<button
+							key={t.id}
+							type="button"
+							onClick={() => useRtcCenterTabStore.getState().setTab(t.id)}
+							className={`flex-1 text-[12px] transition-colors border-b-2 ${
+								active
+									? "border-[#a78bfa] text-white bg-white/5"
+									: "border-transparent text-white/50 hover:text-white/85 hover:bg-white/5"
+							}`}
+						>
+							{t.label}
+						</button>
+					);
+				})}
+			</nav>
+			{/* ── 视口：底层=顺序播放器（⚠ 常驻挂载勿条件卸载），预览页素材叠层 / 工作台页不透明叠层 ── */}
 			<div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden" style={{ position: "relative" }}>
 				<SequencePreviewSlot />
 				<ViewportIdleHint />
-				<AssetPreviewLayer />
+				{tab === "preview" && <AssetPreviewLayer />}
+				{tab === "workbench" && (
+					<div style={{ position: "absolute", inset: 0, zIndex: 7, background: "#101018", display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
+						<RtcShotAiWorkbench />
+					</div>
+				)}
 			</div>
 		</main>
 	);
