@@ -234,7 +234,16 @@ export function RtcTimeline() {
 	/** 框选矩形（内容坐标；null=非框选中） */
 	const [marquee, setMarquee] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
 
-	const scrollRef = useRef<HTMLDivElement>(null);
+	const scrollRef = useRef<HTMLDivElement | null>(null);
+	/** 滚动容器节点（state 版，与 scrollRef 同步）。⚠ 勿回退成只用 ref：「正在载入剪辑文档…」
+	 *  早退分支会卸载滚动容器，doc 回来后是**新 DOM 节点**——一次性 useEffect([]) 挂的
+	 *  wheel/ResizeObserver 监听会留在死节点上（Ctrl/Alt+滚轮失效、重开页面才恢复，用户实报）。
+	 *  监听 effect 一律依赖 [scrollEl]，节点重建即自动重挂。 */
+	const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+	const setScrollNode = useCallback((el: HTMLDivElement | null) => {
+		scrollRef.current = el;
+		setScrollEl(el);
+	}, []);
 	const contentRef = useRef<HTMLDivElement>(null);
 	/** 时间轴「注意力」（用户定稿：点过时间轴后 Ctrl+A 才归时间轴全选；点别处即交还浏览器原生） */
 	const attentionRef = useRef(false);
@@ -256,14 +265,13 @@ export function RtcTimeline() {
 		}
 	}, [projectRtcDoc]);
 
-	// 滚动容器宽度（内容最小宽 = 视口宽，缩到最小也铺满）
+	// 滚动容器宽度（内容最小宽 = 视口宽，缩到最小也铺满）；依赖 [scrollEl]=节点重建自动重挂
 	useEffect(() => {
-		const el = scrollRef.current;
-		if (!el) return;
-		const ro = new ResizeObserver(() => setViewportW(el.clientWidth));
-		ro.observe(el);
+		if (!scrollEl) return;
+		const ro = new ResizeObserver(() => setViewportW(scrollEl.clientWidth));
+		ro.observe(scrollEl);
 		return () => ro.disconnect();
-	}, []);
+	}, [scrollEl]);
 
 	// 注意力跟踪（window 捕获阶段）：最近一次按下是否落在时间轴里——Ctrl+A 的分派依据
 	useEffect(() => {
@@ -354,8 +362,9 @@ export function RtcTimeline() {
 
 	// 滚轮三态（用户定稿）：裸滚轮=轨道区上下滚动（原生，主轨 sticky 常驻不动）；Ctrl+滚轮=以指针
 	// 为锚缩放时间轴；Alt+滚轮=时间线前后（水平）滚动。native 非 passive 才能 preventDefault。
+	// ⚠ 依赖 [scrollEl] 勿改回 []——滚动容器经「载入中」早退重建后监听必须重挂（滚轮失效实报）。
 	useEffect(() => {
-		const el = scrollRef.current;
+		const el = scrollEl;
 		if (!el) return;
 		const onWheel = (e: WheelEvent) => {
 			if (e.altKey && !e.ctrlKey) {
@@ -385,7 +394,7 @@ export function RtcTimeline() {
 		};
 		el.addEventListener("wheel", onWheel, { passive: false });
 		return () => el.removeEventListener("wheel", onWheel);
-	}, []);
+	}, [scrollEl]);
 
 	useLayoutEffect(() => {
 		const a = zoomAnchorRef.current;
@@ -955,7 +964,7 @@ export function RtcTimeline() {
 		>
 			{/* 第四批：复合片段编辑上下文面包屑（仅子层编辑时出现） */}
 			<RtcCompoundBreadcrumb />
-			<div ref={scrollRef} className="flex-1 overflow-auto overscroll-contain">
+			<div ref={setScrollNode} className="flex-1 overflow-auto overscroll-contain">
 				<div
 					ref={contentRef}
 					className="relative"
