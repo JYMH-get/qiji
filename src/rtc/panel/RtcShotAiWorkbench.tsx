@@ -1,12 +1,12 @@
 /**
  * RtcShotAiWorkbench —— 中栏「AI 工作台」页正文（中栏双页签改版：工作台/预览，见 rtcCenterTabCore）。
  * 绑定时间轴当前选中的「分镜占位符」（placeholder+shotRef，useRtcSelected），四栏样式按表格模式
- * 分镜行样板（用户定稿）：
- *   - 左上：故事板预览（当前图点击放大 + 历史缩略条「设为当前」）；
- *   - 左下：原文对照（**逐行气泡渲染**：▲/（ 开头=动作行浅灰、「人名：台词」人名着色加粗——
+ * 分镜行样板（用户定稿；第240轮补充2：**提示词列居左紧邻素材面板、参照列居右**——CSS order 互换）：
+ *   - 右上：故事板预览（当前图点击放大 + 历史缩略条「设为当前」）；
+ *   - 右下：原文对照（**逐行气泡渲染**：▲/（ 开头=动作行浅灰、「人名：台词」人名着色加粗——
  *     纯逻辑在 lib/scriptBubbles；**锁定只读，右键进入编辑**，保存走 updateShot）；
- *   - 左列 故事板/原文 分界可上下拖动（本地态 30%–70%，不持久化）；
- *   - 右列：提示词工作区——**两行头照抄表格模式**（Frame161195 分镜行 1768-1850 行同构）：
+ *   - 参照列 故事板/原文 分界可上下拖动（本地态 30%–70%，不持久化）；
+ *   - 左列：提示词工作区——**两行头照抄表格模式**（Frame161195 分镜行 1768-1850 行同构）：
  *     第一行 = 提示词页签（同源胶囊/故事板|视频切换）+ ▦预设方案 + 补镜头（重排编号走 lib/shotReindex，
  *     与表格模式/inferRun 共用同一纯函数）；
  *     第二行 = **仅本分镜**的视频参数 mini selects（家族→渠道/线路→模型→方法→时长/比例/分辨率→真人图
@@ -56,7 +56,7 @@ function WorkbenchHint() {
 			<div style={{ maxWidth: 460, fontSize: 12, color: "rgba(255,255,255,0.5)", lineHeight: 2 }}>
 				<div style={{ fontSize: 13, color: "rgba(255,255,255,0.8)", marginBottom: 6 }}>AI 工作台 · 未选中分镜占位符</div>
 				在下方时间轴{em("选中一个分镜占位符")}，这里就是它的生成工作台：
-				<br />左侧{em("故事板预览 + 原文对照")}（原文右键进入编辑），右侧{em("提示词编辑与垫图")}，
+				<br />左侧{em("提示词编辑与垫图")}（紧邻素材面板），右侧{em("故事板预览 + 原文对照")}（原文右键进入编辑），
 				一站式 推理提示词 → 生成故事板 → 生成视频（成片自动替换占位符）。
 				<div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
 					还没有占位符？在右栏{em("「剧本」页签")}：①编辑剧本 → ②剧集拆分 → ③资产拆分；
@@ -154,8 +154,8 @@ function StoryboardPreview({ episodeId, shotId, shot }: { episodeId: string; sho
 	);
 }
 
-/** 左列：故事板预览（上）+ 原文气泡（下），分界可拖（本地态 30%–70%，不持久化） */
-function LeftColumn({ episodeId, shotId, shot }: { episodeId: string; shotId: string; shot: StoryboardShot }) {
+/** 参照列（居右，第240轮补充2 与提示词列 CSS order 互换）：故事板预览（上）+ 原文气泡（下），分界可拖（本地态 30%–70%，不持久化） */
+function RefColumn({ episodeId, shotId, shot }: { episodeId: string; shotId: string; shot: StoryboardShot }) {
 	const [splitPct, setSplitPct] = useState(56);
 	const colRef = useRef<HTMLDivElement | null>(null);
 	const onDividerMove = (e: React.PointerEvent) => {
@@ -166,8 +166,9 @@ function LeftColumn({ episodeId, shotId, shot }: { episodeId: string; shotId: st
 		setSplitPct(Math.min(70, Math.max(30, pct)));
 	};
 	return (
-		// 左列宽（第240轮补充，用户截图定稿「中间栏的左栏拉宽」）：随工作台宽度自适应 42%，钳 300–560px
-		<div ref={colRef} style={{ flex: "0 0 clamp(300px, 42%, 560px)", minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
+		// 列宽（第240轮补充，用户截图定稿「拉宽」）：随工作台宽度自适应 42%，钳 300–560px；
+		// order:2 = 居右（补充2 用户定稿「提示词放左边和素材靠近」——两列 CSS order 互换，JSX 顺序不动）
+		<div ref={colRef} style={{ flex: "0 0 clamp(300px, 42%, 560px)", order: 2, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
 			<div style={{ height: `calc(${splitPct}% - 5px)`, minHeight: 0, display: "flex" }}>
 				<StoryboardPreview episodeId={episodeId} shotId={shotId} shot={shot} />
 			</div>
@@ -264,13 +265,13 @@ function WorkbenchBody({ episodeId, shotId, segId }: { episodeId: string; shotId
 
 	return (
 		<div style={{ flex: 1, minHeight: 0, display: "flex", gap: 12, padding: 12, overflow: "hidden" }}>
-			{/* ── 左列：故事板预览（上）+ 原文气泡（下），分界可拖 ── */}
-			<LeftColumn episodeId={episodeId} shotId={shotId} shot={shot} />
+			{/* ── 参照列（居右，order:2 在组件内）：故事板预览（上）+ 原文气泡（下），分界可拖 ── */}
+			<RefColumn episodeId={episodeId} shotId={shotId} shot={shot} />
 
-			{/* ── 右列：提示词工作区（两行头照表格模式）。第240轮补充：不整列滑动——
-			     提示词栏位 fill 吃满剩余高、超长提示词在编辑框内滚动（收起）；
+			{/* ── 提示词工作区（order:1 居左，紧邻素材面板——补充2 用户定稿；两行头照表格模式）。
+			     第240轮补充：不整列滑动——提示词栏位 fill 吃满剩余高、超长提示词在编辑框内滚动（收起）；
 			     overflowY:auto 仅作极小视口的兜底（正常视口各区块恰好填满不出滚条） ── */}
-			<div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", gap: 10, overflowY: "auto", paddingRight: 2 }}>
+			<div style={{ flex: 1, order: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", gap: 10, overflowY: "auto", paddingRight: 2 }}>
 				{/* 头部：分镜身份 + 推理 */}
 				<div style={{ display: "flex", alignItems: "baseline", gap: 8, flexShrink: 0 }}>
 					<span style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>{shot.title || "分镜"}</span>

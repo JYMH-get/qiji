@@ -3,9 +3,9 @@
  * 用户定稿：提示词与垫素材从右栏属性移入中栏工作台编辑；右栏 [RtcFreeGenProps](./RtcFreeGenProps.tsx)
  * 收敛为「AI 设置」（时间码/模型/参数说明/生成动作）。
  *
- * 布局对齐 RtcShotAiWorkbench 工作台风格：
- *   - 左窄列：占位身份（名/产物类型/轨道·时间窗）+ 进度/失败/引导状态；
- *   - 右大列：提示词大编辑区（灯箱式）+ 垫素材条 + 底部「开始生成/重试」+ 状态说明。
+ * 布局对齐 RtcShotAiWorkbench 工作台风格（第240轮补充2：**提示词列居左紧邻素材面板**，CSS order 互换）：
+ *   - 左大列：提示词大编辑区（灯箱式）+ 垫素材条 + 底部「开始生成/重试」+ 状态说明；
+ *   - 右窄列：占位身份（名/产物类型/轨道·时间窗）+ 进度/失败/引导状态。
  *
  * ⚠ 红线（逻辑零重写，与 RtcFreeGenProps 同一套语义）：
  *   - 提示词/垫素材 = useRtcFreeGenStore（DraftArea/RefStrip 共享件见 freeGenParts，勿复制两份）；
@@ -44,8 +44,8 @@ export function RtcFreeGenWorkbench({ seg, track, segIndex }: { seg: RtcSegment;
 
 	return (
 		<div style={{ flex: 1, minHeight: 0, display: "flex", gap: 12, padding: 12, overflow: "hidden" }}>
-			{/* ── 左窄列：占位身份 + 状态 ── */}
-			<div style={{ flex: "0 0 240px", minWidth: 0, display: "flex", flexDirection: "column", gap: 12, minHeight: 0, overflowY: "auto", paddingRight: 2 }}>
+			{/* ── 身份/状态窄列（order:2 居右——补充2 用户定稿「提示词放左边和素材靠近」，CSS order 互换 JSX 不动）── */}
+			<div style={{ flex: "0 0 240px", order: 2, minWidth: 0, display: "flex", flexDirection: "column", gap: 12, minHeight: 0, overflowY: "auto", paddingRight: 2 }}>
 				<div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
 					<div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
 						<span style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>{seg.name || `${KIND_LABEL[kind]}占位`}</span>
@@ -114,8 +114,8 @@ export function RtcFreeGenWorkbench({ seg, track, segIndex }: { seg: RtcSegment;
 				) : null}
 			</div>
 
-			{/* ── 右大列：提示词 + 垫素材 + 动作 ── */}
-			<div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", gap: 10, overflowY: "auto", paddingRight: 2 }}>
+			{/* ── 提示词大列（order:1 居左，紧邻素材面板）：提示词 + 垫素材 + 动作 ── */}
+			<div style={{ flex: 1, order: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", gap: 10, overflowY: "auto", paddingRight: 2 }}>
 				{cap === null ? (
 					/* 音频：库内暂无接线的音频生成能力——直说，不给点了没反应的按钮 */
 					<div
