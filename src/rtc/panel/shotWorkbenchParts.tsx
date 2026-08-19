@@ -113,8 +113,11 @@ export function DraftArea({ value, placeholder, rows = 4, onCommit }: { value: s
  * 与 Frame161195 的提示词区同一套组件与语义：客户端只插胶囊标记（【预设:id】/@ImageN），
  * 展开收口在提交（shotGenActions 的 resolvePresets / 上游 @tag 注入）。
  * editorMinHeight：编辑区最小高（缺省 92=右栏旧观感；中栏工作台传大值走灯箱式布局）。
+ * renderHeader：可选头部接管（中栏工作台照表格模式排「两行头」用）——传入时替换默认标题行，
+ *   parts.presetBtn / parts.expandBtn 是本栏位已接好线的 ▦预设按钮与放大按钮（下拉/弹窗仍由本组件承载），
+ *   调用方只负责把它们摆进自己的行布局；presetLabel 定制预设按钮文案（缺省「▦ 预设」）。
  */
-export function ShotPromptField({ episodeId, shotId, fieldKey, label, shot, presetSchemes, inferring, editorMinHeight = 92 }: {
+export function ShotPromptField({ episodeId, shotId, fieldKey, label, shot, presetSchemes, inferring, editorMinHeight = 92, renderHeader, presetLabel = "▦ 预设" }: {
 	episodeId: string;
 	shotId: string;
 	fieldKey: ShotPromptFieldKey;
@@ -123,6 +126,8 @@ export function ShotPromptField({ episodeId, shotId, fieldKey, label, shot, pres
 	presetSchemes: PresetScheme[];
 	inferring: boolean;
 	editorMinHeight?: number | string;
+	renderHeader?: (parts: { presetBtn: React.ReactNode; expandBtn: React.ReactNode }) => React.ReactNode;
+	presetLabel?: string;
 }) {
 	const editorRef = useRef<PromptMentionHandle | null>(null);
 	const [mention, setMention] = useState<{ x: number; y: number; viaAt: boolean } | null>(null);
@@ -132,37 +137,44 @@ export function ShotPromptField({ episodeId, shotId, fieldKey, label, shot, pres
 	const live = () => useProjectStore.getState().episodes.find((e) => e.id === episodeId)?.shots.find((x) => x.id === shotId);
 	const matTags = materialTags(shot.materials);
 
+	const presetBtn = presetSchemes.length > 0 ? (
+		<button
+			title="插入出图预设方案（提交时替换为完整预设词；双击胶囊可展开为可编辑文本）"
+			onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setPresetPos(presetPos ? null : { x: r.left, y: r.bottom }); }}
+			style={{ padding: renderHeader ? "3px 8px" : "2px 7px", fontSize: renderHeader ? 11 : 10.5, cursor: "pointer", borderRadius: 6, border: "1px solid rgba(245,158,11,0.4)", background: presetPos ? "rgba(245,158,11,0.22)" : "rgba(245,158,11,0.12)", color: "#fcd34d" }}>
+			{presetLabel}
+		</button>
+	) : null;
+	const expandBtn = (
+		<PromptExpandButton
+			title={`${shot.title || "分镜"} · ${label}`}
+			getValue={() => live()?.[fieldKey] || ""}
+			onSave={(v) => update({ [fieldKey]: v })}
+			size={11}
+			getExtra={() => <RtcMaterialStrip episodeId={episodeId} shotId={shotId} />}
+			getMentions={() => {
+				const mats = live()?.materials ?? [];
+				const tg = materialTags(mats);
+				return mats.map((m) => ({ tag: tg[m.id], name: m.name, uri: m.uri, media: mediaOf(m) }));
+			}}
+			onImport={(cand) => importAssetToShot(episodeId, shotId, cand)}
+			getPresets={presetSchemes.length ? () => presetSchemes : undefined}
+			// 第108轮红线：弹窗「匹配资产」永远委托宿主实现（=垫图区「匹配资产」同一函数），以弹窗草稿为本栏提示词
+			onMatchAssets={(draft) => matchShotAssets(episodeId, shotId, { field: fieldKey, text: draft })}
+		/>
+	);
+
 	return (
 		<div style={{ ...secBox, position: "relative" }}>
-			<div style={{ ...secTitle, fontSize: 10 }}>
-				<span>{label}</span>
-				<span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-					{presetSchemes.length > 0 && (
-						<button
-							title="插入出图预设方案（提交时替换为完整预设词；双击胶囊可展开为可编辑文本）"
-							onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setPresetPos(presetPos ? null : { x: r.left, y: r.bottom }); }}
-							style={{ padding: "2px 7px", fontSize: 10.5, cursor: "pointer", borderRadius: 6, border: "1px solid rgba(245,158,11,0.4)", background: presetPos ? "rgba(245,158,11,0.22)" : "rgba(245,158,11,0.12)", color: "#fcd34d" }}>
-							▦ 预设
-						</button>
-					)}
-					<PromptExpandButton
-						title={`${shot.title || "分镜"} · ${label}`}
-						getValue={() => live()?.[fieldKey] || ""}
-						onSave={(v) => update({ [fieldKey]: v })}
-						size={11}
-						getExtra={() => <RtcMaterialStrip episodeId={episodeId} shotId={shotId} />}
-						getMentions={() => {
-							const mats = live()?.materials ?? [];
-							const tg = materialTags(mats);
-							return mats.map((m) => ({ tag: tg[m.id], name: m.name, uri: m.uri, media: mediaOf(m) }));
-						}}
-						onImport={(cand) => importAssetToShot(episodeId, shotId, cand)}
-						getPresets={presetSchemes.length ? () => presetSchemes : undefined}
-						// 第108轮红线：弹窗「匹配资产」永远委托宿主实现（=垫图区「匹配资产」同一函数），以弹窗草稿为本栏提示词
-						onMatchAssets={(draft) => matchShotAssets(episodeId, shotId, { field: fieldKey, text: draft })}
-					/>
-				</span>
-			</div>
+			{renderHeader ? renderHeader({ presetBtn, expandBtn }) : (
+				<div style={{ ...secTitle, fontSize: 10 }}>
+					<span>{label}</span>
+					<span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+						{presetBtn}
+						{expandBtn}
+					</span>
+				</div>
+			)}
 			<PromptMentionEditor
 				ref={(h) => { editorRef.current = h; }}
 				value={shot[fieldKey] || ""}

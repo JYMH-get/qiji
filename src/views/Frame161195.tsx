@@ -19,6 +19,7 @@ import type { Capability } from "@/contract";
 import type { ShotMaterial, StoryboardShot, MediaSettings, VideoDerivedRecord } from "@/services/projectFile";
 import { BADGE_BG, TAG_BADGE, materialTags, mediaFromMime, mediaOf, buildLegend, withLegend } from "@/lib/shotMaterials";
 import { buildAssetListVars } from "@/lib/assetVars";
+import { reindexShots } from "@/lib/shotReindex";
 import { clampDuration, imageResolutionOptions, clampImageResolution } from "@/lib/genParams";
 import { METHOD_LABELS, ASPECT_LABELS, modelMethods, clampMethod, videoReqOptions, clampToOptions, clampDurationTo } from "@/lib/videoMethods";
 import { PromptExpandButton } from "@/components/PromptExpandButton";
@@ -467,18 +468,8 @@ const Frame161195 = () => {
         const r = importAssetToShot(activeEp.id, shot.id, cand);
         if (r) promptRefs.current[shot.id]?.insertMaterial(r.tag, true, r.mat);
     };
-    // 重排编号：普通镜号 1,2,3…；补镜头(isSupplement)派生自上一个主镜号 → 分镜3-1、3-2…（首镜为补则降级为主镜）
-    const reindex = (shots: StoryboardShot[]) => {
-        let base = 0, sub = 0;
-        return shots.map((s, i) => {
-            if (s.isSupplement && base > 0) {
-                sub += 1;
-                return { ...s, index: i + 1, title: `分镜${base}-${sub}` };
-            }
-            base += 1; sub = 0;
-            return { ...s, index: i + 1, isSupplement: false, title: `分镜${base}` };
-        });
-    };
+    // 重排编号：算法收编到 lib/shotReindex（与 inferRun / 实时剪辑工作台「补镜头」共用一份，勿分叉）
+    const reindex = reindexShots;
     // 切换某分镜的「补镜头」标记并重排编号
     const toggleSupplement = (shot: StoryboardShot) => {
         if (!activeEp) return;

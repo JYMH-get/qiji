@@ -22,6 +22,7 @@ import { runPurpose } from "./purposeRunner";
 import { trackTask } from "./taskCenter";
 import { parseInferCards, parseInferCardsStream } from "@/lib/smartInferPrompts";
 import { stripBlankLines } from "@/lib/storyboardParse";
+import { reindexShots } from "@/lib/shotReindex";
 import type { Purpose } from "@/contract";
 
 const INFER_PURPOSE: Purpose = "storyboard.toVideoPrompt";
@@ -57,15 +58,8 @@ export interface StartInferSpec extends InferTarget {
 
 interface ShotPatch { index: number; scriptSegment?: string; durationSec?: number; storyboardPrompt?: string; videoPrompt?: string; unifiedPrompt?: string }
 
-// 重排编号：普通镜号 1,2,3…；补镜头(isSupplement)派生自上一个主镜号 → 分镜3-1、3-2…（与 Frame161195.reindex 同算法）
-function reindex(shots: StoryboardShot[]): StoryboardShot[] {
-	let base = 0, sub = 0;
-	return shots.map((s, i) => {
-		if (s.isSupplement && base > 0) { sub += 1; return { ...s, index: i + 1, title: `分镜${base}-${sub}` }; }
-		base += 1; sub = 0;
-		return { ...s, index: i + 1, isSupplement: false, title: `分镜${base}` };
-	});
-}
+// 重排编号：算法收编到 lib/shotReindex（与 Frame161195 / 实时剪辑工作台「补镜头」共用一份，勿分叉）
+const reindex = reindexShots;
 
 /** cards → 分镜补丁（只下发非空字段，避免空串覆盖已填单元格；原文去空行——空行不是分格；
  *  时长：卡带 duration 字段则用它（模板产出的指定时长），缺失回退默认 15s）。
