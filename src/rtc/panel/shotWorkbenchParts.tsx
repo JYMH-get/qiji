@@ -106,6 +106,40 @@ export function DraftArea({ value, placeholder, rows = 4, onCommit }: { value: s
 	);
 }
 
+/* ────────────────────────── 工作台参照列外壳（三栏基本布局的右列） ────────────────────────── */
+
+/**
+ * 参照列外壳（第240轮补充5 用户定稿「三栏是 AI 工作台的基本布局，不要出现其他布局」）：
+ * 上/下两格 + 可拖分界（本地态 30%–70% 不持久化），宽 clamp(300px,42%,560px) 自适应、
+ * order:2 居右（提示词列 order:1 居左紧邻素材面板）。
+ * 分镜工作台（故事板预览/原文气泡）与自由占位工作台（结果预览空态/原文空着）共用本壳。
+ */
+export function WorkbenchRefColumn({ top, bottom }: { top: React.ReactNode; bottom: React.ReactNode }) {
+	const [splitPct, setSplitPct] = useState(56);
+	const colRef = useRef<HTMLDivElement | null>(null);
+	const onDividerMove = (e: React.PointerEvent) => {
+		if (!(e.buttons & 1)) return;
+		const rect = colRef.current?.getBoundingClientRect();
+		if (!rect || rect.height <= 0) return;
+		const pct = ((e.clientY - rect.top) / rect.height) * 100;
+		setSplitPct(Math.min(70, Math.max(30, pct)));
+	};
+	return (
+		<div ref={colRef} style={{ flex: "0 0 clamp(300px, 42%, 560px)", order: 2, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
+			<div style={{ height: `calc(${splitPct}% - 5px)`, minHeight: 0, display: "flex" }}>{top}</div>
+			<div
+				title="拖动调整上下分界"
+				onPointerDown={(e) => { e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); }}
+				onPointerMove={onDividerMove}
+				style={{ height: 10, flexShrink: 0, cursor: "row-resize", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "none" }}
+			>
+				<span style={{ width: 44, height: 3, borderRadius: 2, background: "rgba(255,255,255,0.14)" }} />
+			</div>
+			<div style={{ flex: 1, minHeight: 0, display: "flex" }}>{bottom}</div>
+		</div>
+	);
+}
+
 /* ────────────────────────── 提示词栏（富文本 + @/#/预设 + 放大弹窗全委托） ────────────────────────── */
 
 /**

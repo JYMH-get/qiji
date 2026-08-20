@@ -23,7 +23,7 @@
  * 项目级默认参数仍在右栏「属性」页（RtcShotWorkbench「AI 生成属性」）；本页第二行是**本分镜覆盖**，
  * 与表格模式「视频设置（项目级）+ 分镜行 mini selects（单镜覆盖）」双层语义一致。
  */
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useProjectStore } from "@/store/projectStore";
 import { useCatalogStore } from "@/store/catalogStore";
 import { useSettingsStore } from "@/store/settingsStore";
@@ -41,7 +41,7 @@ import { useWorkbenchTarget } from "./useRtcSelected";
 import { RtcMaterialStrip } from "./RtcMaterialStrip";
 import { inferShotPrompts, genShotStoryboard, genShotVideo } from "./shotGenActions";
 import { matchShotAssets, type ShotPromptFieldKey } from "./shotMatchActions";
-import { JobChips, HistoryGrid, ShotPromptField, useShotJobs, useShotInferring, secTitle, secBox, btnSt } from "./shotWorkbenchParts";
+import { JobChips, HistoryGrid, ShotPromptField, WorkbenchRefColumn, useShotJobs, useShotInferring, secTitle, secBox, btnSt } from "./shotWorkbenchParts";
 
 const em = (text: string) => <span style={{ color: "rgba(255,255,255,0.75)" }}>{text}</span>;
 
@@ -154,36 +154,14 @@ function StoryboardPreview({ episodeId, shotId, shot }: { episodeId: string; sho
 	);
 }
 
-/** 参照列（居右，第240轮补充2 与提示词列 CSS order 互换）：故事板预览（上）+ 原文气泡（下），分界可拖（本地态 30%–70%，不持久化） */
+/** 参照列（居右）：故事板预览（上）+ 原文气泡（下）——外壳（宽度/order/可拖分界）在共享件
+ *  WorkbenchRefColumn（补充5：三栏是工作台基本布局，分镜/自由占位两工作台共用同一壳） */
 function RefColumn({ episodeId, shotId, shot }: { episodeId: string; shotId: string; shot: StoryboardShot }) {
-	const [splitPct, setSplitPct] = useState(56);
-	const colRef = useRef<HTMLDivElement | null>(null);
-	const onDividerMove = (e: React.PointerEvent) => {
-		if (!(e.buttons & 1)) return;
-		const rect = colRef.current?.getBoundingClientRect();
-		if (!rect || rect.height <= 0) return;
-		const pct = ((e.clientY - rect.top) / rect.height) * 100;
-		setSplitPct(Math.min(70, Math.max(30, pct)));
-	};
 	return (
-		// 列宽（第240轮补充，用户截图定稿「拉宽」）：随工作台宽度自适应 42%，钳 300–560px；
-		// order:2 = 居右（补充2 用户定稿「提示词放左边和素材靠近」——两列 CSS order 互换，JSX 顺序不动）
-		<div ref={colRef} style={{ flex: "0 0 clamp(300px, 42%, 560px)", order: 2, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
-			<div style={{ height: `calc(${splitPct}% - 5px)`, minHeight: 0, display: "flex" }}>
-				<StoryboardPreview episodeId={episodeId} shotId={shotId} shot={shot} />
-			</div>
-			<div
-				title="拖动调整 故事板/原文 高度分界"
-				onPointerDown={(e) => { e.preventDefault(); (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); }}
-				onPointerMove={onDividerMove}
-				style={{ height: 10, flexShrink: 0, cursor: "row-resize", display: "flex", alignItems: "center", justifyContent: "center", touchAction: "none" }}
-			>
-				<span style={{ width: 44, height: 3, borderRadius: 2, background: "rgba(255,255,255,0.14)" }} />
-			</div>
-			<div style={{ flex: 1, minHeight: 0, display: "flex" }}>
-				<ScriptCompare episodeId={episodeId} shotId={shotId} shot={shot} />
-			</div>
-		</div>
+		<WorkbenchRefColumn
+			top={<StoryboardPreview episodeId={episodeId} shotId={shotId} shot={shot} />}
+			bottom={<ScriptCompare episodeId={episodeId} shotId={shotId} shot={shot} />}
+		/>
 	);
 }
 

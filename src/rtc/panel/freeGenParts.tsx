@@ -31,6 +31,7 @@ export function DraftArea({
 	placeholder,
 	rows = 5,
 	minHeight,
+	fill = false,
 	onCommit,
 }: {
 	value: string;
@@ -38,6 +39,8 @@ export function DraftArea({
 	rows?: number;
 	/** 中栏工作台的灯箱式大编辑区用（如 "32vh"）；缺省=按 rows 自然高 */
 	minHeight?: number | string;
+	/** 填充模式（补充5）：吃满父列剩余高且有界（超长内容框内滚动收起）；true 时忽略 minHeight */
+	fill?: boolean;
 	onCommit: (v: string) => void;
 }) {
 	const [draft, setDraft] = useState(value);
@@ -59,7 +62,7 @@ export function DraftArea({
 			}}
 			style={{
 				width: "100%",
-				resize: "vertical",
+				resize: fill ? "none" : "vertical",
 				background: "rgba(255,255,255,0.05)",
 				border: "1px solid rgba(255,255,255,0.12)",
 				borderRadius: 6,
@@ -68,7 +71,7 @@ export function DraftArea({
 				fontSize: 12,
 				lineHeight: 1.5,
 				outline: "none",
-				...(minHeight != null ? { minHeight } : null),
+				...(fill ? { flex: 1, minHeight: 0, overflowY: "auto" as const } : minHeight != null ? { minHeight } : null),
 			}}
 		/>
 	);
