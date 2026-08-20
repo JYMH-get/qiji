@@ -1,7 +1,9 @@
 /**
- * RtcFreeGenWorkbench —— 中栏「AI 工作台」页的**自由结果占位**正文（无 shotRef 的占位，第240轮）。
- * 用户定稿：提示词与垫素材从右栏属性移入中栏工作台编辑；右栏 [RtcFreeGenProps](./RtcFreeGenProps.tsx)
- * 收敛为「AI 设置」（时间码/模型/参数说明/生成动作）。
+ * RtcFreeGenWorkbench —— 中栏「AI 工作台」页的**无 shotRef 占位**残余视图。
+ * ⚠ 补充6 起普通占位（视频/图片）创建/绑定即挂真实分镜（segShotBinding）走 RtcShotAiWorkbench
+ * 同一条实现——本视图只剩三类服务对象（ensureShotForPlaceholder 拒绝升级的）：
+ *   音频占位（无生成能力警示）/ 超分·去字幕坑位（originSegId 血缘）/ 生成中的存量自由占位。
+ * 右栏对应视图 [RtcFreeGenProps](./RtcFreeGenProps.tsx)（AI 设置）同此残余范围。
  *
  * 布局（补充5 用户定稿「三栏是 AI 工作台的基本布局，不要出现其他布局，没有原文就空着」）：
  * 与分镜工作台完全同一副骨架——

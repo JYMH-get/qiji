@@ -165,8 +165,10 @@ function RefColumn({ episodeId, shotId, shot }: { episodeId: string; shotId: str
 	);
 }
 
-/** 有占位符选中时的工作台正文（key=segId 由外层挂，换选中即重置本地页签态） */
-function WorkbenchBody({ episodeId, shotId, segId }: { episodeId: string; shotId: string; segId: string }) {
+/** 有占位符选中时的工作台正文（key=segId 由外层挂，换选中即重置本地页签态）。
+ *  imageSlot=图片占位（genKind image，补充6 普通占位挂分镜后的产物类型）——生成故事板带 swapSegId
+ *  （成功即原位替换为图片片段，与视频 swap 同一条 placeholderSwap 机制）。 */
+function WorkbenchBody({ episodeId, shotId, segId, imageSlot }: { episodeId: string; shotId: string; segId: string; imageSlot?: boolean }) {
 	const shot = useProjectStore((s) => s.episodes.find((e) => e.id === episodeId)?.shots.find((x) => x.id === shotId));
 	const epTitle = useProjectStore((s) => s.episodes.find((e) => e.id === episodeId)?.title) || "";
 	const ms = useProjectStore((s) => s.mediaSettings);
@@ -365,8 +367,8 @@ function WorkbenchBody({ episodeId, shotId, segId }: { episodeId: string; shotId
 				<div style={{ ...secBox, flexShrink: 0 }}>
 					<div style={{ display: "flex", gap: 6 }}>
 						<button style={btnSt("plain", sbRunning)} disabled={sbRunning}
-							title={shot.storyboardUri ? "重新生成故事板图（新结果加入历史）" : "按提示词生成故事板图"}
-							onClick={() => void genShotStoryboard(episodeId, shotId)}>
+							title={(shot.storyboardUri ? "重新生成故事板图（新结果加入历史）" : "按提示词生成故事板图") + (imageSlot ? "；成功后本图片占位自动替换为图片片段" : "")}
+							onClick={() => void genShotStoryboard(episodeId, shotId, imageSlot ? { swapSegId: segId } : undefined)}>
 							{sbRunning ? "生成中…" : shot.storyboardUri ? "重新生成故事板" : "生成故事板"}
 						</button>
 						<button style={btnSt("primary", vidRunning)} disabled={vidRunning}
@@ -401,5 +403,6 @@ export function RtcShotAiWorkbench() {
 	const target = useWorkbenchTarget();
 	const ref = target?.seg.shotRef;
 	if (!target || !ref) return <WorkbenchHint />;
-	return <WorkbenchBody key={target.seg.id} episodeId={ref.episodeId} shotId={ref.shotId} segId={target.seg.id} />;
+	const imageSlot = (target.seg.genKind ?? target.seg.media) === "image";
+	return <WorkbenchBody key={target.seg.id} episodeId={ref.episodeId} shotId={ref.shotId} segId={target.seg.id} imageSlot={imageSlot} />;
 }

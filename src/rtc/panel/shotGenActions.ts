@@ -79,8 +79,10 @@ export async function inferShotPrompts(episodeId: string, shotId: string): Promi
  * 提示词=同源/故事板提示词（回退原文）+ 预设胶囊展开 + 同源宫格补丁；
  * 垫图=素材区全部**图像**素材（保序对齐 @ImageN，⚠ 一张都不许静默丢——不可用即明确报错不发请求）；
  * params={size,quality}，模型=生效图像模型。返回是否已提交。
+ * opts.swapSegId：**图片占位**片段 id——提交后登记「成功即原位替换为 image 片段」监听
+ * （placeholderSwap 对 field=storyboard 的台账天然落图片，与视频 swap 同一条机制，补充6）。
  */
-export async function genShotStoryboard(episodeId: string, shotId: string): Promise<boolean> {
+export async function genShotStoryboard(episodeId: string, shotId: string, opts?: { swapSegId?: string }): Promise<boolean> {
 	const shot = liveShot(episodeId, shotId);
 	if (!shot) return false;
 	const ms = useProjectStore.getState().mediaSettings;
@@ -109,7 +111,7 @@ export async function genShotStoryboard(episodeId: string, shotId: string): Prom
 	const imageAspect = ms.imageAspect ?? "16:9";
 	const imageResolution = clampImageResolution(ms.imageResolution, resOptions).toUpperCase();
 	const size = IMG_SIZE[imageAspect]?.[imageResolution] || "2048x1152";
-	startShotGeneration({
+	const pendingId = startShotGeneration({
 		episodeId, shotId, field: "storyboard",
 		purpose: "asset.scene.image",
 		prompt, // → variables.prompt（视觉风格由 generationQueue 注入）
@@ -118,6 +120,8 @@ export async function genShotStoryboard(episodeId: string, shotId: string): Prom
 		modelKey: modelKey || undefined,
 		label: `${shot.title || "分镜"}·故事板`,
 	});
+	// 图片占位：故事板生成成功 → 占位原位替换为 image 片段（target 不动；机制与视频 swap 同一条）
+	if (opts?.swapSegId) armPlaceholderSwap(pendingId, episodeId, shotId, opts.swapSegId);
 	return true;
 }
 

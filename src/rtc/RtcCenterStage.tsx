@@ -36,6 +36,7 @@ import {
 	mainTrackSegAt,
 } from "./panel/rtcCenterTabCore";
 import { useRtcCenterTabStore } from "./panel/rtcCenterTabStore";
+import { ensureShotForPlaceholder } from "./panel/segShotBinding";
 
 /** 顺序预览播放器挂载点：doc 有任何片段才显示；布尔选择器——选中/播放头变化不重渲本壳。 */
 function SequencePreviewSlot() {
@@ -197,13 +198,19 @@ function useCenterTabAutoSwitch() {
 
 /**
  * 「AI 工作台」页正文分派（第240轮；补充3 改绑 useWorkbenchTarget=选中占位符优先、
- * 无选中回退**播放头下主轨占位符**——播放头停在待生成片段上时工作台直接绑定它，不再黑屏引导）：
- * 目标是 placeholder 且**无 shotRef**（时间轴空白右键新建的自由结果占位）→ RtcFreeGenWorkbench；
- * 其余（分镜占位/无目标）→ RtcShotAiWorkbench（其内部同一 useWorkbenchTarget 解析 shot 绑定与引导）。
+ * 无选中回退**播放头下主轨占位符**——播放头停在待生成片段上时工作台直接绑定它，不再黑屏引导）。
+ * 补充6（用户定稿「普通占位与分镜占位完全一致，不要两种实现」）：普通占位（视频/图片）创建时
+ * 已挂真实分镜（segShotBinding）；**存量旧占位**在这里绑定那一刻补挂同一函数（幂等）——升级后
+ * 走 RtcShotAiWorkbench 同一条实现。仍无 shotRef 的残余（音频占位/超分·去字幕坑位/生成中的
+ * 存量自由占位——ensureShotForPlaceholder 内部拒绝升级的三类）→ RtcFreeGenWorkbench。
  * key=segId：换目标即重置本地编辑态。
  */
 function WorkbenchBody() {
 	const target = useWorkbenchTarget();
+	const seg = target?.seg ?? null;
+	useEffect(() => {
+		if (seg && seg.kind === "placeholder" && !seg.shotRef) ensureShotForPlaceholder(seg.id);
+	}, [seg]);
 	if (target && !target.seg.shotRef) {
 		return <RtcFreeGenWorkbench key={target.seg.id} seg={target.seg} track={target.track} segIndex={target.segIndex} />;
 	}

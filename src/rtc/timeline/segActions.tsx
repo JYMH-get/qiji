@@ -52,6 +52,7 @@ import { createRtcTrack, type RtcDoc, type RtcSegment, type RtcTrack } from "@/t
 import { genId } from "@/lib/id";
 import type { VideoDerivedRecord } from "@/services/projectFile";
 import { useRtcAssetSelStore } from "../rtcAssetSelStore";
+import { ensureShotForPlaceholder } from "../panel/segShotBinding";
 import { collectProjectImageItems, type ProjectCatAsset } from "../asset/rtcAssetData";
 import { imageDefaultUsFromSettings } from "../settings/rtcEditorSettingsStore";
 import { probeMediaDurationSec } from "./timelineUtil";
@@ -656,6 +657,9 @@ function RtcBlankContextMenu({ state, onClose }: { state: BlankMenuState; onClos
 		// 图片占位时长走设置「图片默认时长」（默认 3s，行为不变）；视频/音频仍用档位表
 		const durUs = media === "image" ? imageDefaultUsFromSettings() : undefined;
 		useRtcStore.getState().commit((doc) => addSegment(doc, state.trackId, buildBlankPlaceholder(media, state.atUs, id, durUs)));
+		// 补充6（用户定稿「普通占位与分镜占位完全一致，不要两种实现」）：视频/图片占位创建即挂真实分镜
+		// （scriptSegment 空=没有原文就空着），工作台/属性/生成全走分镜唯一路径；音频占位无生成能力不挂
+		if (media !== "audio") ensureShotForPlaceholder(id);
 		useRtcStore.getState().setSelection([id]);
 		onClose();
 	};
