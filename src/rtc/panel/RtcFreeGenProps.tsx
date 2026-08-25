@@ -17,18 +17,23 @@
 import { useState } from "react";
 import { Image as ImageIcon, Video } from "lucide-react";
 import ModelPicker from "@/components/ModelPicker";
+import { progressLabel } from "@/lib/queueLabel";
 import type { RtcSegment, RtcTrack } from "@/types/rtc";
 import { AUDIO_GEN_UNSUPPORTED, genCapabilityFor, segSeconds } from "./rtcGenCore";
 import { fmtUs, usToSecLabel } from "./rtcSegUtils";
 import { RtcTimeFields } from "./RtcTimeFields";
 import { KIND_LABEL, secBox } from "./freeGenParts";
 import { retryFreeGen, segGenKind, startFreeGen } from "./freeGenActions";
+import { useSegQueueInfo } from "./rtcQueueStore";
 
 export function RtcFreeGenProps({ seg, track, segIndex }: { seg: RtcSegment; track: RtcTrack; segIndex: number }) {
 	const kind = segGenKind(seg);
 	const cap = genCapabilityFor(kind);
 	const running = seg.status === "running";
 	const failed = seg.status === "failed";
+	// 在途排队信息（内存态）→ 「排队中 · 第 N 位」/「生成中 42%」
+	const queueInfo = useSegQueueInfo(seg.id);
+	const runLabel = progressLabel(seg.progress ?? null, queueInfo);
 	const [busy, setBusy] = useState(false);
 
 	const submit = async (retry: boolean) => {
@@ -143,7 +148,7 @@ export function RtcFreeGenProps({ seg, track, segIndex }: { seg: RtcSegment; tra
 									/>
 								</div>
 								<div style={{ fontSize: 10, color: "rgba(196,181,253,0.9)" }}>
-									{seg.progress != null ? `生成中 ${Math.round(seg.progress)}%` : "生成中…"}
+									{runLabel}
 									<span style={{ color: "rgba(255,255,255,0.35)" }}>（切页/关软件重开会自动接回，不重复扣费）</span>
 								</div>
 							</div>

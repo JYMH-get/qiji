@@ -1,76 +1,49 @@
 /**
- * assetHeal —— OSS「死链自愈」：垫图/素材依赖的 OSS 直链若已丢失，且本机存有该资产的本地副本，
- * 就把本地字节重新上传、由服务端写回 OSS 原对象键（url 不变），反向修复丢失的云端对象。
+ * assetHeal —— 提交前的 OSS「死链自愈」入口：垫图/素材依赖的 OSS 直链若已失效，
+ * 换用服务端当前链接；若云端对象真的丢了而本机存有副本，就把本地字节重传写回、反向修复云端。
  *
  * 触发点：ensurePublicUrl（发上游前把素材公网化的唯一入口）——正是死链会导致生成失败之处。
- * 约束（选项②的固有边界）：仅 Tauri（需本地副本）+ 台账真实资产（"disp"/"bk" 客户端派生 id 无 OSS 原键，跳过）。
- * 判活走服务端 HEAD（绕 webview CORS，可靠）；本会话确认活的 id 缓存，不重复探测（不拖慢每次提交）。
+ * 恢复逻辑本身在 services/assetRecover（与手动「检查素材」共用同一份，勿在此另写一套）。
+ *
+ * ⚠ 第254轮两处修正（勿回退）：
+ *  - 旧实现要求 `blob.localPath` 才肯往下走，把「探活拿到服务端新链接」这种**不需要本地副本**
+ *    的分支也挡掉了（别人已桥接恢复过的资产，本机没副本就永远用不上新链）；
+ *  - 旧 url 现在由 registerAssetBlob 归档进 `pastUrls`，因此换链后**旧 uri 仍能反查回本 blob**，
+ *    项目里散落的历史 url 字符串一次性全部受益。
  */
 import { useProjectStore } from "@/store/projectStore";
-import { managedClient } from "@/services/managedClient";
+import { recoverAsset, recoveredUrlOf, LEDGER_ID_RE, _resetAliveCache, type RecoverDeps, type RecoverResult } from "@/services/assetRecover";
 
-/** 真·服务端台账资产 id 前缀（自愈只对这些有效，其余客户端派生 id 无 OSS 原键） */
-const LEDGER_ID_RE = /^(C|A|G|M|S|P|video|audio|TP)\d/;
-
-/** 本会话已确认「活」的资产 id：确认过就不再探测 */
-const aliveThisSession = new Set<string>();
-/** 测试用：清空会话缓存 */
-export function _resetAliveCache(): void {
-	aliveThisSession.clear();
-}
+export { _resetAliveCache };
 
 export interface HealDeps {
-	isTauri: () => boolean;
-	blobByUri: (uri: string) => { id?: string; url?: string; localPath?: string; mime?: string; ext?: string } | undefined;
-	readLocal: (path: string) => Promise<Uint8Array>;
-	alive: (id: string) => Promise<{ alive: boolean; url?: string }>;
-	reput: (id: string, blob: Blob, name: string) => Promise<{ url: string } | null>;
-	/** 服务端 url 变化（旧 OSS 桥接恢复/别人已恢复）→ 回写三元映射，后续提交直接用新链接 */
-	adoptUrl: (id: string, url: string) => void;
+	blobByUri: (uri: string) => { id?: string } | undefined;
+	recover: (id: string) => Promise<RecoverResult>;
 }
 
-const isTauriEnv = () => typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
-
 const defaultDeps: HealDeps = {
-	isTauri: isTauriEnv,
 	blobByUri: (uri) => useProjectStore.getState().blobByUri(uri),
-	readLocal: async (path) => {
-		const { readFile } = await import("@tauri-apps/plugin-fs");
-		return readFile(path);
-	},
-	alive: (id) => managedClient.assetAlive(id),
-	reput: (id, blob, name) => managedClient.reputAsset(id, blob, name),
-	adoptUrl: (id, url) => {
-		const cur = useProjectStore.getState().assetBlobs[id];
-		if (!cur || cur.url !== url) useProjectStore.getState().registerAssetBlob({ id, url });
-	},
+	recover: (id) => recoverAsset(id, { cache: "session" }),
 };
 
 /**
- * 若 uri 指向「本机有本地副本的台账资产」、且服务端探测为死链 → 用本地字节重传修复，返回修复后的 url。
- * 第224轮（换 OSS 桥接）起 url 可能变化：旧桶链接恢复后=新域名+账号目录+旧路径；
- * 别人已恢复的（探活通过但服务端 url 与本机不同）直接换用服务端链接，不重复上传。
- * 无需/无法修复（非 Tauri / 无本地副本 / 派生 id / 判活 / 重传失败）时返回原 uri。
+ * 若 uri 指向台账资产，探活并返回**当前应当使用的链接**：
+ *  - 存活且服务端 url 变过（旧桶桥接恢复 / 别人先恢复过）→ 换用新链（不需要本地副本）；
+ *  - 死链且本机有副本 → 重传恢复后返回新链；
+ *  - 其余情形（派生 id / 台账无记录 / 无副本可救）→ 原样返回，交由上游明确报错。
  */
 export async function healPublicUrlIfDead(uri: string, deps: HealDeps = defaultDeps): Promise<string> {
-	if (!uri || !deps.isTauri()) return uri;
-	const blob = deps.blobByUri(uri);
-	if (!blob?.id || !blob.localPath || !LEDGER_ID_RE.test(blob.id)) return uri;
-	if (aliveThisSession.has(blob.id)) return uri;
-	const a = await deps.alive(blob.id);
-	if (a.alive) {
-		aliveThisSession.add(blob.id);
-		if (a.url && a.url !== uri) { deps.adoptUrl(blob.id, a.url); return a.url; } // 别人已桥接恢复 → 直接用
-		return uri;
-	}
-	try {
-		const bytes = await deps.readLocal(blob.localPath);
-		const mime = blob.mime || "application/octet-stream";
-		const name = `${blob.id}.${blob.ext || "bin"}`;
-		const res = await deps.reput(blob.id, new Blob([bytes as unknown as BlobPart], { type: mime }), name);
-		if (res?.url) { aliveThisSession.add(blob.id); deps.adoptUrl(blob.id, res.url); return res.url; }
-	} catch (e) {
-		console.warn("[assetHeal] reput failed:", e);
-	}
-	return uri;
+	if (!uri) return uri;
+	const id = deps.blobByUri(uri)?.id;
+	if (!id || !LEDGER_ID_RE.test(id)) return uri;
+	const r = await deps.recover(id);
+	return recoveredUrlOf(r) ?? uri;
+}
+
+/** 供测试注入底层依赖（恢复例程的 deps 直通 assetRecover） */
+export function healDepsFrom(recoverDeps: RecoverDeps): HealDeps {
+	return {
+		blobByUri: (uri) => useProjectStore.getState().blobByUri(uri),
+		recover: (id) => recoverAsset(id, { cache: "session", deps: recoverDeps }),
+	};
 }

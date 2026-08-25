@@ -38,8 +38,9 @@ export interface User {
 	passwordHash?: string;
 	/** 功能开关（字段缺省=开）：控制客户端可用模式，随登录/心跳下发；仅单模式时客户端隐藏切换交互键。
 	 *  libtv：LibTV 授权入口；dreamina：即梦授权入口（均为个人中心连接 + Seedance 2.0 本地 CLI 生成，生成不经管理端不扣积分）。
+	 *  comfyui：ComfyUI 直连入口（个人中心绑定地址 + 本地直连生成，生成不经管理端不扣生成积分、仅按次手续费）。
 	 *  modes（第130轮）：动态视频模式开关 modeId→bool（缺省/字段缺省=开）；关=该模式下模型客户端隐藏 + generate/batch 403。 */
-	features?: { assetMode?: boolean; canvasMode?: boolean; editorMode?: boolean; libtv?: boolean; dreamina?: boolean; modes?: Record<string, boolean> };
+	features?: { assetMode?: boolean; canvasMode?: boolean; editorMode?: boolean; libtv?: boolean; dreamina?: boolean; comfyui?: boolean; modes?: Record<string, boolean> };
 	/** 归属渠道商 id（P2b：注册时填渠道商邀请码写入；空=平台直属用户） */
 	agentId?: string;
 	/** 收藏配额覆盖（P1，字节）：空=跟随全局默认 settings.favQuotaBytes（200MB）。
@@ -50,6 +51,9 @@ export interface User {
 	inviteCode?: string;
 	/** 邀请人（P2b）：注册时填了某用户的个人邀请码 → 记录该用户 id */
 	invitedBy?: string;
+	/** 会员状态（第246轮，单档）：核销会员卡写入；expiresAt 过期即失效（懒判定，不做清理任务）。
+	 *  discountPercent 为核销那张卡冻结的折扣（95=9.5折）——续费以新卡为准。 */
+	membership?: { planName: string; expiresAt: string; discountPercent: number; activatedAt?: string };
 	createdAt: string;
 	updatedAt: string;
 	lastSeenAt?: string;
@@ -455,6 +459,53 @@ export function transferCredits(fromId: string, toId: string, amount: number): {
 	to.updatedAt = now;
 	persist();
 	return { ok: true };
+}
+
+// ── 会员（第246轮）──
+
+/** 当前生效的会员（懒判定：expiresAt 过期即视为无会员；不改写存量字段留档） */
+export function activeMembershipOf(u: User): { planName: string; expiresAt: string; discountPercent: number } | undefined {
+	const m = u.membership;
+	if (!m || !m.expiresAt) return undefined;
+	if (new Date(m.expiresAt).getTime() <= Date.now()) return undefined;
+	const disc = Math.floor(Number(m.discountPercent));
+	return {
+		planName: m.planName || "会员",
+		expiresAt: m.expiresAt,
+		discountPercent: Number.isFinite(disc) ? Math.min(100, Math.max(50, disc)) : 100,
+	};
+}
+
+/**
+ * 开通/续费会员：到期时间=在「现有到期时间与当下的较晚者」上加 days 天（未过期即顺延续期）；
+ * 折扣取本次卡冻结的值（续费以新卡为准）。到账算力由调用方另走 grantCredits（保持加钱单点）。
+ */
+export function applyMembershipGrant(id: string, spec: { planName: string; days: number; discountPercent: number }): User["membership"] | undefined {
+	const u = getUser(id);
+	if (!u) return undefined;
+	const now = Date.now();
+	const base = u.membership?.expiresAt ? Math.max(now, new Date(u.membership.expiresAt).getTime()) : now;
+	const days = Math.min(3650, Math.max(1, Math.floor(Number(spec.days)) || 30));
+	const disc = Math.min(100, Math.max(50, Math.floor(Number(spec.discountPercent)) || 100));
+	u.membership = {
+		planName: (spec.planName || "会员").slice(0, 20),
+		expiresAt: new Date(base + days * 86400000).toISOString(),
+		discountPercent: disc,
+		activatedAt: u.membership?.activatedAt ?? new Date(now).toISOString(),
+	};
+	u.updatedAt = new Date().toISOString();
+	persist();
+	return u.membership;
+}
+
+/** 取消会员（管理端）：直接清除会员状态（已到账的算力不回收） */
+export function revokeMembership(id: string): boolean {
+	const u = getUser(id);
+	if (!u || !u.membership) return false;
+	delete u.membership;
+	u.updatedAt = new Date().toISOString();
+	persist();
+	return true;
 }
 
 /** 充值/兑换：仅增加余额，不计入消耗统计。返回新余额（用户不存在返回 undefined） */

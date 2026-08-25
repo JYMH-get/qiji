@@ -156,6 +156,8 @@ export interface AgentFeatures {
 	editorMode?: boolean;
 	libtv?: boolean;
 	dreamina?: boolean;
+	/** ComfyUI 直连入口（用户绑定自有 ComfyUI 地址本地直连生成，生成不经管理端、仅按次手续费） */
+	comfyui?: boolean;
 	/** 动态视频模式硬闸（第130轮）modeId→bool（缺省=开）：商关的模式其名下用户一律不可用（AND 合成） */
 	modes?: Record<string, boolean>;
 }
@@ -427,6 +429,7 @@ export function updateAgent(id: string, patch: {
 			editorMode: f.editorMode !== false,
 			libtv: f.libtv !== false,
 			dreamina: f.dreamina !== false,
+			comfyui: f.comfyui !== false,
 			modes: normModeGates(f.modes),
 		};
 	}
@@ -539,6 +542,7 @@ export function applyAgentFeatureGate(agentId: string | undefined, userFeatures?
 			editorMode: on(af.editorMode) && on(features?.editorMode),
 			libtv: on(af.libtv) && on(features?.libtv),
 			dreamina: on(af.dreamina) && on(features?.dreamina),
+			comfyui: on(af.comfyui) && on(features?.comfyui),
 			modes: composeModes(features?.modes, af.modes),
 		};
 		if (!merged.assetMode && !merged.canvasMode && !merged.editorMode) {

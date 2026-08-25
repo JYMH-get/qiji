@@ -1,6 +1,7 @@
 /**
  * RtcShotAiWorkbench —— 中栏「AI 工作台」页正文（中栏双页签改版：工作台/预览，见 rtcCenterTabCore）。
- * 绑定 useWorkbenchTarget（选中的分镜占位符优先，无选中回退播放头下主轨占位符——补充3），四栏样式按表格模式
+ * 绑定 useWorkbenchTarget（选中优先，无选中回退播放头下主轨片段——补充3；⚠ 第251轮需求⑦：
+ * **只要有 shotRef 就能进**，占位变成片后不再丢失工作台），四栏样式按表格模式
  * 分镜行样板（用户定稿；第240轮补充2：**提示词列居左紧邻素材面板、参照列居右**——CSS order 互换）：
  *   - 右上：故事板预览（当前图点击放大 + 历史缩略条「设为当前」）；
  *   - 右下：原文对照（**逐行气泡渲染**：▲/（ 开头=动作行浅灰、「人名：台词」人名着色加粗——
@@ -9,16 +10,20 @@
  *   - 左列：提示词工作区——**两行头照抄表格模式**（Frame161195 分镜行 1768-1850 行同构）：
  *     第一行 = 提示词页签（同源胶囊/故事板|视频切换）+ ▦预设方案 + 补镜头（重排编号走 lib/shotReindex，
  *     与表格模式/inferRun 共用同一纯函数）；
- *     第二行 = **仅本分镜**的视频参数 mini selects（家族→渠道/线路→模型→方法→时长/比例/分辨率→真人图
- *     → 行尾放大按钮）——写 shot.overrides/durationSec，与提交层 shotGenActions.genShotVideo 读的
- *     字段一一对应（videoModelKey/method/aspect/resolution/officialAssetIndexes + durationSec）；
+ *     第二行 = **仅本分镜**的视频参数 mini selects（方法→时长/比例/分辨率→真人图→行尾放大按钮）
+ *     ——写 shot.overrides/durationSec，与提交层 shotGenActions.genShotVideo 读的字段一一对应
+ *     （method/aspect/resolution/officialAssetIndexes + durationSec）；
+ *     ⚠ **第251轮：模型选择只在右栏属性页**（本行原有的 家族/线路/模型 三下拉与右栏重复且冲突，
+ *       已删除；`overrides.videoModelKey` 的**读取链保留**，存量项目里设过的单镜模型照旧生效）；
  *     下方 垫图素材区 + 提示词大编辑区 + 动作行 + 视频历史。
  *
  * 红线（勿回退）：
- *  - 生成/推理只走 shotGenActions（inferShotPrompts/genShotStoryboard/genShotVideo）唯一路径，
- *    生成视频带 swapSegId=当前占位符 id（成功原位替换）；
+ *  - 生成/推理只走 shotGenActions（inferShotPrompts/genShotStoryboard）与
+ *    timeline/segActions.regenerateShotResult 唯一路径；**落点规则**：占位=原地重跑（swapSegId=自己）、
+ *    成片=上方轨道新建占位接新结果（原结果原位保留，与右键「重新生成」完全同一实现）；
  *  - 提示词/原文/素材/覆盖 都是 projectStore.updateShot / shotMaterialOps 语义（不碰 rtcDoc）；
- *  - 档位收敛一把尺：videoReqOptions/clampToOptions/clampDurationTo/clampMethod（与提交层同一套）；
+ *  - 档位收敛一把尺：modelOptions.videoReqOptionsForKey/modelMethodsForKey + clampToOptions/clampDurationTo/clampMethod
+ *    （与提交层同一套；本地渠道 ComfyUI/LibTV/即梦 的档位也能取到）；
  *  - 提示词编辑件=shotWorkbenchParts.ShotPromptField（@/#/预设/放大弹窗同一组件，两行头经 renderHeader 接管）。
  * 项目级默认参数仍在右栏「属性」页（RtcShotWorkbench「AI 生成属性」）；本页第二行是**本分镜覆盖**，
  * 与表格模式「视频设置（项目级）+ 分镜行 mini selects（单镜覆盖）」双层语义一致。
@@ -32,14 +37,15 @@ import { listPresetSchemes } from "@/lib/presetSchemes";
 import { splitScriptBubbles, speakerColor } from "@/lib/scriptBubbles";
 import { reindexShots } from "@/lib/shotReindex";
 import { clampDuration } from "@/lib/genParams";
-import { METHOD_LABELS, modelMethods, clampMethod, videoReqOptions, clampToOptions, clampDurationTo } from "@/lib/videoMethods";
+import { METHOD_LABELS, clampMethod, clampToOptions, clampDurationTo } from "@/lib/videoMethods";
+import { modelMethodsForKey, videoReqOptionsForKey } from "@/lib/modelOptions";
 import { mediaOf } from "@/lib/shotMaterials";
-import { useEffectiveModelKey, useCapModelOptions, useFamilyOrder } from "@/components/ModelPicker";
-import { modelFamilies, familyOf, modelForFamily, channelOf, sourceValueOf, modelForSource } from "@/services/adapters/localChannels";
+import { useEffectiveModelKey } from "@/components/ModelPicker";
 import type { StoryboardShot } from "@/services/projectFile";
 import { useWorkbenchTarget } from "./useRtcSelected";
 import { RtcMaterialStrip } from "./RtcMaterialStrip";
-import { inferShotPrompts, genShotStoryboard, genShotVideo } from "./shotGenActions";
+import { inferShotPrompts, genShotStoryboard } from "./shotGenActions";
+import { regenerateShotResult } from "../timeline/segActions";
 import { matchShotAssets, type ShotPromptFieldKey } from "./shotMatchActions";
 import { JobChips, HistoryGrid, ShotPromptField, WorkbenchRefColumn, useShotJobs, useShotInferring, secTitle, secBox, btnSt } from "./shotWorkbenchParts";
 
@@ -54,10 +60,11 @@ function WorkbenchHint() {
 	return (
 		<div style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
 			<div style={{ maxWidth: 460, fontSize: 12, color: "rgba(255,255,255,0.5)", lineHeight: 2 }}>
-				<div style={{ fontSize: 13, color: "rgba(255,255,255,0.8)", marginBottom: 6 }}>AI 工作台 · 未选中分镜占位符</div>
-				在下方时间轴{em("选中一个分镜占位符")}（或把{em("播放头移到占位符上")}），这里就是它的生成工作台：
+				<div style={{ fontSize: 13, color: "rgba(255,255,255,0.8)", marginBottom: 6 }}>AI 工作台 · 未选中分镜片段</div>
+				在下方时间轴{em("选中一个分镜占位符或分镜成片")}（或把{em("播放头移到它上面")}），这里就是它的生成工作台：
 				<br />左侧{em("提示词编辑与垫图")}（紧邻素材面板），右侧{em("故事板预览 + 原文对照")}（原文右键进入编辑），
-				一站式 推理提示词 → 生成故事板 → 生成视频（成片自动替换占位符）。
+				一站式 推理提示词 → 生成故事板 → 生成视频。
+				<br />{em("已出片的片段也能进")}——提示词/垫图/历史都还在，重跑的新结果会落在**上方新占位**，原成片不动。
 				<div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
 					还没有占位符？在右栏{em("「剧本」页签")}：①编辑剧本 → ②剧集拆分 → ③资产拆分；
 					<br />再到{em("「分镜」页签")}：④逐集智能推理/智能拆分，点「生成占位入轨」把分镜铺上时间轴。
@@ -168,7 +175,7 @@ function RefColumn({ episodeId, shotId, shot }: { episodeId: string; shotId: str
 /** 有占位符选中时的工作台正文（key=segId 由外层挂，换选中即重置本地页签态）。
  *  imageSlot=图片占位（genKind image，补充6 普通占位挂分镜后的产物类型）——生成故事板带 swapSegId
  *  （成功即原位替换为图片片段，与视频 swap 同一条 placeholderSwap 机制）。 */
-function WorkbenchBody({ episodeId, shotId, segId, imageSlot }: { episodeId: string; shotId: string; segId: string; imageSlot?: boolean }) {
+function WorkbenchBody({ episodeId, shotId, segId, imageSlot, isMedia }: { episodeId: string; shotId: string; segId: string; imageSlot?: boolean; isMedia?: boolean }) {
 	const shot = useProjectStore((s) => s.episodes.find((e) => e.id === episodeId)?.shots.find((x) => x.id === shotId));
 	const epTitle = useProjectStore((s) => s.episodes.find((e) => e.id === episodeId)?.title) || "";
 	const ms = useProjectStore((s) => s.mediaSettings);
@@ -182,12 +189,11 @@ function WorkbenchBody({ episodeId, shotId, segId, imageSlot }: { episodeId: str
 	const presetSchemes = useMemo(() => listPresetSchemes(), [presetCatalogVer, customPresets]);
 	// 非同源模式的提示词小页签（本地态，换选中随 key 重置）
 	const [promptTab, setPromptTab] = useState<ShotPromptFieldKey>("storyboardPrompt");
-	// 第二行「仅本分镜」视频参数的数据面（与 Frame161195 分镜行 mini selects 同源：家族→线路→模型三级 + catalog 档位）
-	const models = useCatalogStore((s) => s.catalog?.models);
+	// 第二行「仅本分镜」视频参数的数据面（第251轮：模型三级下拉已移除，只留档位；
+	// 生效模型仍按「本分镜覆盖 > 右栏项目级」解析——档位随它走）
 	const effVideoKey = useEffectiveModelKey("video");
-	const videoModels = useCapModelOptions("video");
-	const videoFamOrder = useFamilyOrder();
-	const videoFamilies = useMemo(() => modelFamilies(videoModels, videoFamOrder), [videoModels, videoFamOrder]);
+	// catalog 版本订阅：档位经 modelOptions 现查（非 hook），catalog 热更后要重算一遍
+	const catalogVer = useCatalogStore((s) => s.catalog?.version);
 
 	if (!shot) {
 		return (
@@ -203,37 +209,22 @@ function WorkbenchBody({ episodeId, shotId, segId, imageSlot }: { episodeId: str
 		? "同源提示词（图片与视频共用）"
 		: promptTab === "storyboardPrompt" ? "故事板提示词" : "视频提示词";
 
-	// ── 「仅本分镜」视频参数（与 Frame161195 1794-1844 行逐项同源；写的字段=提交层 genShotVideo 读的字段）──
+	// ── 「仅本分镜」视频参数（与 Frame161195 分镜行逐项同源；写的字段=提交层 genShotVideo 读的字段）──
+	// ⚠ 档位一把尺：modelOptions（catalog 优先、ComfyUI/LibTV/即梦 等本地渠道回退适配器 paramsSchema）
 	const ov = shot.overrides || {};
 	const curVideoModel = ov.videoModelKey || effVideoKey || "";
-	const curFamGrp = familyOf(curVideoModel, videoFamilies);
-	const curFamChs = curFamGrp?.channels ?? [];
-	const curSrcCh = channelOf(curVideoModel, curFamChs);
-	const curCatModel = models?.find((m) => m.id === curVideoModel);
-	const curMethods = modelMethods(curCatModel);
+	const curCatModel = useCatalogStore.getState().catalog?.models.find((m) => m.id === curVideoModel);
+	const curMethods = useMemo(() => modelMethodsForKey(curVideoModel), [curVideoModel, catalogVer]);
 	const curMethod = clampMethod(ov.method || ms.videoMethod, curMethods);
-	const curReq = videoReqOptions(curCatModel);
+	const curReq = useMemo(() => videoReqOptionsForKey(curVideoModel), [curVideoModel, catalogVer]);
 	const maxDuration = ms.maxDuration ?? 15;
 	const aspect = ms.aspect ?? "16:9";
 	const resolution = ms.resolution ?? "720p";
 	const shotImgCount = Math.min(9, shot.materials.filter((m) => { const md = mediaOf(m); return md !== "video" && md !== "audio"; }).length);
 	const officialSel = new Set((ov.officialAssetIndexes ?? []).filter((i) => i >= 0 && i < shotImgCount));
-	// 单镜覆盖 setter（与 Frame161195.setShotOverride/setShotVideoModel 同尺——换模型把旧覆盖收敛到新模型档位）
+	// 单镜覆盖 setter（与 Frame161195.setShotOverride 同尺）
 	const setShotOverride = (patch: Partial<NonNullable<StoryboardShot["overrides"]>>) =>
 		update({ overrides: { ...(shot.overrides || {}), ...patch } });
-	const setShotVideoModel = (videoModelKey: string) => {
-		const req = videoReqOptions(models?.find((m) => m.id === videoModelKey));
-		const patch: Partial<NonNullable<StoryboardShot["overrides"]>> = { videoModelKey };
-		if (ov.resolution) patch.resolution = clampToOptions(ov.resolution, req.resolutions);
-		if (ov.aspect) patch.aspect = clampToOptions(ov.aspect, req.aspects);
-		if (ov.duration) patch.duration = clampDurationTo(clampDuration(ov.duration), req.durations);
-		if (ov.method) patch.method = clampMethod(ov.method, modelMethods(models?.find((m) => m.id === videoModelKey)));
-		const nextDur = shot.durationSec != null ? clampDurationTo(clampDuration(shot.durationSec), req.durations) : undefined;
-		update({
-			overrides: { ...ov, ...patch },
-			...(nextDur != null && nextDur !== shot.durationSec ? { durationSec: nextDur } : {}),
-		});
-	};
 	// 补镜头开关：切标记 + 全集重排编号（reindexShots 与表格模式/inferRun 共用同一纯函数）+ 落盘
 	const toggleSupplement = () => {
 		const st = useProjectStore.getState();
@@ -255,7 +246,7 @@ function WorkbenchBody({ episodeId, shotId, segId, imageSlot }: { episodeId: str
 				{/* 头部：分镜身份 + 推理 */}
 				<div style={{ display: "flex", alignItems: "baseline", gap: 8, flexShrink: 0 }}>
 					<span style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>{shot.title || "分镜"}</span>
-					<span style={{ fontSize: 10, color: "rgba(255,255,255,0.4)" }}>{epTitle}{shot.durationSec ? ` · ${shot.durationSec}s` : ""} · 占位符</span>
+					<span style={{ fontSize: 10, color: "rgba(255,255,255,0.4)" }}>{epTitle}{shot.durationSec ? ` · ${shot.durationSec}s` : ""} · {isMedia ? "成片（可重跑）" : "占位符"}</span>
 					<span style={{ flex: 1 }} />
 					<button style={{ ...btnSt("plain", inferring), flex: "none", padding: "3px 10px", fontSize: 11 }} disabled={inferring}
 						title="对本分镜单卡推理：按原文产出提示词（覆盖当前提示词）"
@@ -309,23 +300,11 @@ function WorkbenchBody({ episodeId, shotId, segId, imageSlot }: { episodeId: str
 									onClick={toggleSupplement}
 									style={{ padding: "3px 8px", fontSize: 11, cursor: "pointer", borderRadius: 6, border: shot.isSupplement ? "1px solid rgba(245,196,81,0.7)" : "1px solid rgba(255,255,255,0.18)", background: shot.isSupplement ? "rgba(245,196,81,0.18)" : "transparent", color: shot.isSupplement ? "#f5c451" : "rgba(255,255,255,0.7)" }}>补镜头</button>
 							</div>
-							{/* 第二行：仅本分镜的视频参数（家族→渠道/线路→模型→方法→时长/比例/分辨率→真人图→放大），
-							    与 Frame161195 分镜行第二行逐项同源；写 shot.overrides/durationSec=提交层读的字段 */}
-							<div title="以下参数仅对本分镜生效（项目级默认在右栏「属性」页）" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-								<select title="模型家族（模型种类，仅本分镜）" value={curFamGrp ? `f:${curFamGrp.familyId}` : ""} onChange={(e) => { if (e.target.value) setShotVideoModel(modelForFamily(e.target.value.slice(2), curVideoModel, videoFamilies)); }} style={miniSel}>
-									{!curFamGrp && <option value="" style={miniOpt}>未选模型</option>}
-									{videoFamilies.map((f) => <option key={f.familyId} value={`f:${f.familyId}`} style={miniOpt}>{f.familyName}</option>)}
-								</select>
-								{curFamGrp && (
-									<select title="渠道/线路（仅本分镜）" value={curSrcCh ? sourceValueOf(curVideoModel, curFamChs) : ""} onChange={(e) => setShotVideoModel(modelForSource(e.target.value, curVideoModel, curFamChs))} style={miniSel}>
-										{curFamChs.map((ch) => <option key={ch.channel} value={`src:${ch.channel}`} style={miniOpt}>{ch.channel}</option>)}
-									</select>
-								)}
-								{curSrcCh && (
-									<select title="模型（本线路款式，仅本分镜）" value={curVideoModel} onChange={(e) => setShotVideoModel(e.target.value)} style={miniSel}>
-										{curSrcCh.choices.map((v) => <option key={v.id} value={v.id} style={miniOpt}>{v.variantLabel}</option>)}
-									</select>
-								)}
+							{/* 第二行：仅本分镜的视频参数（方法→时长/比例/分辨率→真人图→放大），
+							    写 shot.overrides/durationSec = 提交层 genShotVideo 读的字段。
+							    ⚠ 第251轮用户定稿：**模型选择只在右栏属性栏**——本行原来的 家族/线路/模型
+							    三个下拉与右栏重复且冲突，已删除（overrides.videoModelKey 的**读取链保留**，存量数据仍生效）。 */}
+							<div title="以下参数仅对本分镜生效（模型与项目级默认在右栏「属性」页）" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
 								{curMethods.length > 1 && (
 									<select title="方法（仅本分镜）：首尾帧=首帧（故事板图或素材第1张图）+ 尾帧（素材下一张图）" value={curMethod} onChange={(e) => setShotOverride({ method: e.target.value })} style={miniSel}>
 										{curMethods.map((k) => <option key={k} value={k} style={miniOpt}>{METHOD_LABELS[k]}</option>)}
@@ -367,14 +346,16 @@ function WorkbenchBody({ episodeId, shotId, segId, imageSlot }: { episodeId: str
 				<div style={{ ...secBox, flexShrink: 0 }}>
 					<div style={{ display: "flex", gap: 6 }}>
 						<button style={btnSt("plain", sbRunning)} disabled={sbRunning}
-							title={(shot.storyboardUri ? "重新生成故事板图（新结果加入历史）" : "按提示词生成故事板图") + (imageSlot ? "；成功后本图片占位自动替换为图片片段" : "")}
-							onClick={() => void genShotStoryboard(episodeId, shotId, imageSlot ? { swapSegId: segId } : undefined)}>
+							title={(shot.storyboardUri ? "重新生成故事板图（新结果加入历史）" : "按提示词生成故事板图") + (imageSlot ? (isMedia ? "；成功后落在**上方新占位**，原结果原位保留" : "；成功后本图片占位自动替换为图片片段") : "")}
+							onClick={() => void (imageSlot ? regenerateShotResult(segId, "storyboard") : genShotStoryboard(episodeId, shotId))}>
 							{sbRunning ? "生成中…" : shot.storyboardUri ? "重新生成故事板" : "生成故事板"}
 						</button>
 						<button style={btnSt("primary", vidRunning)} disabled={vidRunning}
-							title={shot.videoUri ? "重新生成视频（新结果加入历史；成功后替换本占位符）" : "生成视频（成功后本占位符自动替换为视频片段）"}
-							onClick={() => void genShotVideo(episodeId, shotId, { swapSegId: segId })}>
-							{vidRunning ? "生成中…" : shot.videoUri ? "重新生成视频" : "生成视频"}
+							title={isMedia
+								? "重新生成视频：新结果落在**上方新占位**，本成片原位保留（上下层即版本堆叠）"
+								: shot.videoUri ? "重新生成视频（新结果加入历史；成功后替换本占位符）" : "生成视频（成功后本占位符自动替换为视频片段）"}
+							onClick={() => void regenerateShotResult(segId, "video")}>
+							{vidRunning ? "生成中…" : isMedia || shot.videoUri ? "重新生成视频" : "生成视频"}
 						</button>
 					</div>
 					<JobChips shotId={shotId} field="storyboard" />
@@ -396,13 +377,27 @@ function WorkbenchBody({ episodeId, shotId, segId, imageSlot }: { episodeId: str
 	);
 }
 
-/** 中栏「AI 工作台」页：绑定 useWorkbenchTarget（选中占位符优先，无选中回退播放头下主轨占位符——
- *  补充3「默认显示当前时间的 ai 界面」：播放头停在待生成片段上即直接绑定它，三栏常显不黑屏）；
- *  两处都无目标（时间轴空/播放头在成片或空白上且无选中）才显示引导。 */
+/**
+ * 中栏「AI 工作台」页：绑定 useWorkbenchTarget（选中优先，无选中回退播放头下主轨片段）。
+ * ⚠ 第251轮需求⑦：绑定条件是「**有 shotRef**」而不是「是占位符」——占位变成片后
+ *   shotRef 原样保留，工作台数据（原文/提示词/垫图/历史）一直都在，只是以前没给入口，
+ *   用户就「出错了连修改的方案都没有」。成片上重跑走 regenerateShotResult（新结果落上方新占位）。
+ * 无目标（时间轴空 / 播放头在纯素材片段或空白上且无选中）才显示引导。
+ */
 export function RtcShotAiWorkbench() {
 	const target = useWorkbenchTarget();
 	const ref = target?.seg.shotRef;
 	if (!target || !ref) return <WorkbenchHint />;
 	const imageSlot = (target.seg.genKind ?? target.seg.media) === "image";
-	return <WorkbenchBody key={target.seg.id} episodeId={ref.episodeId} shotId={ref.shotId} segId={target.seg.id} imageSlot={imageSlot} />;
+	const isMedia = target.seg.kind === "media";
+	return (
+		<WorkbenchBody
+			key={target.seg.id}
+			episodeId={ref.episodeId}
+			shotId={ref.shotId}
+			segId={target.seg.id}
+			imageSlot={imageSlot}
+			isMedia={isMedia}
+		/>
+	);
 }

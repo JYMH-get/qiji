@@ -1,4 +1,5 @@
 import { getAdapter } from "./modelAdapter";
+import type { TaskExtra } from "./adapters/types";
 
 /**
  * 集中式批量轮询管理器（取代每节点各自的 setTimeout/setInterval 轮询）。
@@ -22,6 +23,8 @@ export type ProgressCallback = (
 	partialText?: string,
 	/** 服务端未转存的原始时效直链结果（meta.rehosted=false）——调用方需本机下载+上传转存（第158轮） */
 	rawLink?: boolean,
+	/** 排队/阶段情报（第251轮）：⚠ 统一以**尾部可选对象**追加，勿再往后加位置参数 */
+	extra?: TaskExtra,
 ) => void;
 
 export class TaskTracker {
@@ -69,7 +72,11 @@ export class TaskTracker {
 						// success/failed/lost 均为终态：停止轮询（lost=服务端丢任务，由上层提示+提供重连）
 						if (res.status === "success" || res.status === "failed" || res.status === "lost") this.finish(t.taskId);
 						else if (res.status === "running" && res.partialText) streaming = true; // 文本流式中 → 下轮快轮询
-						this.onProgress(t.nodeId, res.progress, res.status, res.resultUri, res.error, res.assetId, res.partialText, res.rawLink);
+						this.onProgress(t.nodeId, res.progress, res.status, res.resultUri, res.error, res.assetId, res.partialText, res.rawLink, {
+							queuePosition: res.queuePosition,
+							queueTotal: res.queueTotal,
+							stageText: res.stageText,
+						});
 					} catch (err) {
 						// 网络/网关抖动：保留任务，下一轮继续（不立即失败）
 						this.onProgress(t.nodeId, 50, "running", undefined, (err as Error).message);

@@ -49,4 +49,24 @@ describe("videoMethods 要求层（catalog params 服务端控档）", () => {
 		expect(clampDurationTo(15, [5, 10, 15])).toBe(15);
 		expect(clampDurationTo(7, [])).toBe(7);
 	});
+
+	// 第251轮：本地渠道档位修好后，存量值会遇上新档位集
+	it("clampToOptions：大小写不敏感且返回档位集的规范写法（LibTV H3 声明 768P/2K 大写）", () => {
+		expect(clampToOptions("768p", ["768P", "2K"])).toBe("768P");
+		expect(clampToOptions("2k", ["768P", "2K"])).toBe("2K");
+	});
+
+	it("clampToOptions：画质档越档→就近取档（并列取小），不掉首档静默降质", () => {
+		// 存量 720p 遇上 ComfyUI 的四档 → 768p（旧行为会掉到首档 480p）
+		expect(clampToOptions("720p", ["480p", "640p", "768p", "1080p"])).toBe("768p");
+		expect(clampToOptions("720p", ["480p", "640p", "768p", "1080p"], "480p")).toBe("768p"); // 就近优先于缺省
+		expect(clampToOptions("560p", ["480p", "640p"])).toBe("480p"); // 并列取小
+		expect(clampToOptions("1080p", ["768P", "2K"])).toBe("768P"); // p 与 K 混排仍单调
+	});
+
+	it("clampToOptions：非档位串（比例/画质）解析不出数值 → 保持「缺省→首档」语义", () => {
+		expect(clampToOptions("21:9", ["16:9", "9:16"], "9:16")).toBe("9:16");
+		expect(clampToOptions("21:9", ["16:9", "9:16"])).toBe("16:9");
+		expect(clampToOptions("ultra", ["low", "high"])).toBe("low");
+	});
 });

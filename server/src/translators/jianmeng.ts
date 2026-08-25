@@ -19,13 +19,25 @@ import type { GenerateRequest, AssetRef } from "../contract.ts";
 /** 视频翻译器通用回执（submit→poll 两段；各渠道翻译器共用，见 videos.ts / index.ts 的 VideoDriver） */
 export type VideoSubmit = { ok: true; taskId: string } | { ok: false; error: string };
 export type VideoPoll =
-	| { status: "queued" | "running"; progress: number }
+	| {
+		status: "queued" | "running"; progress: number;
+		/** 排队位次（1 基）+ 同队总数（第251轮）：**仅服务端自有队列**（奇迹云实例池）会带；
+		 *  外部上游渠道无排队情报，一律不带（其余 23 个视频驱动零改动）。 */
+		queuePosition?: number;
+		queueTotal?: number;
+		/** 阶段文案（通用通道）：无 queuePosition 时客户端直接显示它替代「生成中 X%」 */
+		stageText?: string;
+		/** 已定格的排队毫秒（派单后带上，供终态写进请求记录；排队中不计——还没定格） */
+		queuedMs?: number;
+	}
 	| {
 		status: "completed"; videoUrl: string; coverUrl?: string;
 		/** 结果下载需携带的请求头（第153轮：简梦Z 图片结果链接须带 Bearer 且仅本站域下发，防密钥外泄）；缺省=裸 fetch */
 		resultHeaders?: Record<string, string>;
+		/** 排队毫秒（第251轮，终态直报；缺省时轮询循环回退用途中最后一次见到的值） */
+		queuedMs?: number;
 	}
-	| { status: "failed"; error: string };
+	| { status: "failed"; error: string; queuedMs?: number };
 
 /**
  * 把素材引用解析为公网可达 URL（垫图/参考图）。

@@ -46,6 +46,7 @@ export type Purpose =
   | "image.upscale"          // 图像超分/画质增强（火山引擎 MediaKit 同步接口，inputs.images[0] 为源图）
   | "image.viewangle"        // 图片转视角（多角度编辑器）：客户端只传机位参数（params.viewAngle），提示词由服务端按模板渲染（正文不下发）
   | "image.panorama"         // 720°全景：原图→equirectangular 2:1 全景图；前置提示词=服务端模板（正文不下发），客户端可带 params.panorama.custom 补充
+  | "image.cover"            // 封面生成（AI 工具箱）：描述 → 海报级封面图；提示词模板 tool.cover.main 管理端维护（正文不下发）
   | "audio.tts"              // 文本转语音
   | "chat.reply"             // AI 对话回复（画布 AI对话节点，多轮记忆）
   | "chat.summarize";        // 简一助手对话总结（上下文超限时【总结本次对话】/【总结至新窗口继续】；提示词模板管理端维护，正文不下发）
@@ -135,6 +136,14 @@ export interface TaskState {
     text?: string;
   };
   error?: string;
+  /** 排队位次（1 基）——仅「服务端自有队列排队中」的任务有值（第251轮，当前=奇迹云实例池）。
+   *  ⚠ status 仍为 "running"（不改成 "queued"，避免牵动客户端一堆在途判定）；
+   *  客户端按本字段有无切换「排队中 · 第 N 位」/「生成中 X%」文案。 */
+  queuePosition?: number;
+  /** 同队总数（与 queuePosition 配对显示「第 3/8 位」；缺省只显示位次） */
+  queueTotal?: number;
+  /** 服务端阶段文案（通用通道，非奇迹云专属）：有值且无 queuePosition 时直接作为进度文案 */
+  stageText?: string;
 }
 
 // ============================================================
@@ -466,6 +475,9 @@ export const Endpoints = {
   /** 个人消耗统计（第173轮）：今日/昨日/近7天；团长可 ?userId= 查团员、?scope=team 查全团 */
   stats: "/v1/stats",
   redeem: "/v1/redeem",
+  /** 会员（第246轮）：方案+我的会员状态 / 会员卡核销（开通即到账算力+生成折扣） */
+  membership: "/v1/membership",
+  membershipRedeem: "/v1/membership/redeem",
   catalog: "/v1/catalog",
   generate: "/v1/generate",
   task: (taskId: string) => `/v1/tasks/${taskId}`,
@@ -684,6 +696,9 @@ export interface UserLogItem {
   refunded?: boolean;
   error?: string;
   resultLink?: string;
+  /** 排队毫秒（第251轮，终态记录）：durationMs 仍是整段墙钟，实际生成 = durationMs - queuedMs。
+   *  显示走 lib/queueLabel.formatDurationWithQueue → 「365s（956s）」= 实际（排队）。 */
+  queuedMs?: number;
 }
 
 /** 本人请求记录详情（GET /v1/logs/:id）：列表字段 + ①② 两段报文（③④上游报文不下发） */
@@ -707,8 +722,32 @@ export interface UserFeatures {
   libtv?: boolean;
   /** 即梦（Dreamina）授权入口（个人中心 OAuth 设备码登录 + Seedance 2.0 本地 CLI 生成）；生成走用户自己的即梦账号，不经管理端 */
   dreamina?: boolean;
+  /** ComfyUI 直连入口（个人中心绑定用户自己的 ComfyUI 地址 + MiniMax H3 工作流直连生成）；生成走用户自己的实例，不经管理端 */
+  comfyui?: boolean;
   /** 动态视频模式开关（第130轮）modeId→bool（缺省=开）：关=该模式下模型客户端隐藏；服务端 generate/batch 亦 403 */
   modes?: Record<string, boolean>;
+}
+
+/** 会员状态（第246轮，单档；仅生效中才下发——过期即缺省） */
+export interface MembershipInfo {
+  planName: string;
+  /** 到期时间（ISO） */
+  expiresAt: string;
+  /** 生成计费折扣百分比：95=9.5折；100=无折扣 */
+  discountPercent: number;
+}
+
+/** 会员方案（充值中心「会员套餐」展示用；管理端可调，enabled 关闭时不下发） */
+export interface MembershipPlanInfo {
+  name: string;
+  /** 展示价格标签（如「¥99/月」）——纯展示，真实支付暂未接入 */
+  priceLabel?: string;
+  days: number;
+  /** 开通即到账算力（积分） */
+  credits: number;
+  discountPercent: number;
+  /** 权益说明（逐行显示） */
+  benefitsNote?: string;
 }
 
 /** 用户信息（登录/心跳返回） */
@@ -719,6 +758,8 @@ export interface SessionUser {
   credits: number;
   /** 团队概要（第172轮；不在团队则缺省） */
   team?: SessionTeamInfo;
+  /** 会员状态（第246轮；生效中才有） */
+  membership?: MembershipInfo;
   /** 功能开关（缺省=全开）；仅单模式时客户端隐藏 进入模式/模式切换/同步到画布 等交互键 */
   features?: UserFeatures;
 }
@@ -742,4 +783,6 @@ export interface UserStats {
   inviteCode?: string;
   /** 已邀请注册的人数 */
   invitedCount?: number;
+  /** 会员状态（第246轮；生效中才有） */
+  membership?: MembershipInfo;
 }

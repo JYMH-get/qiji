@@ -78,7 +78,12 @@ export async function submitAutodlVideo(req: GenerateRequest, up: Upstream, onUp
 		return { ok: false, error: "autodl 工作流只收图片素材（ref_image / 首尾帧），请先移除视频/音频素材后重试" };
 	}
 
+	// ⚠ 空提示词判定必须在注入图例**之前**——带素材时图例行追加在 "{}" 之后，注入后再判会被绕过
+	//   （第249轮奇迹云沙盒实锤同病；原判定在 body 组装末尾，带图形态失守）
 	let prompt = buildPrompt(req);
+	if (!prompt.trim() || prompt.trim() === "{}") {
+		return { ok: false, error: "提示词不能为空：请填写视频描述后重试" };
+	}
 	prompt = injectReferenceTags(prompt, { images: imgs });
 
 	// ⚠ duration/resolution 原样透传、缺省不发（§9）；上游默认 时长 5s / 分辨率 768p竖
@@ -119,9 +124,6 @@ export async function submitAutodlVideo(req: GenerateRequest, up: Upstream, onUp
 		refs.forEach((u, i) => { body[`ref_image_${i}`] = u; });
 	}
 	body.prompt = prompt;
-	if (!prompt.trim() || prompt.trim() === "{}") {
-		return { ok: false, error: "提示词不能为空：请填写视频描述后重试" };
-	}
 
 	const url = `${up.baseUrl}/api/v1/comfyui/comfyui_workflow/${encodeURIComponent(up.upstreamModel)}`;
 	// ⚠ Authorization 原样 token（不带 Bearer 前缀，文档明写）

@@ -10,6 +10,7 @@ import { trackTask } from "@/services/taskCenter";
 import ModelPicker, { effectiveModelKey } from "@/components/ModelPicker";
 import { mergeExtraction, mergeApply, type ExtractBuckets } from "@/lib/assetMerge";
 import { attachSplitPresets } from "@/lib/splitPresetAttach";
+import { QUICK_SPLIT_ID, QUICK_BLANKLINE_ID, QUICK_N1_ID, QUICK_NN_ID, QUICK_SPLIT_CHOICES, QUICK_SPLIT_IDS } from "@/lib/splitChoices";
 import "@/styles/Frame1693.css";
 
 // 提示词正文已全量交由管理端（catalog 模板）拼接；用户端只发 templateId + 变量(原文/素材) + 模型 + 参数。
@@ -241,11 +242,7 @@ function parseAssetExtraction(text: string): {
 
 // 合并落库逻辑已抽到 @/lib/assetMerge（第85轮）：画布资产拆分节点与本页共用同一条入库链路。
 
-// 剧集拆分「快速拆分」选项 id（均不调用大模型，纯本地确定性切分）。
-const QUICK_SPLIT_ID = "__quick_split__";          // 按「第N集/章/回」标记
-const QUICK_BLANKLINE_ID = "__quick_blankline__";  // 按连续两次换行（空行）
-const QUICK_N1_ID = "__quick_n1__";                // n-1：按空行切大集，编号 1-1, 2-1, 3-1
-const QUICK_NN_ID = "__quick_nn__";                // n-n：大集(空行)内再按单换行切小集，编号 1-1,1-2,…,2-1,…（更细）
+// 剧集拆分「快速拆分」选项 id：第243轮抽到 @/lib/splitChoices（新建项目页共用），此处仅 re-import。
 
 // 按空行（连续两次及以上换行）切块
 function splitByBlankLines(scriptText: string): string[] {
@@ -355,21 +352,26 @@ const Frame1693 = () => {
         () => (allTemplates ?? []).filter((t) => t.purpose === "script.analyze" && t.category !== "内部"),
         [allTemplates],
     );
-    const [selectedTemplateId, setSelectedTemplateId] = useState("");
-    // 默认选中 catalog 默认模板（isDefault 优先）
-    useEffect(() => {
-        if (extractTemplates.length === 0) { setSelectedTemplateId(""); return; }
-        if (!extractTemplates.some((t) => t.id === selectedTemplateId)) {
-            setSelectedTemplateId((extractTemplates.find((t) => t.isDefault) ?? extractTemplates[0]).id);
-        }
-    }, [extractTemplates, selectedTemplateId]);
+    // 第243轮：拆分模板选择随项目持久化（mediaSettings，新建项目页可预设；此前是会话态换页即丢）。
+    // 存量值/失效值回落 catalog 默认款（isDefault 优先），改选即回写 setMediaSettings。
+    const assetExtractTplStored = useProjectStore((s) => s.mediaSettings?.assetExtractTplId);
+    const selectedTemplateId = useMemo(() => {
+        if (extractTemplates.length === 0) return "";
+        if (assetExtractTplStored && extractTemplates.some((t) => t.id === assetExtractTplStored)) return assetExtractTplStored;
+        return (extractTemplates.find((t) => t.isDefault) ?? extractTemplates[0]).id;
+    }, [extractTemplates, assetExtractTplStored]);
 
     // 剧集拆分模板：内置「快速拆分」(不调用大模型，按"第N集/章/回"标记确定性切) + catalog 剧集类模板。
     const episodeTemplates = useMemo(
         () => (allTemplates ?? []).filter((t) => t.category === "剧集"),
         [allTemplates],
     );
-    const [episodeTemplateId, setEpisodeTemplateId] = useState(QUICK_NN_ID); // 默认 n-n（第121轮用户定）
+    // 默认 n-n（第121轮用户定）；持久化值失效（模板被删/catalog 未到货）时回落 n-n
+    const episodeTplStored = useProjectStore((s) => s.mediaSettings?.episodeTplId);
+    const episodeTemplateId = useMemo(() => {
+        if (episodeTplStored && (QUICK_SPLIT_IDS.has(episodeTplStored) || episodeTemplates.some((t) => t.id === episodeTplStored))) return episodeTplStored;
+        return QUICK_NN_ID;
+    }, [episodeTplStored, episodeTemplates]);
 
     const storeScriptText = useProjectStore((s) => s.scriptText);
     useEffect(() => {
@@ -857,13 +859,12 @@ const Frame1693 = () => {
                                                     <span style={fieldLabelStyle}>剧集拆分模板</span>
                                                     <select
                                                         value={episodeTemplateId}
-                                                        onChange={(e) => setEpisodeTemplateId(e.target.value)}
+                                                        onChange={(e) => useProjectStore.getState().setMediaSettings({ episodeTplId: e.target.value })}
                                                         style={fieldSelectStyle}
                                                     >
-                                                        <option value={QUICK_SPLIT_ID} style={{ background: "#1f1f2e" }}>快速·按「第N集」标记</option>
-                                                        <option value={QUICK_BLANKLINE_ID} style={{ background: "#1f1f2e" }}>快速·按连续两次换行（空行）</option>
-                                                        <option value={QUICK_N1_ID} style={{ background: "#1f1f2e" }}>快速·n-1（逢主编号拆分 1-1,2-1,3-1；兼容 场1-1）</option>
-                                                        <option value={QUICK_NN_ID} style={{ background: "#1f1f2e" }}>快速·n-n（逢编号拆分 1-1,1-2,2-1，更细；兼容 场1-1）</option>
+                                                        {QUICK_SPLIT_CHOICES.map((c) => (
+                                                            <option key={c.id} value={c.id} style={{ background: "#1f1f2e" }}>{c.label}</option>
+                                                        ))}
                                                         {episodeTemplates.map((t) => (
                                                             <option key={t.id} value={t.id} style={{ background: "#1f1f2e" }}>
                                                                 {t.name}
@@ -906,7 +907,7 @@ const Frame1693 = () => {
                                                     <span style={fieldLabelStyle}>资产拆分模板</span>
                                                     <select
                                                         value={selectedTemplateId}
-                                                        onChange={(e) => setSelectedTemplateId(e.target.value)}
+                                                        onChange={(e) => useProjectStore.getState().setMediaSettings({ assetExtractTplId: e.target.value })}
                                                         style={fieldSelectStyle}
                                                     >
                                                         {extractTemplates.length === 0 && (

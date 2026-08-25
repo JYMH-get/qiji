@@ -10,7 +10,7 @@ import { useCommitStore, createInitialCommits } from "./commitStore";
 import type { QijiProject, ProjectModelConfig, AssetVariantLite, VideoEpisode, StoryboardShot, PendingGen, InferTask, AssetBlob, MediaSettings, UiSnapshot, GenMeta, RefImgMemo, CanvasData } from "@/services/projectFile";
 import type { RtcDoc } from "@/types/rtc";
 import { toPortableProjectData } from "@/lib/portableProject";
-import { sanitizeAssetBlobs } from "@/lib/blobSanitize";
+import { sanitizeAssetBlobs, mergeAssetBlob, blobMatchesUri } from "@/lib/blobSanitize";
 import { collectLocalRefs, applyRefRewrites, fileNameOf } from "@/lib/importCopy";
 import { useSettingsStore } from "./settingsStore";
 import { isProjectWriter } from "@/services/windowSync";
@@ -546,10 +546,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   addInferTask: (t) => set((s) => ({ inferTasks: [...s.inferTasks, t], isDirty: true })),
   updateInferTask: (id, patch) => set((s) => ({ inferTasks: s.inferTasks.map((x) => x.id === id ? { ...x, ...patch } : x), isDirty: true })),
   removeInferTask: (id) => set((s) => ({ inferTasks: s.inferTasks.filter((x) => x.id !== id), isDirty: true })),
-  registerAssetBlob: (blob) => set((s) => ({ assetBlobs: { ...s.assetBlobs, [blob.id]: { ...s.assetBlobs[blob.id], ...blob } }, isDirty: true })),
+  registerAssetBlob: (blob) => set((s) => ({ assetBlobs: { ...s.assetBlobs, [blob.id]: mergeAssetBlob(s.assetBlobs[blob.id], blob) }, isDirty: true })),
   blobByUri: (uri) => {
     if (!uri) return undefined;
-    return Object.values(get().assetBlobs).find((b) => b.localUri === uri || b.url === uri || b.srcUri === uri);
+    return Object.values(get().assetBlobs).find((b) => blobMatchesUri(b, uri));
   },
   addGenMeta: (uri, meta) => set((s) => ({ genMeta: { ...s.genMeta, [uri]: meta }, isDirty: true })),
   setAssetRefImages: (key, refs) => {

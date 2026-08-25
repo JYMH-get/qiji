@@ -444,6 +444,93 @@ async fn download_to(
     Ok(DownloadToResult { bytes: written, skipped: false })
 }
 
+// ── ComfyUI 直连（第三方本地渠道）：webview 受 CORS 约束（ComfyUI 默认不带 CORS 头），
+//    与 download_url 同理走 Rust 原生收发；地址由前端从用户绑定的 ComfyUI 地址拼好传入。──
+
+/// ComfyUI 直连 JSON 请求（GET/POST；绕 webview CORS——ComfyUI 默认不带 CORS 头）。
+/// 返回 { status, body }：非 2xx 也原样返回（前端判 status）；body 解析不了 JSON 时为 null。
+/// timeout_secs 缺省 30s，夹在 [5,600]。
+#[tauri::command]
+async fn comfy_http_json(
+    method: String,
+    url: String,
+    body: Option<serde_json::Value>,
+    timeout_secs: Option<u64>,
+) -> Result<serde_json::Value, String> {
+    let m = method.trim().to_ascii_uppercase();
+    if m != "GET" && m != "POST" {
+        return Err(format!("不支持的请求方法：{method}（只接受 GET/POST）"));
+    }
+    let client = reqwest::Client::new();
+    let mut req = if m == "GET" { client.get(&url) } else { client.post(&url) };
+    req = req.timeout(std::time::Duration::from_secs(
+        timeout_secs.unwrap_or(30).clamp(5, 600),
+    ));
+    if m == "POST" {
+        if let Some(b) = &body {
+            req = req.json(b);
+        }
+    }
+    let resp = req.send().await.map_err(|e| format!("请求失败：{e}"))?;
+    let status = resp.status().as_u16();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("读取响应失败：{e}"))?;
+    // body 解析不了 JSON（如 HTML 错误页/空体）→ null，由前端按 status 判断
+    let parsed = serde_json::from_str::<serde_json::Value>(&text).unwrap_or(serde_json::Value::Null);
+    Ok(serde_json::json!({ "status": status, "body": parsed }))
+}
+
+/// ComfyUI 素材上传（multipart：文件字段 image=本地文件字节（文件名 field_filename）+ 文本字段 overwrite=true）。
+/// url = 前端拼好的 {base}/upload/image；返回同 comfy_http_json 的 { status, body }。
+/// timeout_secs 缺省 120s，夹在 [10,600]；文件读不到/超过 200MB 明确报错。
+#[tauri::command]
+async fn comfy_upload_file(
+    url: String,
+    field_filename: String,
+    file_path: String,
+    timeout_secs: Option<u64>,
+) -> Result<serde_json::Value, String> {
+    const MAX_BYTES: u64 = 200 * 1024 * 1024;
+    let path = PathBuf::from(&file_path);
+    let md = std::fs::metadata(&path).map_err(|e| format!("读取文件信息失败：{e}"))?;
+    if !md.is_file() {
+        return Err(format!("不是文件：{file_path}"));
+    }
+    if md.len() > MAX_BYTES {
+        return Err(format!(
+            "文件过大（{:.1}MB > 200MB 上限），拒绝上传",
+            md.len() as f64 / 1048576.0
+        ));
+    }
+    // spawn_blocking 读字节，不阻塞异步运行时（与 run_libtv 同惯例；不引入 tokio 直接依赖）
+    let bytes = tauri::async_runtime::spawn_blocking(move || std::fs::read(&path))
+        .await
+        .map_err(|e| format!("读取文件任务失败：{e}"))?
+        .map_err(|e| format!("读取文件失败：{e}"))?;
+    let part = reqwest::multipart::Part::bytes(bytes).file_name(field_filename);
+    let form = reqwest::multipart::Form::new()
+        .part("image", part)
+        .text("overwrite", "true");
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .multipart(form)
+        .timeout(std::time::Duration::from_secs(
+            timeout_secs.unwrap_or(120).clamp(10, 600),
+        ))
+        .send()
+        .await
+        .map_err(|e| format!("上传失败：{e}"))?;
+    let status = resp.status().as_u16();
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("读取响应失败：{e}"))?;
+    let parsed = serde_json::from_str::<serde_json::Value>(&text).unwrap_or(serde_json::Value::Null);
+    Ok(serde_json::json!({ "status": status, "body": parsed }))
+}
+
 // ── LibTV CLI：随包内置 libtv.exe，供「个人中心 LibTV 授权 + Seedance 2.0 生成」原生调用 ──
 // 凭据/本地状态目录固定为 LIBTV_CONFIG_DIR=<appData>/libtv（与用户自装的 ~/.libtv 隔离）；
 // 前端一律显式传 -p <画布UUID>，不依赖 cwd 的 .libtv/project.json 状态。
@@ -905,7 +992,7 @@ pub fn run() {
                 label,
                 tauri::WebviewUrl::App("index.html".into()),
             )
-            .title("灵创工场")
+            .title("Qiji")
             .inner_size(1024.0, 768.0)
             .decorations(false)
             .disable_drag_drop_handler()
@@ -960,6 +1047,8 @@ pub fn run() {
             reverse_media,
             download_url,
             download_to,
+            comfy_http_json,
+            comfy_upload_file,
             run_libtv,
             run_dreamina,
             open_url,

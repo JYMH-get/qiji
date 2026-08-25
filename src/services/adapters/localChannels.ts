@@ -12,6 +12,7 @@
  */
 import { LIBTV_CHANNEL, LIBTV_MODEL_CHOICES } from "./libtvAdapter";
 import { DREAMINA_CHANNEL, DREAMINA_MODEL_CHOICES } from "./dreaminaAdapter";
+import { COMFYUI_CHANNEL, COMFYUI_MODEL_CHOICES } from "./comfyuiAdapter";
 
 export interface LocalChannelChoice {
 	id: string;
@@ -44,6 +45,7 @@ export interface ModelOpt {
 const CHANNELS: LocalChannelInfo[] = [
 	{ channel: LIBTV_CHANNEL, choices: LIBTV_MODEL_CHOICES },
 	{ channel: DREAMINA_CHANNEL, choices: DREAMINA_MODEL_CHOICES },
+	{ channel: COMFYUI_CHANNEL, choices: COMFYUI_MODEL_CHOICES },
 ];
 
 /** 无模式管理端模型的兜底源名（第131轮改「默认」——服务端迁移已把无模式视频模型并入 qiji 模式，

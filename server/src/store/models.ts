@@ -5,7 +5,7 @@
  * 管理端可自定义加载第三方模型、查看/编辑翻译格式。改动后 bump catalog 版本。
  */
 import { loadJson, saveJson } from "./db.ts";
-import { CH_GAISC, CH_JIANMENG, CH_VOLC, CH_SUDASHUI, CH_AISTARS, CH_HUAYING, CH_DIMENSIO, CH_AIVIDE, CH_JIANMENGP, CH_MUSEM, CH_JMZ, CH_JMH, CH_YUNWU, CH_JMT, CH_JMF, CH_OVERSEAS, CH_SUANLI, CH_YALI_OPENAI, CH_YALI_GEMINI, CH_SKYLEE, CH_CONGGE, CH_AUTODL } from "./channels.ts";
+import { CH_GAISC, CH_JIANMENG, CH_VOLC, CH_SUDASHUI, CH_AISTARS, CH_HUAYING, CH_DIMENSIO, CH_AIVIDE, CH_JIANMENGP, CH_MUSEM, CH_JMZ, CH_JMH, CH_YUNWU, CH_JMT, CH_JMF, CH_OVERSEAS, CH_SUANLI, CH_YALI_OPENAI, CH_YALI_GEMINI, CH_SKYLEE, CH_CONGGE, CH_AUTODL, CH_QIJICLOUD, CH_BYS, CH_QIQI } from "./channels.ts";
 import { audienceChain, agentModelBlocked, audienceGroupId } from "./agents.ts";
 import { normMatLimits, type MatLimits } from "../materialLimits.ts";
 import type { ParamField, Capability } from "../contract.ts";
@@ -41,6 +41,9 @@ export type Protocol =
 	| "congge-image"
 	| "congge-video"
 	| "autodl-video"
+	| "qijicloud-comfy"
+	| "bys-video"
+	| "qiqi-video"
 	| "stub";
 
 /**
@@ -166,6 +169,10 @@ interface Store {
 	 *  50 线 sd2.0 时长放宽/比例档更新）——全部守卫式只改「仍为旧种子值」的字段，不冲管理端改动；
 	 *  新 11 视频+1 图片模型走 ③ 补种 */
 	xcCaps216Version?: number;
+	/** 定向迁移版本（第242轮）：简梦P 按 2026-08 新版文档（api.pixellelabs.com）收敛——v1 删 Sora 系 4 款进墓碑
+	 *  （新 H3video-2k 走 ③ 补种）；v2（同轮补充，用户令恢复 gemini-omni-flash/veo31-fast）：对已跑过首版 v1
+	 *  （曾删 6 款）的库出墓碑+定向补种这两款 */
+	jmpH3Version?: number;
 }
 
 const FILE = "models.json";
@@ -466,46 +473,41 @@ const AV_PARAMS: ParamField[] = [
 	{ key: "aspect_ratio", label: "宽高比", type: "enum", options: ["16:9", "9:16"], default: "16:9" },
 ];
 
-// ── 简梦P（Sora/Gemini/Veo 系）6 模型（第147轮接入；第159轮按 2026-07 文档 增 gemini-omni-flash、删 veo31/veo31-ref）──
+// ── 简梦P 3 模型（第147轮接入；第159轮 +gemini-omni-flash −veo31/-ref；第242轮按 2026-08 新版文档收敛 +H3、
+//    删 Sora 系；同轮补充：用户令**恢复 gemini-omni-flash / veo31-fast**——新文档虽言「当前仅支持 H3video-2k」，
+//    这两款按旧形态保留接入，上游若真不再支持=明确报错+失败自动退款，无静默风险）──
 // 外显模型名=上游公开模型名（用户定「模型为 api 文档所示」，文档即对外名、无内部编码可泄）。
-// 能力矩阵（按文档「Model Capability Matrix」，2026-07 版）：
-//   sora2            720p 固定 · 16:9/9:16 · 时长 4/8/12 · 图≤1、无视频/音频参考
-//   sora-v3-pro      720p 固定 ┐ Sora V3 通用：六比例 · 时长 4-15 整数 · 图≤9/视≤3/音≤3（合计≤12）
-//   sora-v3-pro-1080p 1080p 固定 ├ 音频参考须搭配图/视频；提示词≤2500 字符（守卫见 translators/jianmengp.ts）
-//   sora-v3-fast     720p 固定 ┘
-//   gemini-omni-flash 720p/1080p（默认 720p）· 16:9/9:16 · 时长 4/6/8/10 · 图≤5（风格参考）/视≤1（源视频参考）、无音频
-//   veo31-fast       720p/1080p（默认 1080p）· 16:9/9:16 · 时长 4/6/8 · 图≤2、无视频/音频
-// 分辨率由模型名固定（Sora 系）→ 参数仅展示单档、翻译器不随请求下发；gemini/veo31 系才发 resolution。
-// veo31-fast 的图片即帧参考（1 图=首帧、2 图=首+尾帧，上游按语义解释，无独立「方法」维度 → 不声明 methods）。
-// ⚠ veo31（2026-07 文档清单除名、仅存能力矩阵）/ veo31-ref（文档整体消失）已于第159轮删除进墓碑（⑤g 迁移，
-//   用户定「没有了就删掉」）——上游若恢复，管理端重建同 id 即可（veo31 翻译器守卫仍在）。
-// matLimits 按文档矩阵下种（管理端可再收紧；不入 MODEL_REFRESH_FIELDS，seed 刷新不冲）。
-// 上游未公布单价 → 按秒**占位价**（上线前管理端定真价）；兜底价=每秒价×该模型最长时长（「默认按最高」规则，第134轮补充2）。
-const JMP_SORA_V3_ASPECTS = ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16"];
-const jmpSora2Params = (): ParamField[] => [
-	{ key: "resolution", label: "分辨率", type: "enum", options: ["720p"], default: "720p" },
-	{ key: "duration", label: "时长", type: "enum", options: ["4", "8", "12"], default: "12", unit: "s" },
-	{ key: "aspect_ratio", label: "宽高比", type: "enum", options: ["16:9", "9:16"], default: "16:9" },
-];
-const jmpSoraV3Params = (res: string): ParamField[] => [
-	{ key: "resolution", label: "分辨率", type: "enum", options: [res], default: res },
-	{ key: "duration", label: "时长", type: "number", default: 15, min: 4, max: 15, step: 1, unit: "s" },
-	{ key: "aspect_ratio", label: "宽高比", type: "enum", options: JMP_SORA_V3_ASPECTS, default: "16:9" },
-];
-const jmpVeoParams = (): ParamField[] => [
-	{ key: "resolution", label: "分辨率", type: "enum", options: ["1080p", "720p"], default: "1080p" },
-	{ key: "duration", label: "时长", type: "enum", options: ["4", "6", "8"], default: "8", unit: "s" },
-	{ key: "aspect_ratio", label: "宽高比", type: "enum", options: ["16:9", "9:16"], default: "16:9" },
+// 2026-08 新版文档（Base https://api.pixellelabs.com，本轮起文档明给——渠道 Base URL 按它配）：
+//   H3video-2k（MiniMax Hailuo H3）：分辨率仅 2K · 时长仅 15s（字符串下发，翻译器换算）· 六比例 ·
+//   图≤9/视≤3/音≤3（合计≤12）· 不支持尾帧图；参考视频/音频时长约束上游自校验。
+//   classifyFamily 认不出 h3video 字样 → familyId 显式钉 fam-minimax（与 sl933/adl/xc903 的 H3 同族）。
+// 恢复两款（能力按第159轮 2026-07 文档矩阵原样；翻译器走旧字段形态 legacy，见 translators/jianmengp.ts）：
+//   gemini-omni-flash 720p/1080p（默认 720p）· 16:9/9:16 · 时长 4/6/8/10 · 图≤5（风格参考）/视≤1、无音频
+//   veo31-fast        720p/1080p（默认 1080p）· 16:9/9:16 · 时长 4/6/8 · 图≤2、无视频/音频（图片即帧参考）
+// matLimits 按文档下种（管理端可再收紧；不入 MODEL_REFRESH_FIELDS，seed 刷新不冲）。
+// 上游未公布单价 → 按秒**占位价**（上线前管理端定真价）；H3 5/秒（2K 档参照算力 H3 1080p 占位尺）
+// 兜底=5×15=75（「默认按最高」规则，第134轮补充2）；恢复两款沿用第159轮占位价（生产存量的管理端真价不受
+// 迁移影响——⑤k v1 不再删它们）。
+const jmpH3Params = (): ParamField[] => [
+	{ key: "resolution", label: "分辨率", type: "enum", options: ["2K"], default: "2K" },
+	{ key: "duration", label: "时长", type: "enum", options: ["15"], default: "15", unit: "s" },
+	{ key: "aspect_ratio", label: "宽高比", type: "enum", options: ["16:9", "9:16", "4:3", "3:4", "1:1", "21:9"], default: "16:9" },
 ];
 const jmpGeminiParams = (): ParamField[] => [
 	{ key: "resolution", label: "分辨率", type: "enum", options: ["720p", "1080p"], default: "720p" },
 	{ key: "duration", label: "时长", type: "enum", options: ["4", "6", "8", "10"], default: "10", unit: "s" },
 	{ key: "aspect_ratio", label: "宽高比", type: "enum", options: ["16:9", "9:16"], default: "16:9" },
 ];
-/** 简梦P 模型简写工厂：外显 id=label=上游模型名、模式 jmp、按秒计费占位价 + 文档矩阵素材上限 */
-const jmp = (id: string, params: ParamField[], perUnit: number, cost: number, matLimits: MatLimits): ModelDef =>
+const jmpVeoParams = (): ParamField[] => [
+	{ key: "resolution", label: "分辨率", type: "enum", options: ["1080p", "720p"], default: "1080p" },
+	{ key: "duration", label: "时长", type: "enum", options: ["4", "6", "8"], default: "8", unit: "s" },
+	{ key: "aspect_ratio", label: "宽高比", type: "enum", options: ["16:9", "9:16"], default: "16:9" },
+];
+/** 简梦P 模型简写工厂：外显 id=label=上游模型名、模式 jmp、按秒计费占位价 + 文档素材上限；
+ *  familyId 缺省交 classifyFamily（gemini/veo 名字认得出），仅 H3 需显式钉 fam-minimax */
+const jmp = (id: string, params: ParamField[], perUnit: number, cost: number, matLimits: MatLimits, familyId?: string): ModelDef =>
 	def(id, id, "video", "jianmengp-video", params, cost, {
-		channelId: CH_JIANMENGP, modeId: "jmp",
+		channelId: CH_JIANMENGP, modeId: "jmp", familyId,
 		costField: "duration", costPerUnit: perUnit, matLimits,
 	});
 
@@ -800,6 +802,113 @@ const adl = (id: string, label: string, res: string[], perUnit: number, mat: Mat
 		costField: "duration", costPerUnit: perUnit, matLimits: mat, ...extra,
 	});
 
+// ── 奇迹云（自建 autodl 实例池 + ComfyUI 直驱）视频 1 模型（第249轮）─────────────────
+// 协议 qijicloud-comfy（submit=入本地队列零外发 HTTP、poll=读池零网络；派单/上传素材/建图/看护
+// 全在 store/qijicloudPool.ts 调度循环）。⚠ upstreamModel=工作流骨架名（translators/comfyGraph.ts
+// 内嵌常量，非任何外部平台的模型名/workflow_id）——管理端勿改，换骨架=改服务端代码。
+// 参数：duration 4-15s；resolution 档经骨架 megapixels 换算（480p 0.4 / 640p 0.7 / 768p 1 / 1080p 2）；
+//   aspect_ratio 种子只开 16:9/9:16/1:1 三档——其余 5 档（4:3/3:4/2:3/3:2/21:9）构图层全认，
+//   管理端给参数加档即放行（翻译器零改动）。
+// 计价：⚠ **用户定稿价**非占位价（2026-08-21 用户定：480p 5 / 640p 8 / 768p 10 / 1080p 20 积分每秒）；
+//   routes 按 resolution 只换价不换上游名；兜底价=1080p 20/秒×15s=300（「默认按最高」规则，第134轮补充2）。
+const qjcParams = (): ParamField[] => [
+	{ key: "duration", label: "时长", type: "number", default: 10, min: 4, max: 15, step: 1, unit: "s" },
+	{ key: "resolution", label: "分辨率", type: "enum", options: ["480p", "640p", "768p", "1080p"], default: "768p" },
+	{ key: "aspect_ratio", label: "宽高比", type: "enum", options: ["16:9", "9:16", "1:1"], default: "16:9" },
+];
+const QJC_ROUTES: ModelRoute[] = [
+	{ when: { resolution: "480p" }, upstreamModel: "jianyi933", cost: 75, costPerUnit: 5 },
+	{ when: { resolution: "640p" }, upstreamModel: "jianyi933", cost: 120, costPerUnit: 8 },
+	{ when: { resolution: "768p" }, upstreamModel: "jianyi933", cost: 150, costPerUnit: 10 },
+	{ when: { resolution: "1080p" }, upstreamModel: "jianyi933", cost: 300, costPerUnit: 20 },
+];
+/** 奇迹云视频模型工厂：模式 qijicloud；id 带 minimax → classifyFamily 自动归 fam-minimax（已核对规则次序） */
+const qjc = (id: string, label: string): ModelDef =>
+	def(id, label, "video", "qijicloud-comfy", qjcParams(), 300, {
+		channelId: CH_QIJICLOUD, upstreamModel: "jianyi933", modeId: "qijicloud",
+		costField: "duration", costPerUnit: 10, routes: QJC_ROUTES,
+		matLimits: { img: 9, vid: 3, aud: 3 },
+	});
+
+// ── BYS（www.boyesir.icu·Boyesir AI）视频 15 模型（第252轮）─────────────────────
+// 协议 bys-video（异步 submit+poll，翻译器见 translators/bys.ts）。上游是聚合站：同一底模有几十条线路，
+// 本轮按用户定「精选 12–15 款」——每个底模 × 每个档位挑**性价比最高**的一条线接入
+// （线上共 69 个模型 id，剩余的都是同底模更贵的平行线；要补随时在管理端新建，协议选 bys-video、
+//  渠道选 BYS、上游名照抄站点清单即可，零代码）。
+//
+// ⚠ 该渠道**只有参考图**（无参考视频/音频、无首尾帧字段）→ 全部模型 matLimits 的 vid/aud 恒 0、
+//   一律不声明 methods（无 frames 方法）；参考图上限文档未给，按底模惯例设（翻译器 CAPS 表同值）。
+// ⚠ 上游模型名逐字照抄（`seedance2.5-10图` 带中文、`minimax-h3 768p` 带空格）——勿"顺手规范化"。
+//
+// 计价：**占位价 = 上游元价 × 100**（用户定，2026-08-21）——按秒款 costPerUnit=积分/秒 且
+//   routes 按 resolution 换价（多数不换上游名，仅 gf 高清系换名）、兜底价 = 每秒价 × 最长时长
+//   （「默认按最高」第134轮补充2）；按次款 cost 固定、不设 costField。**上线前管理端定真价**。
+// ⚠ 单价一律以**上游 402 报价实测**为准，勿只照文档页价目表——第252轮实测抓到两处文档过时：
+//   `lec-ac-seedance-2-5`（文档 0.47/0.58 → 实际 0.65/1.02 元每秒）、
+//   `lec-seedance-2-0-933-stable`（文档 4.2 → 实际 5.5 元/次）。
+//   对账法（零成本，402 不扣费）：余额不足的 Key 提交任务，上游回执 `{"detail":"Insufficient balance:
+//   this generation costs CNY X"}` 直接给出本次报价；按次款用两个不同 duration 各报一次，同价即确认按次。
+const BYS_RATIO: ParamField = { key: "aspect_ratio", label: "宽高比", type: "enum", options: ["16:9", "9:16", "1:1"], default: "16:9" };
+const bysRes = (opts: string[], dflt: string): ParamField =>
+	({ key: "resolution", label: "分辨率", type: "enum", options: opts, default: dflt });
+const bysDur = (min: number, max: number, dflt?: number): ParamField =>
+	({ key: "duration", label: "时长", type: "number", default: dflt ?? max, min, max, step: 1, unit: "s" });
+const BYS_MAT = (img: number): MatLimits => ({ img, vid: 0, aud: 0 });
+/** BYS 按秒计费模型工厂：cost 兜底=每秒价×最长时长；routes 承载「分辨率→档价（+必要时换上游名）」 */
+const bysSec = (
+	id: string,
+	label: string,
+	upstream: string,
+	params: ParamField[],
+	perUnit: number,
+	maxDur: number,
+	routes: ModelRoute[],
+	img: number,
+): ModelDef =>
+	def(id, label, "video", "bys-video", params, perUnit * maxDur, {
+		channelId: CH_BYS, upstreamModel: upstream, modeId: "bys",
+		costField: "duration", costPerUnit: perUnit, routes, matLimits: BYS_MAT(img),
+	});
+/** BYS 按次计费模型工厂：固定 cost、不设 costField（时长可选也不影响价格） */
+const bysOnce = (id: string, label: string, upstream: string, params: ParamField[], cost: number, img: number): ModelDef =>
+	def(id, label, "video", "bys-video", params, cost, {
+		channelId: CH_BYS, upstreamModel: upstream, modeId: "bys", matLimits: BYS_MAT(img),
+	});
+
+// ── QiQi（pidoi.com）视频 2 款（第255轮）──────────────────────────────────
+// 同站同端点同鉴权，但**两套请求形态并存**（翻译器按上游模型名分派，见 translators/qiqi.ts shapeOf）：
+//   content 形态 `seedace-2.0-720p`（《Seedance 视频生成 API 调用文档》）：content[] 多模态数组、
+//     支持首尾帧（role first_frame/last_frame）、**不传 resolution**（编在模型名后缀里）、seconds 4–15；
+//     ⚠ 用音频/视频参考时必须至少 1 张图（上游硬约束）。
+//   flat 形态 `sora-v3-933-pro`（《视频生成接口说明·933真人视频》2026-07-26）：扁平字段
+//     image_url + reference_image_urls/reference_videos/audio_urls、**resolution 必填 720p**、
+//     seconds 仅 15、**不支持尾帧图**、单次素材总数 ≤12（跨类闸在翻译器）。
+// 两形态的**素材引用语法相同**（小写 @image1/@audio1/@video1，用户 2026-08-22 实锤）——都注入图例。
+// ⚠ 上游模型名逐字照抄：`seedace-2.0-720p` 文档全篇少一个 n（**不是** seedance，勿"顺手纠正"）。
+// ⚠ 两款都**不设 resolution 参数**（各自只有 720p 一档；flat 形态由翻译器恒发 720p）。
+// 上游未公布单价（文档：「具体价格以模型广场实时展示为准」，/api/pricing 需登录态）→ 按秒**占位价**
+//   （按同类 720p Seedance 2.0 官转线的 元价×100 折算尺估）；兜底价=每秒价×最长时长 15（「默认按最高」
+//   第134轮补充2）。**上线前管理端定真价**（建议先小额真单对账）。
+const QIQI_RATIO: ParamField = { key: "aspect_ratio", label: "宽高比", type: "enum", options: ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"], default: "16:9" };
+const QIQI_PARAMS: ParamField[] = [
+	{ key: "duration", label: "时长", type: "number", default: 5, min: 4, max: 15, step: 1, unit: "s" },
+	QIQI_RATIO,
+	{ key: "generate_audio", label: "生成音频", type: "enum", options: ["true", "false"], default: "true" },
+];
+/** flat 形态（933 真人）：时长仅 15 一档（文档明示），无 generate_audio 字段 */
+const QIQI_933_PARAMS: ParamField[] = [
+	{ key: "duration", label: "时长", type: "enum", options: ["15"], default: "15", unit: "s" },
+	QIQI_RATIO,
+];
+/** QiQi 模型工厂：按秒占位价 + 933 素材上限；methods 仅 content 形态支持首尾帧 */
+const qiqi = (id: string, label: string, upstream: string, perUnit: number, params: ParamField[], methods?: ("omni" | "frames")[]): ModelDef =>
+	def(id, label, "video", "qiqi-video", params, perUnit * 15, {
+		channelId: CH_QIQI, upstreamModel: upstream, modeId: "qiqi",
+		costField: "duration", costPerUnit: perUnit,
+		matLimits: { img: 9, vid: 3, aud: 3 },
+		...(methods ? { methods } : {}),
+	});
+
 const DEFAULT_MODELS: ModelDef[] = [
 	// ── G-AISC 聚合网关 ──
 	def("gpt-5.5", "GPT-5.5", "text", "openai-chat", TEXT_PARAMS, 10, { channelId: CH_GAISC }),
@@ -902,11 +1011,8 @@ const DEFAULT_MODELS: ModelDef[] = [
 		channelId: CH_AIVIDE, upstreamModel: "aivide-2.0", modeId: "aivide",
 		costField: "duration", costPerUnit: 3,
 	}),
-	// ── 简梦P（Sora/Gemini/Veo 系）6 模型（第147轮；第159轮 +gemini-omni-flash −veo31/-ref）：外显名=上游公开模型名；能力/守卫见 translators/jianmengp.ts ──
-	jmp("sora2", jmpSora2Params(), 2, 24, { img: 1, vid: 0, aud: 0 }),
-	jmp("sora-v3-pro", jmpSoraV3Params("720p"), 3, 45, { img: 9, vid: 3, aud: 3 }),
-	jmp("sora-v3-pro-1080p", jmpSoraV3Params("1080p"), 4.5, 68, { img: 9, vid: 3, aud: 3 }),
-	jmp("sora-v3-fast", jmpSoraV3Params("720p"), 2, 30, { img: 9, vid: 3, aud: 3 }),
+	// ── 简梦P 3 模型（第147轮；第242轮 +H3video-2k −Sora 系；同轮补充恢复 gemini/veo 两款）：外显名=上游公开模型名；能力/守卫见 translators/jianmengp.ts ──
+	jmp("H3video-2k", jmpH3Params(), 5, 75, { img: 9, vid: 3, aud: 3 }, "fam-minimax"),
 	jmp("gemini-omni-flash", jmpGeminiParams(), 3, 30, { img: 5, vid: 1, aud: 0 }),
 	jmp("veo31-fast", jmpVeoParams(), 2, 16, { img: 2, vid: 0, aud: 0 }),
 	// ── 简梦M（MuseAI）4 模型（第151轮）：命名按素材量（K=403 / HU=933）；守卫见 translators/musem.ts ──
@@ -1077,6 +1183,92 @@ const DEFAULT_MODELS: ModelDef[] = [
 	adl("adl-minimax-h3-t2v", "autodl·H3 文生视频", ADL_RES_BASE, 2, { img: 0, vid: 0, aud: 0 }),
 	// 首尾帧工作流：仅 frames 方法（客户端「方法」下拉只此一项）；素材=首帧+尾帧两张图
 	adl("adl-minimax-h3-flf", "autodl·H3 首尾帧", ADL_RES_BASE, 2, { img: 2, vid: 0, aud: 0 }, { methods: ["frames"] }),
+	// ── 奇迹云（自建实例池）1 款（第249轮）：⚠ 上游模型名=工作流骨架名 jianyi933，管理端勿改 ──
+	qjc("qj933-minimax-h3", "MiniMax H3"),
+	// ── BYS（www.boyesir.icu）视频 15 款（第252轮）：按秒 8 款 ─────────────────────
+	// Seedance 2.0 Mini：上游 0.31/0.43 元每秒（480p/720p），4–12s
+	bysSec("bys900-sd2.0-mini", "BYS·Seedance 2.0 Mini", "seedance-2.0-mini",
+		[bysRes(["480p", "720p"], "720p"), bysDur(4, 12), BYS_RATIO], 43, 12, [
+			{ when: { resolution: "480p" }, upstreamModel: "seedance-2.0-mini", cost: 372, costPerUnit: 31 },
+			{ when: { resolution: "720p" }, upstreamModel: "seedance-2.0-mini", cost: 516, costPerUnit: 43 },
+		], 9),
+	// Seedance 2.0 Fast：0.54/0.75/1.6 元每秒（480p/720p/1080p），4–12s
+	bysSec("bys900-sd2.0-fast", "BYS·Seedance 2.0 Fast", "seedance-fast-2.0",
+		[bysRes(["480p", "720p", "1080p"], "720p"), bysDur(4, 12), BYS_RATIO], 75, 12, [
+			{ when: { resolution: "480p" }, upstreamModel: "seedance-fast-2.0", cost: 648, costPerUnit: 54 },
+			{ when: { resolution: "720p" }, upstreamModel: "seedance-fast-2.0", cost: 900, costPerUnit: 75 },
+			{ when: { resolution: "1080p" }, upstreamModel: "seedance-fast-2.0", cost: 1920, costPerUnit: 160 },
+		], 9),
+	// Seedance 2.0 满血：0.4/0.65/1.1/2.4 元每秒（480p/720p/1080p/4K），4–15s——全站四档最便宜的一条线
+	bysSec("bys900-sd2.0", "BYS·Seedance 2.0", "dvc-seedance-2.0",
+		[bysRes(["480p", "720p", "1080p", "4k"], "720p"), bysDur(4, 15), BYS_RATIO], 65, 15, [
+			{ when: { resolution: "480p" }, upstreamModel: "dvc-seedance-2.0", cost: 600, costPerUnit: 40 },
+			{ when: { resolution: "720p" }, upstreamModel: "dvc-seedance-2.0", cost: 975, costPerUnit: 65 },
+			{ when: { resolution: "1080p" }, upstreamModel: "dvc-seedance-2.0", cost: 1650, costPerUnit: 110 },
+			{ when: { resolution: "4k" }, upstreamModel: "dvc-seedance-2.0", cost: 3600, costPerUnit: 240 },
+		], 9),
+	// Seedance 2.0 特惠：0.65/0.75/0.85/0.85 元每秒（720p/1080p/2K/4K），4–12s——2K/4K 同价，高分辨率最划算
+	bysSec("bys900-sd2.0-special", "BYS·Seedance 2.0 特惠", "sd_2.0_special",
+		[bysRes(["720p", "1080p", "2k", "4k"], "720p"), bysDur(4, 12), BYS_RATIO], 65, 12, [
+			{ when: { resolution: "720p" }, upstreamModel: "sd_2.0_special", cost: 780, costPerUnit: 65 },
+			{ when: { resolution: "1080p" }, upstreamModel: "sd_2.0_special", cost: 900, costPerUnit: 75 },
+			{ when: { resolution: "2k" }, upstreamModel: "sd_2.0_special", cost: 1020, costPerUnit: 85 },
+			{ when: { resolution: "4k" }, upstreamModel: "sd_2.0_special", cost: 1020, costPerUnit: 85 },
+		], 9),
+	// Seedance 2.0 高清：0.78/0.85/0.95/1 元每秒（720p/1080p/2K/4K），4–15s
+	// ⚠ 该线分辨率**编在上游模型名里** → routes 逐档换真名（外显只有一个模型）
+	bysSec("bys900-sd2.0-hd", "BYS·Seedance 2.0 高清（2K/4K）", "sdas-gf-seedance-2.0-720p",
+		[bysRes(["720p", "1080p", "2k", "4k"], "1080p"), bysDur(4, 15), BYS_RATIO], 78, 15, [
+			{ when: { resolution: "720p" }, upstreamModel: "sdas-gf-seedance-2.0-720p", cost: 1170, costPerUnit: 78 },
+			{ when: { resolution: "1080p" }, upstreamModel: "sdas-gf-seedance-2.0-1080p", cost: 1275, costPerUnit: 85 },
+			{ when: { resolution: "2k" }, upstreamModel: "sdas-gf-seedance-2.0-2k", cost: 1425, costPerUnit: 95 },
+			{ when: { resolution: "4k" }, upstreamModel: "sdas-gf-seedance-2.0-4k", cost: 1500, costPerUnit: 100 },
+		], 9),
+	// Seedance 2.5：**4–30s**、参考图 10 张
+	// ⚠ 单价以**上游 402 报价实测为准**（2026-08-21：480p 0.65 / 720p 1.02 元每秒）——
+	//   文档页价目表写的 0.47/0.58 **已过时**，照文档定价会低于成本近一倍（第252轮实测教训）
+	bysSec("bys-sd2.5", "BYS·Seedance 2.5", "lec-ac-seedance-2-5",
+		[bysRes(["480p", "720p"], "720p"), bysDur(4, 30), BYS_RATIO], 102, 30, [
+			{ when: { resolution: "480p" }, upstreamModel: "lec-ac-seedance-2-5", cost: 1950, costPerUnit: 65 },
+			{ when: { resolution: "720p" }, upstreamModel: "lec-ac-seedance-2-5", cost: 3060, costPerUnit: 102 },
+		], 10),
+	// MiniMax H3：0.35 元每秒（720p），6–15s——全站最便宜的 H3
+	bysSec("bys900-minimax-h3", "BYS·MiniMax H3", "lec-minimax-h3",
+		[bysRes(["720p"], "720p"), bysDur(6, 15), BYS_RATIO], 35, 15, [], 9),
+	// Kling 3.0 Turbo：0.85/1/1.15/1.4 元每秒（720p/1080p/2K/4K），4–12s（该站唯一在线的 Kling 线）
+	bysSec("bys300-kling3-turbo", "BYS·Kling 3.0 Turbo", "kling-3.0-turbo",
+		[bysRes(["720p", "1080p", "2k", "4k"], "1080p"), bysDur(4, 12), BYS_RATIO], 85, 12, [
+			{ when: { resolution: "720p" }, upstreamModel: "kling-3.0-turbo", cost: 1020, costPerUnit: 85 },
+			{ when: { resolution: "1080p" }, upstreamModel: "kling-3.0-turbo", cost: 1200, costPerUnit: 100 },
+			{ when: { resolution: "2k" }, upstreamModel: "kling-3.0-turbo", cost: 1380, costPerUnit: 115 },
+			{ when: { resolution: "4k" }, upstreamModel: "kling-3.0-turbo", cost: 1680, costPerUnit: 140 },
+		], 3),
+	// ── BYS 按次 7 款：价格与时长无关（长镜头更划算），故不设 costField ──────────────
+	// 3.5 元/次（2.0 Mini 720p，4–15s）——同底模按次最便宜
+	bysOnce("bys900-sd2.0-mini-x", "BYS·Seedance 2.0 Mini（按次）", "mindou-seedance-video",
+		[bysRes(["720p"], "720p"), bysDur(4, 15), BYS_RATIO], 350, 9),
+	// 3.5 元/次（2.0 Fast 720p，10/15s）
+	bysOnce("bys900-sd2.0-fast-x", "BYS·Seedance 2.0 Fast（按次）", "lec-seedance-fast-ht-720p",
+		[bysRes(["720p"], "720p"), bysDur(10, 15), BYS_RATIO], 350, 9),
+	// 5.5 元/次（满血 933 720p，**4–29s 且不卡人脸**）——长镜头首选
+	bysOnce("bys900-sd2.0-pro", "BYS·Seedance 2.0 满血 · 不卡人脸", "seedance2.0",
+		[bysRes(["720p"], "720p"), bysDur(4, 29, 15), BYS_RATIO], 550, 9),
+	// 933 稳定版，4–15s。⚠ 实测 5.5 元/次（文档写 4.2 已过时，同第252轮 2.5 那款的教训）
+	bysOnce("bys900-sd2.0-stable", "BYS·Seedance 2.0 稳定版", "lec-seedance-2-0-933-stable",
+		[bysDur(4, 15), BYS_RATIO], 550, 9),
+	// 5.3 元/次（2.5 十图、不卡人脸，固定 30s）⚠ 上游名带中文，逐字照抄
+	bysOnce("bys-sd2.5-10img", "BYS·Seedance 2.5 十图 · 不卡人脸", "seedance2.5-10图",
+		[bysDur(30, 30), BYS_RATIO], 530, 10),
+	// 4.5 元/次（MiniMax H3 2K，固定 15s）
+	bysOnce("bys900-minimax-h3-2k", "BYS·MiniMax H3 2K", "lec-h3video-2k",
+		[bysRes(["2k"], "2k"), bysDur(15, 15), BYS_RATIO], 450, 9),
+	// 4.0 元/次（Gemini Omni Flash 扩展版，固定时长）
+	bysOnce("bys500-gemini-omni-flash", "BYS·Gemini Omni Flash", "omni-flash-ext",
+		[bysDur(4, 10), BYS_RATIO], 400, 5),
+	// ── QiQi（pidoi.com）视频 2 款（第255轮）：⚠ 上游名逐字照抄（seedace 少一个 n，非 seedance）──
+	qiqi("qq933-sd2.0-720p", "QiQi·Seedance 2.0 720p", "seedace-2.0-720p", 50, QIQI_PARAMS, ["omni", "frames"]),
+	// 933 真人视频（flat 形态）：固定 15s、不支持尾帧 → 不声明 methods（客户端无「方法」下拉）
+	qiqi("qq933-sora-v3-pro", "QiQi·Sora V3 933 真人 720p", "sora-v3-933-pro", 60, QIQI_933_PARAMS),
 	// ── 内部虚拟模型：第三方本地渠道（LibTV/即梦）手续费——echo 同步成功即扣 cost；hidden 不进 catalog，
 	//    客户端在第三方调用成功后按 id 请求一次完成扣费（管理端「模型」页可调价）。
 	def("fee-thirdparty", "第三方渠道手续费", "text", "echo", [], 5, { hidden: true }),
@@ -1407,6 +1599,28 @@ if (store.models.length === 0) {
 		setAspects("xc933-sd2.0-c", ["16:9", "9:16", "1:1"], AIS_ASPECTS_5);
 		setAspects("xc933-sd2.0-fast-c", ["16:9", "9:16", "1:1"], AIS_ASPECTS_5);
 		store.xcCaps216Version = 1;
+		changed = true;
+	}
+	// ⑤k 定向迁移（第242轮）：简梦P 按 2026-08 新版文档（api.pixellelabs.com）收敛。
+	//    v1：Sora 系 4 款整删进墓碑（该渠道第159轮用户定式「（文档里）没有了就删掉」）；新 H3video-2k 走
+	//    ③ 补种（与全部历史墓碑无撞名，已核对）。⚠ 同轮补充用户令**恢复 gemini-omni-flash/veo31-fast**——
+	//    首版 v1 曾把这两款一并删除，dropIds 已收窄为 4（未跑过首版的库这两款原样保留、管理端真价不动）；
+	//    v2 兜底：对已跑过首版 v1 的库（如本机 dev）出墓碑+定向补种（⑤h 同款——③ 在本段之前跑，
+	//    只能在此补）。版本号幂等。
+	if ((store.jmpH3Version ?? 0) < 1) {
+		const dropIds = ["sora2", "sora-v3-pro", "sora-v3-pro-1080p", "sora-v3-fast"];
+		store.models = store.models.filter((m) => !dropIds.includes(m.id));
+		for (const id of dropIds) if (!store.deletedSeedIds!.includes(id)) store.deletedSeedIds!.push(id);
+		store.jmpH3Version = 1;
+		changed = true;
+	}
+	if ((store.jmpH3Version ?? 0) < 2) {
+		for (const id of ["gemini-omni-flash", "veo31-fast"]) {
+			store.deletedSeedIds = store.deletedSeedIds!.filter((x) => x !== id);
+			const seed = DEFAULT_MODELS.find((x) => x.id === id);
+			if (seed && !store.models.some((m) => m.id === id)) store.models.push(seed);
+		}
+		store.jmpH3Version = 2;
 		changed = true;
 	}
 	// ⑤i 定向迁移（第163轮）：全部存量模型按 classifyFamily 补 familyId（含管理端自建——名/上游名带特征词

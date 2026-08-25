@@ -22,3 +22,40 @@ export function sanitizeAssetBlobs(blobs: Record<string, AssetBlob>): Record<str
 	}
 	return changed ? out : blobs;
 }
+
+/** 历史 url 别名表上限：够覆盖「原键 → 桥接恢复 → 再迁桶」这类多跳，又不会无限增长 */
+export const PAST_URLS_MAX = 8;
+
+/**
+ * 三元映射合并（registerAssetBlob 的**唯一实现**，纯函数可单测）。
+ *
+ * ⚠ 关键（第254轮，勿回退）：`url` 被换掉时必须把**旧 url 归档进 `pastUrls`**。
+ * 项目里散落的是写入当时的 url 字符串（节点素材 / genMeta / assetRefImages），
+ * url 一换（旧 OSS 桥接恢复 / 别人先恢复过 / reput 落到新键），这些旧 uri 就再也
+ * 反查不回本 blob —— 自愈永远命中不了、提交仍发旧死链（用户实报「检查完仍然使用过期链接」）。
+ *
+ * 归档规则：去重、不含当前 url、最新的排前、上限 PAST_URLS_MAX。
+ */
+export function mergeAssetBlob(prev: AssetBlob | undefined, next: AssetBlob): AssetBlob {
+	const merged: AssetBlob = { ...prev, ...next };
+	const oldUrl = prev?.url;
+	// 只在「本来有 url」且「确实换成了另一个 url」时归档（清空 url 不算换链，不归档）
+	if (oldUrl && merged.url && merged.url !== oldUrl) {
+		const kept = [oldUrl, ...(prev?.pastUrls ?? []), ...(next.pastUrls ?? [])];
+		const seen = new Set<string>();
+		const out: string[] = [];
+		for (const u of kept) {
+			if (!u || u === merged.url || seen.has(u)) continue;
+			seen.add(u);
+			out.push(u);
+			if (out.length >= PAST_URLS_MAX) break;
+		}
+		merged.pastUrls = out;
+	}
+	return merged;
+}
+
+/** 该 blob 是否能由这个 uri 反查到（当前 url / 本地显示 uri / 原始来源 uri / 历史 url 别名） */
+export function blobMatchesUri(b: AssetBlob, uri: string): boolean {
+	return b.localUri === uri || b.url === uri || b.srcUri === uri || !!b.pastUrls?.includes(uri);
+}

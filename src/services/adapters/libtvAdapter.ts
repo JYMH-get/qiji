@@ -1,5 +1,5 @@
 /**
- * libtvAdapter —— LibTV 本地适配器（Seedance 2.0 家族 + MiniMax H3；生成不走管理端的架构例外，见 libtvCli.ts；
+ * libtvAdapter —— LibTV 本地适配器（Seedance 2.0 家族 / 2.5 + MiniMax H3；生成不走管理端的架构例外，见 libtvCli.ts；
  * 同类还有即梦 dreaminaAdapter；Qiji 侧仅按次收手续费，见 thirdPartyFee.ts）。
  *
  * 提交语义：确保项目对应的 LibTV 云端画布存在 → 垫图逐张 `libtv upload` 成资源节点 →
@@ -16,6 +16,7 @@ import type { ModelOption } from "./channelAdapter";
 import type { Capability } from "@/contract";
 import { registerAdapter } from "./registry";
 import { nodeTypesForCapability } from "@/nodes/nodeSpecs";
+import { resolveMaterialLocalPathOrThrow, newProbeScope, type ProbeScope } from "@/services/assetRecover";
 import {
 	libtvCanvasAlive,
 	libtvCreateCanvas,
@@ -36,6 +37,8 @@ export const LIBTV_CHANNEL = "LibTV";
 /** 本地模型 key（也是 adapter key / 模型下拉的 id）；不与 catalog 模型同名即可 */
 export const LIBTV_SEEDANCE_KEY = "libtv-seedance-2";
 export const LIBTV_SEEDANCE_FAST_KEY = "libtv-seedance-2-fast";
+export const LIBTV_SEEDANCE_MINI_KEY = "libtv-seedance-2-mini";
+export const LIBTV_SEEDANCE_25_KEY = "libtv-seedance-2-5";
 export const LIBTV_MINIMAX_H3_KEY = "libtv-minimax-h3";
 
 /** MiniMax 家族 id（catalog 无此家族时用本地兜底名；服务端将来注册同 id 家族则显示名自动跟随） */
@@ -50,6 +53,8 @@ export const LIBTV_MODEL_CHOICES: {
 	[
 		{ id: LIBTV_SEEDANCE_KEY, variantLabel: "Seedance 2.0", variant: "seedance2", familyId: "fam-seedance", familyName: "Seedance 2.0" },
 		{ id: LIBTV_SEEDANCE_FAST_KEY, variantLabel: "Seedance 2.0 Fast", variant: "seedance2fast", familyId: "fam-seedance", familyName: "Seedance 2.0" },
+		{ id: LIBTV_SEEDANCE_MINI_KEY, variantLabel: "Seedance 2.0 Mini", variant: "seedance2mini", familyId: "fam-seedance", familyName: "Seedance 2.0" },
+		{ id: LIBTV_SEEDANCE_25_KEY, variantLabel: "Seedance 2.5", variant: "seedance25", familyId: "fam-seedance", familyName: "Seedance 2.0" },
 		{ id: LIBTV_MINIMAX_H3_KEY, variantLabel: "Minimax H3", variant: "minimaxH3", familyId: MINIMAX_FAMILY_ID, familyName: "MiniMax" },
 	] as { id: string; variantLabel: string; variant: LibtvSeedanceVariant; familyId: string; familyName: string }[]
 ).map((c) => ({ ...c, label: `${LIBTV_CHANNEL} · ${c.variantLabel}` }));
@@ -103,15 +108,60 @@ function clampResolution(v: unknown): string {
 	return SEEDANCE_RESOLUTIONS.has(s) ? s : "720p";
 }
 
-/** MiniMax H3 参数（2026-08-06 实测 `libtv model MiniMax-Hailuo-H3` schema）：
- *  分辨率 768P/2K（默认 2K）、时长 5-15、比例同 Seedance 七档、无 enableSound。
- *  ⚠ 新款遵守 §9「请求参数绝不静默改写」：缺省补默认值，非法值原样发出由 CLI/上游明确报错（勿加夹钳）。 */
-function h3Params(params: Record<string, unknown>): { ratio: string; resolution: string; duration: number } {
+/** 比例档（各款 schema 一致：adaptive + 六档） */
+const LIBTV_RATIOS = ["adaptive", "16:9", "9:16", "1:1", "4:3", "3:4", "21:9"] as const;
+
+/** 按款的参数档位与素材上限（2026-08-22 实测 `libtv model <modelKey>` schema，CLI 1.1.3）。
+ *  legacyClamp=true 的两款沿用历史收敛（clampRatio/clampResolution/clampDuration，用户定稿保留分毫不动）；
+ *  其余为新款，遵守 §9「请求参数绝不静默改写」：缺省补该款默认值，非法值原样发出由 CLI/上游明确报错。 */
+interface LibtvVariantSpec {
+	durMin: number;
+	durMax: number;
+	durDefault: number;
+	resolutions: string[];
+	resDefault: string;
+	/** mixed2video 各模态上限（schema mixed2videoConfig） */
+	refs: { image: number; video: number; audio: number };
+	legacyClamp: boolean;
+}
+const VARIANT_SPECS: Record<LibtvSeedanceVariant, LibtvVariantSpec> = {
+	seedance2: {
+		durMin: 4, durMax: 15, durDefault: 5,
+		resolutions: ["480p", "720p", "1080p", "4k"], resDefault: "720p",
+		refs: { image: 9, video: 3, audio: 3 }, legacyClamp: true,
+	},
+	// ⚠ Fast schema 只有 480p/720p（2026-08-22 实拉；此前下拉多列的 1080p/4k 发上去会被 CLI 拒单）
+	seedance2fast: {
+		durMin: 4, durMax: 15, durDefault: 5,
+		resolutions: ["480p", "720p"], resDefault: "720p",
+		refs: { image: 9, video: 3, audio: 3 }, legacyClamp: true,
+	},
+	seedance2mini: {
+		durMin: 4, durMax: 15, durDefault: 5,
+		resolutions: ["480p", "720p"], resDefault: "720p",
+		refs: { image: 9, video: 3, audio: 3 }, legacyClamp: false,
+	},
+	// Seedance 2.5：时长到 30s、素材大幅放宽（图30/视10/音10，总≤50），无 4k 档
+	seedance25: {
+		durMin: 4, durMax: 30, durDefault: 5,
+		resolutions: ["480p", "720p", "1080p"], resDefault: "720p",
+		refs: { image: 30, video: 10, audio: 10 }, legacyClamp: false,
+	},
+	// MiniMax H3：分辨率 768P/2K（默认 2K）、时长 5-15、无 enableSound
+	minimaxH3: {
+		durMin: 5, durMax: 15, durDefault: 5,
+		resolutions: ["768P", "2K"], resDefault: "2K",
+		refs: { image: 9, video: 3, audio: 3 }, legacyClamp: false,
+	},
+};
+
+/** 新款参数：缺省补该款默认值，其余原样透传（§9 不夹钳） */
+function passthruParams(params: Record<string, unknown>, spec: LibtvVariantSpec): { ratio: string; resolution: string; duration: number } {
 	const dur = Number(params.duration);
 	return {
 		ratio: String(params.aspect_ratio ?? params.ratio ?? "16:9"),
-		resolution: String(params.resolution ?? "2K"),
-		duration: Number.isFinite(dur) ? dur : 5,
+		resolution: String(params.resolution ?? spec.resDefault),
+		duration: Number.isFinite(dur) ? dur : spec.durDefault,
 	};
 }
 
@@ -125,12 +175,9 @@ interface LibtvRef {
 	tag?: string;
 }
 
-/** mixed2video 各模态上限（实测 star-video2 schema mixed2videoConfig；总数 1–15） */
-const REF_LIMITS = { image: 9, video: 3, audio: 3 } as const;
-
-/** 从 submit input 收集三种模态的参考素材，按 schema 上限截断（超出丢弃并 warn）。
+/** 从 submit input 收集三种模态的参考素材，按该款 schema 上限截断（超出丢弃并 warn）。
  *  tag 按**原始数组位置**编号（空 url 也占号），保证与提示词里的 @ImageN 对齐。 */
-function collectRefs(rawInputs: Record<string, unknown>): LibtvRef[] {
+function collectRefs(rawInputs: Record<string, unknown>, REF_LIMITS: LibtvVariantSpec["refs"]): LibtvRef[] {
 	const pick = (v: unknown, type: LibtvRef["type"]): LibtvRef[] => {
 		const arr = (Array.isArray(v) ? v : []) as { url?: string; name?: string }[];
 		const refs = arr
@@ -161,14 +208,10 @@ async function ensureProjectCanvas(): Promise<string> {
 	return uuid;
 }
 
-/** 把一个素材 url/uri 解析成本地文件路径（三元映射优先，缺则落地一份） */
-async function resolveLocalPath(uri: string, name?: string): Promise<string> {
-	const { useProjectStore } = await import("@/store/projectStore");
-	const blob = useProjectStore.getState().blobByUri(uri);
-	if (blob?.localPath) return blob.localPath;
-	const { ensureLocalOriginal } = await import("@/services/assetPersist");
-	const saved = await ensureLocalOriginal(uri, { name });
-	return saved?.localPath || "";
+/** 把一个素材 url/uri 解析成本地文件路径：每次提交都探活（换链/死链自愈）→ 校验本地文件仍在 →
+ *  必要时落地一份。取不到=明确报错整单拒（见 services/assetRecover，三家第三方渠道共用）。 */
+async function resolveLocalPath(uri: string, name: string | undefined, scope: ProbeScope): Promise<string> {
+	return resolveMaterialLocalPathOrThrow(uri, "LibTV", { name, scope });
 }
 
 /** 后台执行整条生成链，结果写入本地任务表 */
@@ -182,18 +225,17 @@ async function runGeneration(
 	variant: LibtvSeedanceVariant,
 ): Promise<void> {
 	try {
-		// 1) 参考素材（图/视频/音频）逐条上传为资源节点（解析不到本地文件的跳过，不拖累整单）。
+		// 1) 参考素材（图/视频/音频）逐条上传为资源节点。
+		//    ⚠ 取不到本地文件=**明确报错整单拒**（第254轮用户定，勿回退成静默跳过）：
+		//    @ImageN 按素材顺序编号，丢一条会让后面全部引用错位（§9A 第118轮）。
 		//    资源节点名带 tag 编号（-img1/-vid1/-aud1；无 tag 的补充素材如首帧用 -x1），稳定可反查。
 		const refNodeNames: string[] = [];
 		const tagMap: Record<string, string> = {}; // "@Image1" → `{{Node "<资源节点名>"}}`
 		const kindTag = { image: "img", video: "vid", audio: "aud" } as const;
 		let extraSeq = 0;
+		const scope = newProbeScope(); // 本次提交内同一素材只探活一次
 		for (const ref of refs) {
-			const path = await resolveLocalPath(ref.url, ref.name);
-			if (!path) {
-				console.warn(`[libtv] 参考素材无本地文件，跳过：${ref.name || ref.url}`);
-				continue;
-			}
+			const path = await resolveLocalPath(ref.url, ref.name, scope);
 			const refName = ref.tag
 				? `${nodeName}-${kindTag[ref.type]}${ref.tag.replace(/\D/g, "")}`
 				: `${nodeName}-x${++extraSeq}`;
@@ -201,16 +243,14 @@ async function runGeneration(
 			refNodeNames.push(refName);
 			if (ref.tag) tagMap[ref.tag] = `{{Node "${refName}"}}`;
 		}
-		if (refs.length > 0 && refNodeNames.length === 0) {
-			throw new Error("参考素材均无法取得本地文件，无法上传到 LibTV");
-		}
 		// 提示词胶囊引用 → LibTV 引用：@ImageN/@VideoN/@AudioN 换成对应资源节点的 {{Node "名"}}
 		//（CLI 按连线校验并落库为真实引用）；未上传成功/被截断的 tag 移除（留着会被 CLI 拒单）。
 		const finalPrompt = prompt.replace(MENTION_TAG_RE, (t) => tagMap[t] ?? "");
 		// 2) 建节点 + --run（同步阻塞至终态，CLI 自己轮询写回）。
-		//    参数按变体分派：Seedance 沿用存量收敛；H3 新款不夹钳（缺省补默认，非法值上游明确报错）
-		const gen = variant === "minimaxH3"
-			? h3Params(params)
+		//    参数按变体分派：存量两款（2.0 / 2.0 Fast）沿用历史收敛；新款不夹钳（缺省补默认，非法值上游明确报错）
+		const spec = VARIANT_SPECS[variant];
+		const gen = !spec.legacyClamp
+			? passthruParams(params, spec)
 			: {
 				ratio: clampRatio(params.aspect_ratio ?? params.ratio),
 				resolution: clampResolution(params.resolution),
@@ -233,9 +273,9 @@ async function runGeneration(
 }
 
 /** 按渠道清单条目产出一个 LibTV 适配器（全部款式共用提交/轮询逻辑）。
- *  参数表单按第三方 schema：Seedance 分辨率 480p~4k、时长 4-15；H3 分辨率 768P/2K（默认 2K）、时长 5-15；比例均七档。 */
+ *  参数表单/素材上限按各款第三方 schema（见 VARIANT_SPECS），加款只改 LIBTV_MODEL_CHOICES 与该表。 */
 function makeLibtvAdapter(key: string, label: string, variantLabel: string, variant: LibtvSeedanceVariant): ModelAdapter {
-	const isH3 = variant === "minimaxH3";
+	const spec = VARIANT_SPECS[variant];
 	return {
 	key,
 	displayName: label,
@@ -249,11 +289,9 @@ function makeLibtvAdapter(key: string, label: string, variantLabel: string, vari
 			label: variantLabel,
 			inputHint: `根据提示词生成视频（走本机 LibTV 授权，Qiji 按次收手续费，见积分预估）`,
 			paramsSchema: [
-				{ key: "duration", label: "时长", type: "number", min: isH3 ? 5 : 4, max: 15, step: 1, unit: "秒", default: 5 },
-				isH3
-					? { key: "resolution", label: "分辨率", type: "enum" as const, options: ["768P", "2K"], default: "2K" }
-					: { key: "resolution", label: "分辨率", type: "enum" as const, options: ["480p", "720p", "1080p", "4k"], default: "720p" },
-				{ key: "aspect_ratio", label: "比例", type: "enum", options: ["adaptive", "16:9", "9:16", "1:1", "4:3", "3:4", "21:9"], default: "16:9" },
+				{ key: "duration", label: "时长", type: "number", min: spec.durMin, max: spec.durMax, step: 1, unit: "秒", default: spec.durDefault },
+				{ key: "resolution", label: "分辨率", type: "enum", options: [...spec.resolutions], default: spec.resDefault },
+				{ key: "aspect_ratio", label: "比例", type: "enum", options: [...LIBTV_RATIOS], default: "16:9" },
 			],
 		},
 	],
@@ -272,9 +310,9 @@ function makeLibtvAdapter(key: string, label: string, variantLabel: string, vari
 		const prompt = String(vars?.prompt ?? input.prompt ?? "").trim();
 		if (!prompt) throw new Error("缺少视频提示词");
 
-		// 参考素材：图/视频/音频三种模态全收（Seedance 2.0 mixed2video：图≤9/视频≤3/音频≤3，超限截断）
+		// 参考素材：图/视频/音频三种模态全收（上限按款 schema：2.0 系图≤9/视≤3/音≤3；2.5 图≤30/视≤10/音≤10，超限截断）
 		const rawInputs = (input.inputs ?? input) as Record<string, unknown>;
-		const refs = collectRefs(rawInputs);
+		const refs = collectRefs(rawInputs, spec.refs);
 		// 首帧续接（params.firstFrameUrl）：作为首位图像参考传入（不丢帧续语义；图像总数仍守上限）
 		const firstFrame = String(params.firstFrameUrl ?? "");
 		if (firstFrame && !refs.some((r) => r.url === firstFrame)) {
@@ -282,7 +320,7 @@ function makeLibtvAdapter(key: string, label: string, variantLabel: string, vari
 			let imgCount = 0;
 			for (let i = 0; i < refs.length; i++) {
 				if (refs[i].type !== "image") continue;
-				if (++imgCount > REF_LIMITS.image) { refs.splice(i, 1); i--; imgCount--; }
+				if (++imgCount > spec.refs.image) { refs.splice(i, 1); i--; imgCount--; }
 			}
 		}
 

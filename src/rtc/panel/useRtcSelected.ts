@@ -35,19 +35,30 @@ export function useRtcSelected(): RtcSelected | null {
 
 /**
  * 中栏「AI 工作台」的绑定目标（第240轮补充3 用户定稿「默认显示当前时间的 ai 界面」）：
- * 显式选中的占位符片段优先；无选中（或选中的不是占位符）→ 回退**播放头下主轨的占位符**——
- * 播放头停在待生成片段上时工作台直接绑定它（三栏常显，不再出现「未选中」引导黑屏）。
+ * 显式选中的**可编辑片段**优先；无选中（或选中的不可编辑）→ 回退**播放头下主轨的可编辑片段**——
+ * 播放头停在待生成/已成片的片段上时工作台直接绑定它（三栏常显，不再出现「未选中」引导黑屏）。
+ *
+ * ⚠ 「可编辑」的判据（第251轮需求⑦，勿收回成 `kind === "placeholder"`）：
+ *   **占位符 或 带 shotRef 的片段**。用户实报「占位符变成成品后丢失了 AI 工作台数据，
+ *   无法二次编辑」——数据其实一直在（成片替换只改 kind/media/uri，shotRef 原样保留），
+ *   丢的是**入口**：判定写死了 kind。放宽后成片片段照样能回工作台改提示词/垫图并重跑
+ *   （重跑落在上方新占位，原结果原位保留，见 timeline/segActions.regenerateShotResult）。
  * ⚠ 播放头选择器只返回 doc 里的稳定 seg 引用（帧级 playheadUs 变化下结果不变=不重渲染）。
  */
+/** 该片段能否进 AI 工作台（占位符=待生成的坑位；带 shotRef 的成片=可二次编辑重跑） */
+function workbenchEditable(seg: { kind: string; shotRef?: unknown }): boolean {
+	return seg.kind === "placeholder" || !!seg.shotRef;
+}
+
 export function useWorkbenchTarget(): RtcSelected | null {
 	const sel = useRtcSelected();
 	const doc = useRtcStore(activeRtcDoc);
 	const phSeg = useRtcStore((s) => {
 		const m = mainTrackSegAt(activeRtcDoc(s), s.playheadUs);
-		return m && m.seg.kind === "placeholder" ? m.seg : null;
+		return m && workbenchEditable(m.seg) ? m.seg : null;
 	});
 	return useMemo(() => {
-		if (sel && sel.seg.kind === "placeholder") return sel;
+		if (sel && workbenchEditable(sel.seg)) return sel;
 		if (!doc || !phSeg) return null;
 		for (const track of doc.tracks) {
 			const segIndex = track.segments.findIndex((s) => s.id === phSeg.id);
@@ -57,7 +68,7 @@ export function useWorkbenchTarget(): RtcSelected | null {
 	}, [sel, doc, phSeg]);
 }
 
-/** 占位符片段 shotRef → 关联的分集/分镜（实时订阅 projectStore；分镜被删=shot undefined） */
+/** 片段 shotRef → 关联的分集/分镜（实时订阅 projectStore；分镜被删=shot undefined） */
 export function useShotOfSeg(seg: RtcSegment | null): { episode?: VideoEpisode; shot?: StoryboardShot } {
 	const episodeId = seg?.shotRef?.episodeId;
 	const shotId = seg?.shotRef?.shotId;

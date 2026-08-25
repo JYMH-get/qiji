@@ -1,9 +1,11 @@
 /**
  * AssetCheckModal —— 「检查素材」的进度 + 报告弹窗（全局单例，App 挂载）。
- * 检查中显示进度条；完成后显示 正常/已修复/无法修复/无OSS记录 计数，并列出 无法修复/无记录 的资产名。
+ * 检查中显示进度条；完成后显示 正常/已修复/重传失败/无副本/无OSS记录 计数，并逐类列出资产名。
+ * ⚠「重传失败」与「无本地副本」必须分栏（第254轮）：前者本机有文件、可重试，
+ *   旧版混成一栏显示成「本机无副本」，是彻底误导的结论（用户实报）。
  */
 import { createPortal } from "react-dom";
-import { CheckCircle2, Wrench, AlertTriangle, X, Loader2 } from "lucide-react";
+import { CheckCircle2, Wrench, AlertTriangle, RefreshCw, X, Loader2 } from "lucide-react";
 import { useAssetCheckStore } from "@/store/assetCheckStore";
 
 export default function AssetCheckModal() {
@@ -12,6 +14,7 @@ export default function AssetCheckModal() {
 
 	const pct = total > 0 ? Math.round((done / total) * 100) : 0;
 	const dead = report?.items.filter((i) => i.status === "dead") ?? [];
+	const failed = report?.items.filter((i) => i.status === "failed") ?? [];
 	const healed = report?.items.filter((i) => i.status === "healed") ?? [];
 	const missing = report?.items.filter((i) => i.status === "missing") ?? [];
 
@@ -53,6 +56,7 @@ export default function AssetCheckModal() {
 						<div style={{ fontSize: 12, color: "rgba(255,255,255,0.55)", marginBottom: 2 }}>共检查 {report.total} 项素材：</div>
 						{stat("直链正常", report.ok, "#34d399", CheckCircle2)}
 						{report.healed > 0 && stat("死链·已用本地副本修复", report.healed, "#8b7cf7", Wrench)}
+						{report.failed > 0 && stat("本机有副本·重传失败（可重试）", report.failed, "#fb923c", RefreshCw)}
 						{report.dead > 0 && stat("死链·无本地副本无法修复", report.dead, "#f87171", AlertTriangle)}
 						{report.missing > 0 && stat("无 OSS 记录（异常）", report.missing, "#fbbf24", AlertTriangle)}
 
@@ -61,6 +65,19 @@ export default function AssetCheckModal() {
 								<div style={{ fontSize: 11.5, color: "#a78bfa", marginBottom: 4 }}>已修复：</div>
 								<div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", lineHeight: 1.6, maxHeight: 120, overflowY: "auto" }}>
 									{healed.map((i, k) => <div key={k}>· {i.name || i.id}</div>)}
+								</div>
+							</div>
+						)}
+						{failed.length > 0 && (
+							<div style={{ marginTop: 6, padding: 10, borderRadius: 8, background: "rgba(251,146,60,0.08)", border: "1px solid rgba(251,146,60,0.3)" }}>
+								<div style={{ fontSize: 11.5, color: "#fb923c", marginBottom: 4 }}>以下素材本机有副本，但重传回云端失败（多为对象存储临时抖动，可再点一次「检查素材」重试）：</div>
+								<div style={{ fontSize: 11, color: "rgba(255,255,255,0.7)", lineHeight: 1.6, maxHeight: 140, overflowY: "auto" }}>
+									{failed.map((i, k) => (
+										<div key={k}>
+											· {i.name || i.id}
+											{i.reason && <span style={{ color: "rgba(255,255,255,0.45)" }}>（{i.reason}）</span>}
+										</div>
+									))}
 								</div>
 							</div>
 						)}

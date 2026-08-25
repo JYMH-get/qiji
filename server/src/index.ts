@@ -12,11 +12,13 @@ import { config } from "./config.ts";
 import { registerRoutes } from "./routes.ts";
 import { registerAdminRoutes } from "./routes/admin.ts";
 import { registerAgentRoutes } from "./routes/agent.ts";
+import { registerSiteRoutes } from "./routes/site.ts";
 import { selfHealCredits, pruneCreditOps } from "./store/credits.ts";
 import { backfillLogOwners } from "./store/logs.ts";
 import { getUser } from "./store/users.ts";
 import { reconcileOnStartup } from "./reconcile.ts";
 import { startCleanupLoop } from "./store/cleanup.ts";
+import { startQijicloudLoops } from "./store/qijicloudPool.ts";
 import { setAssetAccountResolver } from "./store/assets.ts";
 import { isRelay, startRelayLoops } from "./relay.ts";
 import { flushPendingSaves } from "./store/db.ts";
@@ -44,6 +46,8 @@ async function main(): Promise<void> {
 	await app.register(registerRoutes);
 	await app.register(registerAdminRoutes);
 	await app.register(registerAgentRoutes);
+	// 官网主站（第244轮）：源站专属——relay 渠道节点不挂官网
+	if (!isRelay()) await app.register(registerSiteRoutes);
 
 	try {
 		await app.listen({ port: config.port, host: "0.0.0.0" });
@@ -73,6 +77,8 @@ async function main(): Promise<void> {
 			reconcileOnStartup({ info: (m) => app.log.info(m) }).catch((err) => app.log.error(err, "启动对账失败"));
 			// P3 清理定时器（第223轮）：mode=off（默认）时每轮直接跳过，零开销；首轮延后 5 分钟避开启动对账/VACUUM
 			startCleanupLoop({ info: (m) => app.log.info(m) });
+			// 奇迹云实例池调度（第249轮）：无注册实例/无 Token 时各循环空转零开销；源站专属（relay 不挂）
+			startQijicloudLoops({ info: (m) => app.log.info(m), warn: (m) => app.log.warn(m) });
 		}
 	} catch (err) {
 		app.log.error(err);

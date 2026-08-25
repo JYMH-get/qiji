@@ -13,6 +13,12 @@
       "skillPath": "skills/find-skills/SKILL.md",
       "computedHash": "b146008599c31057cef1c145774cea5d5afb30e8f43fa802e47a4b461419aaaf"
     },
+    "h3-prompt-writing": {
+      "source": "minimax-ai/minimax-h3",
+      "sourceType": "github",
+      "skillPath": "skills/h3-prompt-writing/SKILL.md",
+      "computedHash": "e5712d549cd8ee5a3ae5249d984d65b70a14ec9e66e5ec37fe818384c2837e1e"
+    },
     "huashu-nuwa": {
       "source": "alchaincyf/nuwa-skill",
       "sourceType": "github",

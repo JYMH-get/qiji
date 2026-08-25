@@ -96,7 +96,7 @@ export function TitleBar() {
       if (dirty) {
         const { ask } = await import("@tauri-apps/plugin-dialog");
         const yes = await ask("有未保存的更改，是否保存后退出？", {
-          title: "灵创工场",
+          title: "Qiji",
           kind: "warning",
           okLabel: "保存并退出",
           cancelLabel: "放弃更改",
@@ -122,7 +122,7 @@ export function TitleBar() {
       <div className="Qiji-titlebar__left">
         <span className="Qiji-titlebar__logo">
           <img src={logoMark} alt="" draggable={false} />
-          灵创工场
+          Qiji
         </span>
 
         {isWorkspace && (

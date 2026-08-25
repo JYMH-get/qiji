@@ -15,6 +15,7 @@ import { SEEDANCE_FAMILY_ID, type Capability } from "@/contract";
 import { getAdapter } from "./registry";
 import { libtvModelOptions } from "./libtvAdapter";
 import { dreaminaModelOptions } from "./dreaminaAdapter";
+import { comfyuiModelOptions } from "./comfyuiAdapter";
 import { useCatalogStore } from "@/store/catalogStore";
 import { useConnectionStore } from "@/store/connectionStore";
 import { capabilityForNodeType } from "@/nodes/nodeSpecs";
@@ -84,7 +85,7 @@ export function getChannelModelsForNodeType(nodeType: NodeType): ModelOption[] {
   // 家族归属（第163轮）：选项自带 familyId（LibTV 按款：Seedance/MiniMax；即梦全系 Seedance），
   // catalog 有同 id 家族时显示名跟随，否则用选项自带兜底名
   const fams = useCatalogStore.getState().catalog?.families;
-  const locals = [...libtvModelOptions(cat), ...dreaminaModelOptions(cat)].map((o) => ({
+  const locals = [...libtvModelOptions(cat), ...dreaminaModelOptions(cat), ...comfyuiModelOptions(cat)].map((o) => ({
     ...o,
     familyId: o.familyId ?? SEEDANCE_FAMILY_ID,
     familyName: fams?.find((f) => f.id === (o.familyId ?? SEEDANCE_FAMILY_ID))?.name || o.familyName || "Seedance 2.0",

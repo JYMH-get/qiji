@@ -54,6 +54,9 @@ export const CH_SUANLI = "ch-suanli";
 export const CH_SKYLEE = "ch-skylee";
 export const CH_CONGGE = "ch-congge";
 export const CH_AUTODL = "ch-autodl";
+export const CH_QIJICLOUD = "ch-qijicloud";
+export const CH_BYS = "ch-bys";
+export const CH_QIQI = "ch-qiqi";
 // Yali（api.yaliai.com，第229轮）：⚠ 一把 Key 绑定一种「接口类型」→ 按接口类型分两个渠道，各填各的 Key
 export const CH_YALI_OPENAI = "ch-yali-openai";
 export const CH_YALI_GEMINI = "ch-yali-gemini";
@@ -162,6 +165,21 @@ const DEFAULT_CHANNELS: ChannelDef[] = [
 	{
 		id: CH_AUTODL, name: "autodl（autodl.art）", baseUrl: "https://autodl.art", apiKey: "",
 		enabled: true, note: "autodl 模式（adl 系 3 模型·ComfyUI 工作流：多图参考/文生/首尾帧）视频渠道；⚠ 密钥填控制台「令牌管理」创建的 Token（分组选 ComfyUI；**原样 Authorization 头、不带 Bearer 前缀**，留空走环境 AUTODL_API_KEY）；⚠ 三个模型的「上游模型名」=各自工作流的 workflow_id——部署后必须逐模型填入真实 ID（种子是占位符，未填提交明确报错）；Base URL 填根域（翻译器自拼 /api/v1/comfyui/comfyui_workflow/*）",
+		createdAt: "", updatedAt: "",
+	},
+	{
+		id: CH_QIJICLOUD, name: "奇迹云（autodl 实例池）", baseUrl: "https://www.autodl.art", apiKey: "",
+		enabled: true, note: "奇迹云模式（qj933-minimax-h3·自建 ComfyUI 实例池）视频渠道；⚠ 此处填 autodl **开发者Token**（控制台→设置→开发者Token，原样 Authorization 无 Bearer；与 autodl 模式的 ComfyUI 令牌不是同一把）；实例注册/分组/开关机在管理端「云实例」页；模型的工作流骨架在服务端代码，上游模型名=骨架名（jianyi933）勿改",
+		createdAt: "", updatedAt: "",
+	},
+	{
+		id: CH_BYS, name: "BYS（Boyesir AI）", baseUrl: "https://www.boyesir.icu", apiKey: "",
+		enabled: true, note: "BYS 模式（bys 系 15 视频模型·Seedance 2.0/2.5、MiniMax H3、Kling 3.0 Turbo、Gemini Omni）渠道；密钥填站点 sk-（控制台→令牌创建，Bearer 鉴权，留空走环境 BYS_API_KEY）；⚠ Base URL 填根域不带 /v1（翻译器自拼 /v1/videos/generations、/v1/tasks/{id}）；⚠ 该渠道只有参考图字段（无参考视频/音频、无首尾帧），带视频或音频素材的请求会被前置明确拒；上游名须逐字照抄（站点清单里有带中文的 seedance2.5-10图、带空格的 minimax-h3 768p），种子与 routes 已照抄、勿手改；本站共 69 款模型，种子只精选 15 款，要补款=在此渠道新建模型（协议 bys-video、上游名照抄站点清单）",
+		createdAt: "", updatedAt: "",
+	},
+	{
+		id: CH_QIQI, name: "QiQi（pidoi）", baseUrl: "https://pidoi.com", apiKey: "",
+		enabled: true, note: "QiQi 模式视频渠道（2 款：qq933-sd2.0-720p·Seedance 官转 / qq933-sora-v3-pro·933 真人视频）；密钥填站点 sk-（控制台→令牌创建，Bearer 鉴权，留空走环境 QIQI_API_KEY）；⚠ Base URL 填根域不带 /v1（翻译器自拼 /v1/videos、/v1/videos/{id}、/v1/videos/{id}/content）；⚠ **同站两套请求形态**，翻译器按上游模型名分派（seedace-2.0-720p=content[] 多模态、支持首尾帧、不传 resolution；sora-v3-933-pro=扁平 image_url+reference_*、resolution 必填 720p、seconds 仅 15、不支持尾帧、素材总数≤12）——新建模型时上游名照抄站点清单（GET /v1/models 带 Bearer 可自助拉取），**逐字勿改**（seedace 少一个 n 是站方原样写法）；素材上限 9 图 + 3 音频 + 3 视频，⚠ Seedance 款用音频/视频参考时必须至少 1 张图（上游硬约束，已前置拒单）",
 		createdAt: "", updatedAt: "",
 	},
 	{

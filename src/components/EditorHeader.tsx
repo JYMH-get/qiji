@@ -150,12 +150,14 @@ const EditorHeader = ({ title, infoLabels = [], showAssetCheck = false }: Editor
                                 </div>
                                 <div className="stroke-16_105"></div>
                             </div>
-                            {/* Theme Toggle Vector Icon */}
+                            {/* Theme Toggle Vector Icon（第245轮：项目内工作区恒深色渲染（ThemeBodySync），
+                                此开关只改「大厅/新建页」的主题偏好——悬浮说明语义，防被当成失灵） */}
                             <div
                                 id="16_118"
                                 className="Pixso-vector-16_118"
                                 onClick={toggleTheme}
                                 style={{ cursor: "pointer" }}
+                                title="切换浅色/深色主题（浅色仅作用于大厅与新建项目页；项目内工作区恒为深色）"
                             ></div>
                         </div>
                     </div>

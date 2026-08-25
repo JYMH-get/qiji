@@ -7,6 +7,8 @@
  *       placeholder + shotRef → RtcShotWorkbench（中栏双页签改版后收敛为「AI 生成属性」：
  *         生图/生视频要求+同源开关；提示词/垫图/生成动作在中栏「AI 工作台」页 RtcShotAiWorkbench）；
  *       media → RtcMediaProps（名称/轨道/时间码只读 + speed/volume/muted 编辑 + 素材源）；
+ *         ⚠ 第251轮：media **带 shotRef**（占位生成成功替换而来）时上方再叠一块 RtcShotWorkbench
+ *           「AI 生成属性」——成片既是素材也仍绑着分镜，两类属性都要给（需求⑦：不丢工作台数据）；
  *       无 shotRef 的自由结果占位 → RtcFreeGenProps（第240轮收敛为 AI 设置：时间码/模型/生成·进度·重试；
  *         提示词/垫素材在中栏「AI 工作台」页 RtcFreeGenWorkbench 编辑）；
  *     其次 rtcAssetSelStore（左栏选中的项目资产）→ RtcAssetProps（出图不切回资产模式）；
@@ -67,6 +69,13 @@ function EmptyHint() {
 	);
 }
 
+/** 分区小标题（同一片段叠了两类属性时用来分界，观感与各区块 groupHead 对齐） */
+function SectionLabel({ text }: { text: string }) {
+	return (
+		<div style={{ padding: "10px 12px 0", fontSize: 10.5, color: "rgba(255,255,255,0.4)", lineHeight: 1.6 }}>{text}</div>
+	);
+}
+
 /** 「属性」页正文：既有分派逻辑原样（片段视图 > 资产视图 > 引导） */
 function PropsPage({ sel, assetSel }: { sel: RtcSelected | null; assetSel: RtcAssetSel | null }) {
 	if (!sel) {
@@ -85,9 +94,21 @@ function PropsPage({ sel, assetSel }: { sel: RtcSelected | null; assetSel: RtcAs
 		return <RtcCompoundProps key={sel.seg.id} seg={sel.seg} track={sel.track} />;
 	}
 	if (sel.seg.kind === "media") {
-		// 画面数值区（缩放/位置/旋转/不透明度/镜像/对齐）自带守卫：非画面片段（音频）内部返回 null
+		// 画面数值区（缩放/位置/旋转/不透明度/镜像/对齐）自带守卫：非画面片段（音频）内部返回 null。
+		// ⚠ 第251轮需求⑦：**带 shotRef 的成片**（占位生成成功后就地替换而来）除了素材属性，
+		//   还要叠一块「AI 生成属性」——它既是素材也仍绑着分镜，两类属性都得有，
+		//   否则用户「出错了连修改的方案都没有」（提示词/垫图在中栏工作台，生成要求在这里）。
+		const shotRef = sel.seg.shotRef;
 		return (
 			<>
+				{shotRef && (
+					<>
+						<SectionLabel text="AI 生成属性（本片段仍绑着分镜，可在中栏工作台改提示词后重跑）" />
+						<RtcShotWorkbench episodeId={shotRef.episodeId} shotId={shotRef.shotId} />
+						<div style={{ height: 1, margin: "4px 12px 0", background: "rgba(255,255,255,0.1)" }} />
+						<SectionLabel text="素材属性" />
+					</>
+				)}
 				<RtcMediaProps seg={sel.seg} track={sel.track} segIndex={sel.segIndex} />
 				<RtcTransformProps segId={sel.seg.id} />
 			</>

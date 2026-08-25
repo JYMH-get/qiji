@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import EditorHeader from "@/components/EditorHeader";
 import EditorSidebar from "@/components/EditorSidebar";
 import { useProjectStore } from "@/store/projectStore";
 import { confirmDialog } from "@/lib/confirmDialog";
 import { useSettingsStore } from "@/store/settingsStore";
-import { startShotGeneration, startDerivedGeneration, recallPendingGeneration } from "@/services/generationQueue";
+import { startShotGeneration, startDerivedGeneration, recallPendingGeneration, subscribeJobProgress, jobProgressVersion, getJobProgress } from "@/services/generationQueue";
+import { progressLabel } from "@/lib/queueLabel";
 import VideoProcessModal, { PROCESS_PURPOSE, type VideoProcessSpec, type VideoProcessMode } from "@/components/VideoProcessModal";
 import ClipPickerModal from "@/components/ClipPickerModal";
 import MediaCompareModal from "@/components/MediaCompareModal";
@@ -20,8 +21,12 @@ import type { ShotMaterial, StoryboardShot, MediaSettings, VideoDerivedRecord } 
 import { BADGE_BG, TAG_BADGE, materialTags, mediaFromMime, mediaOf, buildLegend, withLegend } from "@/lib/shotMaterials";
 import { buildAssetListVars } from "@/lib/assetVars";
 import { reindexShots } from "@/lib/shotReindex";
-import { clampDuration, imageResolutionOptions, clampImageResolution } from "@/lib/genParams";
-import { METHOD_LABELS, ASPECT_LABELS, modelMethods, clampMethod, videoReqOptions, clampToOptions, clampDurationTo } from "@/lib/videoMethods";
+import { aspectFromName } from "@/lib/templateAspect";
+import { clampDuration, clampImageResolution, resolveSize, IMAGE_ASPECTS, IMAGE_QUALITIES } from "@/lib/genParams";
+import { METHOD_LABELS, ASPECT_LABELS, clampMethod, clampToOptions, clampDurationTo } from "@/lib/videoMethods";
+// ⚠ 按模型 key 取档位一律走 modelOptions（catalog 查不到时回退本地渠道适配器 mode.paramsSchema）——
+// 直接 `models.find(m => m.id === key)` 会让 ComfyUI/LibTV/即梦这类本地模型掉回内置三档（第251轮修的就是这个）
+import { videoReqOptionsForKey, imageResolutionOptionsForKey, modelMethodsForKey } from "@/lib/modelOptions";
 import { PromptExpandButton } from "@/components/PromptExpandButton";
 import { listPresetSchemes, resolvePresets, countUnifiedShots, gridPresetForShotCount, presetBody, hasGridInstruction } from "@/lib/presetSchemes";
 import { ShotMaterialStrip } from "@/components/ShotMaterialStrip";
@@ -81,12 +86,10 @@ const MIN_ROW = 120;  // 行最小高（px）
 
 type PromptTab = "storyboard" | "video";
 
-// 图像「比例 × 分辨率」→ 出图 size（gpt-image 等吃 WxH）
-const IMG_SIZE: Record<string, Record<string, string>> = {
-    "16:9": { "1K": "1280x720", "2K": "2048x1152", "4K": "3840x2160" },
-    "9:16": { "1K": "720x1280", "2K": "1152x2048", "4K": "2160x3840" },
-    "1:1": { "1K": "1024x1024", "2K": "2048x2048", "4K": "4096x4096" },
-};
+// 图像「比例 × 分辨率」→ 出图 size：走 @/lib/genParams 的 resolveSize（全客户端唯一一份 SIZE_MAP，
+// 第251轮去重——本文件原有的 IMG_SIZE 副本已删，勿再抄表；resolveSize 对档位大小写不敏感）。
+// 画质档只是显示名映射（值集恒取 IMAGE_QUALITIES）
+const QUALITY_LABELS: Record<string, string> = { low: "低", medium: "中", high: "高", auto: "自动" };
 
 // 视频片段选择弹窗已抽为共享组件 @/components/ClipPickerModal（画布「分段」共用）。
 
@@ -140,17 +143,17 @@ const Frame161195 = () => {
     const genWithStory = ms.genWithStory ?? false;
     const imageAspect = ms.imageAspect ?? "16:9";
     // 分辨率档由服务端按当前生效图像模型下发（catalog params.resolution 枚举，管理端可改），
-    // 已存选择不在开放集时归一到第一档；IMG_SIZE 键为大写档名
+    // 已存选择不在开放集时归一到第一档（本文件历史用大写档名 "2K"，resolveSize/clampImageResolution 均大小写不敏感）
     const sbImgModelKey = useEffectiveModelKey("image");
+    // ⚠ sbModels 订阅保留：modelOptions 内部读 getState()（非响应式），靠本订阅在 catalog 热更时重渲染取到新档位
     const sbModels = useCatalogStore((s) => s.catalog?.models);
-    const sbResOptions = imageResolutionOptions(sbModels?.find((m) => m.id === sbImgModelKey));
+    const sbResOptions = imageResolutionOptionsForKey(sbImgModelKey);
     const imageResolution = clampImageResolution(ms.imageResolution, sbResOptions).toUpperCase();
-    // 视频「方法/要求」按当前生效视频模型下发（第131轮：catalog methods/params 服务端控档；本地 CLI 模型=仅全能参考）
+    // 视频「方法/要求」按当前生效视频模型下发（第131轮：catalog methods/params 服务端控档；本地渠道走适配器档位）
     const vidModelKey = useEffectiveModelKey("video");
-    const vidCatModel = sbModels?.find((m) => m.id === vidModelKey);
-    const vidMethods = modelMethods(vidCatModel);
+    const vidMethods = modelMethodsForKey(vidModelKey);
     const vidMethod = clampMethod(ms.videoMethod, vidMethods);
-    const vidReq = videoReqOptions(vidCatModel);
+    const vidReq = videoReqOptionsForKey(vidModelKey);
     const imageQuality = ms.imageQuality ?? "high";
     const inferTplId = ms.inferTplId ?? ""; // 智能推理提示词模板（多卡；空=多分镜默认）
     const singleTplId = ms.singleTplId ?? ""; // 单卡推理提示词模板（空=单卡默认）——单镜按键/一键单卡用
@@ -158,7 +161,16 @@ const Frame161195 = () => {
     const sameSource = ms.imgVideoSameSource ?? false;
     const unifiedTplId = ms.unifiedTplId ?? "";       // 同源·多卡 模板（空=同源多卡默认）
     const unifiedSingleTplId = ms.unifiedSingleTplId ?? ""; // 同源·单卡 模板（空=同源单卡默认）——单镜/一键单卡用
-    const imageSize = IMG_SIZE[imageAspect]?.[imageResolution] || "2048x1152";
+    const imageSize = resolveSize(imageAspect, imageResolution);
+    // 第243轮：选中名称带比例标记的推理模板（如「同源推理9:16」）→ 图像/视频比例自动跟随模板比例
+    // （用户定稿「优先提示词内比例」；写入即生效、下拉如实显示，之后仍可在下方单独改回=最高优先）
+    const catTemplates = useCatalogStore((s) => s.catalog?.templates);
+    const pickInferTpl = (patch: Partial<MediaSettings>, tplId: string) => {
+        const a = aspectFromName(catTemplates?.find((t) => t.id === tplId)?.name);
+        setMS(a ? { ...patch, imageAspect: a, aspect: a } : patch);
+    };
+    // 当前已选（显式）推理模板的内嵌比例——有则在设置面板给出提示
+    const inferAspectTag = aspectFromName(catTemplates?.find((t) => t.id === (sameSource ? unifiedTplId : inferTplId))?.name);
     // 切换模型（或 catalog 热更改档）后，把**已显式选过**的「要求」收敛到新模型档位并落库：
     // 显示层与提交层本就各自 clamp，但存的仍是旧值（换回时会带回越档值、与所见不一致）——这里一次性自愈。
     // 只动显式设过的键（未设的走缺省，不凭空落值）；收敛结果恒在档内 → 不会反复触发。
@@ -414,11 +426,21 @@ const Frame161195 = () => {
     // 整集级互斥锁：智能推理 / 智能拆分 任一在跑 → 两者及一键推理都锁住（防并发覆盖同一集）
     const epLocked = (epId?: string): boolean => epInferring(epId) || epSplitting(epId);
     // 整集级当前忙碌文案：拆分中 / 推理中（两按钮同步显示同一状态，视觉上一起锁住）
-    const epBusyLabel = (epId?: string): string | null => epSplitting(epId) ? "拆分中…" : epInferring(epId) ? "推理中…" : null;
+    // 服务端排队（如奇迹云 FIFO）时带上位次——「排队第3」比恒久不动的「推理中…」有信息量
+    const epBusyLabel = (epId?: string): string | null => {
+        const t = inferTasks.find((x) => !!epId && x.episodeId === epId && x.mode === "split" && x.status === "running")
+            ?? inferTasks.find((x) => !!epId && x.episodeId === epId && x.mode === "multi" && x.status === "running");
+        if (!t) return null;
+        const base = t.mode === "split" ? "拆分中" : "推理中";
+        const q = getJobProgress(t.id)?.extra?.queuePosition;
+        return q ? `${base}·排队第${q}` : `${base}…`;
+    };
     // 禁用态视觉样式（置灰 + 禁用光标），避免「看着还能点」
     const lockedStyle = (epId?: string): React.CSSProperties => epLocked(epId) ? { opacity: 0.5, cursor: "not-allowed" } : {};
 
     // ── 在途任务（持久化 pendingGens）按 key 派生：key=`sb-${shotId}` / `vid-${shotId}` ──
+    // 进度/排队位次是会话态（generationQueue 的 Map，不落盘）：订阅版本号触发重渲染，值走 getJobProgress
+    useSyncExternalStore(subscribeJobProgress, jobProgressVersion, jobProgressVersion);
     const fieldOf = (key: string): "storyboard" | "video" => (key.startsWith("sb-") ? "storyboard" : "video");
     const shotIdOf = (key: string): string => key.replace(/^sb-|^vid-/, "");
     const jobList = (key: string) => pendingGens.filter((p) => p.shot?.shotId === shotIdOf(key) && p.shot.field === fieldOf(key));
@@ -427,11 +449,12 @@ const Frame161195 = () => {
         [...jobList(key)].reverse().find((p) => p.status === "failed")?.error;
     // 历史区占位符（运行中=转圈「生成中」；失败=红色「失败 ✕」点击移除该 pending）
     const jobChips = (key: string) =>
-        jobList(key).map((p) =>
-            p.status === "running" ? (
+        jobList(key).map((p) => {
+            const jp = getJobProgress(p.id);
+            return p.status === "running" ? (
                 <span key={p.id} title="生成中（切页/重启会自动找回，完成后加入历史，不阻塞继续生成）"
                     style={{ display: "inline-flex", alignItems: "center", gap: 4, flexShrink: 0, fontSize: 10, padding: "2px 8px", borderRadius: 4, border: "1px solid rgba(139,92,246,0.5)", background: "rgba(139,92,246,0.15)", color: "#c4b5fd", alignSelf: "center" }}>
-                    <span className="sb-spin" style={{ display: "inline-block" }}>↻</span>生成中
+                    <span className="sb-spin" style={{ display: "inline-block" }}>↻</span>{progressLabel(jp?.progress ?? null, jp?.extra)}
                 </span>
             ) : p.recoverable ? (
                 // 服务端异常（lost）：凭原 taskId 重连找回，不重新生成、不再扣费
@@ -444,8 +467,8 @@ const Frame161195 = () => {
                     style={{ flexShrink: 0, fontSize: 10, padding: "2px 8px", borderRadius: 4, cursor: "pointer", border: "1px solid rgba(248,113,113,0.5)", background: "rgba(248,113,113,0.12)", color: "#f87171", alignSelf: "center" }}>
                     失败 ✕
                 </button>
-            ),
-        );
+            );
+        });
     const tabOf = (id: string): PromptTab => promptTab[id] || "storyboard";
 
     const update = (shotId: string, patch: Partial<StoryboardShot>) => {
@@ -482,13 +505,13 @@ const Frame161195 = () => {
     // 单镜换模型：把本镜已选「要求/方法」一并收敛到新模型档位（新模型不支持的旧档位绝不留着——
     // 显示层虽有 clamp，但存着越档值会在换回时带回来，且与用户所见不一致）
     const setShotVideoModel = (shot: StoryboardShot, videoModelKey: string) => {
-        const req = videoReqOptions(sbModels?.find((m) => m.id === videoModelKey));
+        const req = videoReqOptionsForKey(videoModelKey);
         const ov = shot.overrides || {};
         const patch: Partial<NonNullable<StoryboardShot["overrides"]>> = { videoModelKey };
         if (ov.resolution) patch.resolution = clampToOptions(ov.resolution, req.resolutions);
         if (ov.aspect) patch.aspect = clampToOptions(ov.aspect, req.aspects);
         if (ov.duration) patch.duration = clampDurationTo(clampDuration(ov.duration), req.durations);
-        if (ov.method) patch.method = clampMethod(ov.method, modelMethods(sbModels?.find((m) => m.id === videoModelKey)));
+        if (ov.method) patch.method = clampMethod(ov.method, modelMethodsForKey(videoModelKey));
         const nextDur = shot.durationSec != null ? clampDurationTo(clampDuration(shot.durationSec), req.durations) : undefined;
         update(shot.id, {
             overrides: { ...ov, ...patch },
@@ -788,11 +811,12 @@ const Frame161195 = () => {
         const prompt = resolvePresets((sameSource ? shot.unifiedPrompt : shot.videoPrompt) || shot.scriptSegment || "");
         if (!prompt.trim()) { alert(sameSource ? "该分镜还没有同源提示词，请先「智能推理」生成，或在提示词区手动填写。" : "该分镜还没有视频提示词，请先「智能推理」生成，或在提示词区手动填写。"); return false; }
         if (opt.story && !shot.storyboardUri) { alert(`分镜${shot.index}勾选了「带故事板」但尚未生成故事板。`); return false; }
-        // 第131轮：模型→方法→要求 按 catalog 模型解析（方法/档位服务端控，本地 CLI 模型无 catalog=仅全能参考）
+        // 第131轮：模型→方法→要求（方法/档位服务端控）；第251轮：档位走 modelOptions——
+        // ⚠ 提交层必须与显示层同一把尺，只查 catalog 会把 720p 发给只收 480/640/768/1080 的本地渠道上游
         const ovPre = shot.overrides || {};
         const vModelKey = ovPre.videoModelKey || effectiveModelKey("video") || "";
-        const vModel = useCatalogStore.getState().model(vModelKey);
-        const methods = modelMethods(vModel);
+        const vModel = useCatalogStore.getState().model(vModelKey); // 仅用于 officialAssets（真人图，catalog 专属字段）
+        const methods = modelMethodsForKey(vModelKey);
         const method = clampMethod(ovPre.method || ms.videoMethod, methods);
         if (method === "frames") {
             // 首尾帧前置校验（与服务端同尺）：首帧=故事板图（带故事板时）或素材第 1 张图；尾帧=素材下一张图
@@ -830,7 +854,7 @@ const Frame161195 = () => {
         if (audios.length) input.audios = audios;
         // 单分镜覆盖优先（未设置回退全局视频设置）；「要求」三档按当前模型 catalog params 收敛（服务端控档一把尺）
         const ov = ovPre;
-        const req = videoReqOptions(vModel);
+        const req = videoReqOptionsForKey(vModelKey);
         const officialIdx = vModel?.officialAssets && method === "omni"
             ? (ov.officialAssetIndexes ?? []).filter((i) => i >= 0 && i < images.length)
             : [];
@@ -1438,14 +1462,19 @@ const Frame161195 = () => {
                                             </div>
                                             {sameSource ? (
                                                 <>
-                                                    <TemplatePicker purpose="storyboard.unified" value={unifiedTplId} onChange={(id) => setMS({ unifiedTplId: id })} label="同源推理（多卡）" style={rowPicker} />
-                                                    <TemplatePicker purpose="storyboard.unifiedShot" value={unifiedSingleTplId} onChange={(id) => setMS({ unifiedSingleTplId: id })} label="同源单卡模板" style={rowPicker} />
+                                                    <TemplatePicker purpose="storyboard.unified" value={unifiedTplId} onChange={(id) => pickInferTpl({ unifiedTplId: id }, id)} label="同源推理（多卡）" style={rowPicker} />
+                                                    <TemplatePicker purpose="storyboard.unifiedShot" value={unifiedSingleTplId} onChange={(id) => pickInferTpl({ unifiedSingleTplId: id }, id)} label="同源单卡模板" style={rowPicker} />
                                                 </>
                                             ) : (
                                                 <>
-                                                    <TemplatePicker purpose="storyboard.toVideoPrompt" value={inferTplId} onChange={(id) => setMS({ inferTplId: id })} label="推理提示词（多卡）" style={rowPicker} />
-                                                    <TemplatePicker purpose="storyboard.singleShot" value={singleTplId} onChange={(id) => setMS({ singleTplId: id })} label="单卡推理模板" style={rowPicker} />
+                                                    <TemplatePicker purpose="storyboard.toVideoPrompt" value={inferTplId} onChange={(id) => pickInferTpl({ inferTplId: id }, id)} label="推理提示词（多卡）" style={rowPicker} />
+                                                    <TemplatePicker purpose="storyboard.singleShot" value={singleTplId} onChange={(id) => pickInferTpl({ singleTplId: id }, id)} label="单卡推理模板" style={rowPicker} />
                                                 </>
+                                            )}
+                                            {inferAspectTag && (
+                                                <div style={{ fontSize: 11, color: "#c4b5fd", lineHeight: 1.5 }}>
+                                                    {`所选推理模板指定比例 ${inferAspectTag}——图像/视频比例已跟随（可在下方单独改）`}
+                                                </div>
                                             )}
                                             <label style={rowSt}>
                                                 <span style={rowLb}>单镜时长(秒)</span>
@@ -1466,10 +1495,9 @@ const Frame161195 = () => {
                                             <ModelPicker cap="image" label="故事板图像模型" style={rowPicker} />
                                             <label style={rowSt}>
                                                 <span style={rowLb}>图像比例</span>
+                                                {/* 比例档取共享常量 IMAGE_ASPECTS（与资产模式/画布同一份，勿再写死） */}
                                                 <select value={imageAspect} onChange={(e) => setMS({ imageAspect: e.target.value })} style={rowCtl}>
-                                                    <option value="16:9" style={{ background: "#1f1f2e" }}>16:9（横屏）</option>
-                                                    <option value="9:16" style={{ background: "#1f1f2e" }}>9:16（竖屏）</option>
-                                                    <option value="1:1" style={{ background: "#1f1f2e" }}>1:1（方形）</option>
+                                                    {IMAGE_ASPECTS.map((a) => <option key={a.v} value={a.v} style={{ background: "#1f1f2e" }}>{ASPECT_LABELS[a.v] || a.label}</option>)}
                                                 </select>
                                             </label>
                                             <label style={rowSt}>
@@ -1480,11 +1508,9 @@ const Frame161195 = () => {
                                             </label>
                                             <label style={rowSt}>
                                                 <span style={rowLb}>画质 <span style={{ color: "rgba(255,255,255,0.35)" }}>（size {imageSize}）</span></span>
+                                                {/* 画质档取共享常量 IMAGE_QUALITIES（与资产模式/画布同一份，勿再写死） */}
                                                 <select value={imageQuality} onChange={(e) => setMS({ imageQuality: e.target.value })} style={rowCtl}>
-                                                    <option value="low" style={{ background: "#1f1f2e" }}>低</option>
-                                                    <option value="medium" style={{ background: "#1f1f2e" }}>中</option>
-                                                    <option value="high" style={{ background: "#1f1f2e" }}>高</option>
-                                                    <option value="auto" style={{ background: "#1f1f2e" }}>自动</option>
+                                                    {IMAGE_QUALITIES.map((q) => <option key={q} value={q} style={{ background: "#1f1f2e" }}>{QUALITY_LABELS[q] || q}</option>)}
                                                 </select>
                                             </label>
 
@@ -1572,8 +1598,8 @@ const Frame161195 = () => {
                                         </div>
                                         <div style={{ minWidth: 200 }}>
                                             {sameSource
-                                                ? <TemplatePicker purpose="storyboard.unified" value={unifiedTplId} onChange={(id) => setMS({ unifiedTplId: id })} label="同源推理" />
-                                                : <TemplatePicker purpose="storyboard.toVideoPrompt" value={inferTplId} onChange={(id) => setMS({ inferTplId: id })} label="推理提示词" />}
+                                                ? <TemplatePicker purpose="storyboard.unified" value={unifiedTplId} onChange={(id) => pickInferTpl({ unifiedTplId: id }, id)} label="同源推理" />
+                                                : <TemplatePicker purpose="storyboard.toVideoPrompt" value={inferTplId} onChange={(id) => pickInferTpl({ inferTplId: id }, id)} label="推理提示词" />}
                                         </div>
                                         <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", color: "rgba(255,255,255,0.8)", fontSize: 12, alignSelf: "flex-end", paddingBottom: 8 }} title="图片与视频共用同一段提示词（同源）">
                                             <input type="checkbox" checked={sameSource} onChange={(e) => setMS({ imgVideoSameSource: e.target.checked })} />图视同源
@@ -1617,10 +1643,11 @@ const Frame161195 = () => {
                                         const curFamGrp = familyOf(curVideoModel, videoFamilies);
                                         const curFamChs = curFamGrp?.channels ?? [];
                                         const curSrcCh = channelOf(curVideoModel, curFamChs);
+                                        // curCatModel 只用于 officialAssets（真人图，catalog 专属字段）；档位/方法一律走 modelOptions
                                         const curCatModel = sbModels?.find((m) => m.id === curVideoModel);
-                                        const curMethods = modelMethods(curCatModel);
+                                        const curMethods = modelMethodsForKey(curVideoModel);
                                         const curMethod = clampMethod(shot.overrides?.method || ms.videoMethod, curMethods);
-                                        const curReq = videoReqOptions(curCatModel);
+                                        const curReq = videoReqOptionsForKey(curVideoModel);
                                         const shotImgCount = Math.min(9, shot.materials.filter((m) => { const md = mediaOf(m); return md !== "video" && md !== "audio"; }).length);
                                         const officialSel = new Set((shot.overrides?.officialAssetIndexes ?? []).filter((i) => i >= 0 && i < shotImgCount));
                                         // 图视同源：提示词区单栏（字段=unifiedPrompt），无故事板/视频切换；否则按 tab 取两段之一

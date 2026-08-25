@@ -20,6 +20,7 @@
 import { useState } from "react";
 import { Image as ImageIcon, Video } from "lucide-react";
 import { PromptExpandButton } from "@/components/PromptExpandButton";
+import { progressLabel } from "@/lib/queueLabel";
 import type { RtcSegment, RtcTrack } from "@/types/rtc";
 import { AUDIO_GEN_UNSUPPORTED, genCapabilityFor, segSeconds } from "./rtcGenCore";
 import { fmtUs, usToSecLabel } from "./rtcSegUtils";
@@ -27,6 +28,7 @@ import { useRtcFreeGenStore } from "./rtcFreeGenStore";
 import { DraftArea, KIND_LABEL, RefStrip, secBox, secTitle } from "./freeGenParts";
 import { WorkbenchRefColumn } from "./shotWorkbenchParts";
 import { retryFreeGen, segGenKind, startFreeGen } from "./freeGenActions";
+import { useSegQueueInfo } from "./rtcQueueStore";
 
 /** 参照列·上格「结果预览」：占位期间恒空态（生成成功占位就地变成结果片段并自动切「预览」页） */
 function ResultPreviewPane({ kind, isNewVersion }: { kind: "video" | "image" | "audio"; isNewVersion: boolean }) {
@@ -71,6 +73,9 @@ export function RtcFreeGenWorkbench({ seg, track, segIndex }: { seg: RtcSegment;
 	const refs = draft?.refs ?? [];
 	const running = seg.status === "running";
 	const failed = seg.status === "failed";
+	// 在途排队信息（内存态）→ 「排队中 · 第 N 位」/「生成中 42%」
+	const queueInfo = useSegQueueInfo(seg.id);
+	const runLabel = progressLabel(seg.progress ?? null, queueInfo);
 	const [busy, setBusy] = useState(false);
 
 	const submit = async (retry: boolean) => {
@@ -171,9 +176,7 @@ export function RtcFreeGenWorkbench({ seg, track, segIndex }: { seg: RtcSegment;
 								{running ? "生成中…" : failed ? "重新生成" : "开始生成"}
 							</button>
 							<span style={{ fontSize: 10, color: "rgba(255,255,255,0.35)" }}>
-								{running
-									? seg.progress != null ? `生成中 ${Math.round(seg.progress)}%` : "生成中…"
-									: "模型在右栏「属性」页选择"}
+								{running ? runLabel : "模型在右栏「属性」页选择"}
 							</span>
 						</div>
 
@@ -191,7 +194,7 @@ export function RtcFreeGenWorkbench({ seg, track, segIndex }: { seg: RtcSegment;
 									/>
 								</div>
 								<div style={{ fontSize: 10, color: "rgba(196,181,253,0.9)", lineHeight: 1.7 }}>
-									{seg.progress != null ? `生成中 ${Math.round(seg.progress)}%` : "生成中…"}
+									{runLabel}
 									<span style={{ color: "rgba(255,255,255,0.35)" }}>（切页/关软件重开会自动接回，不重复扣费）</span>
 								</div>
 							</div>

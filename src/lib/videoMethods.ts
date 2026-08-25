@@ -9,7 +9,7 @@
  * 要求（时长/比例/分辨率）按 catalog 模型 params 下发（服务端控档，与图像 imageResolutionOptions 同范式）：
  * 模型未声明某参数时回退内置常量（genParams 的 VIDEO_*）。
  */
-import type { CatalogModel, ParamField } from "@/contract";
+import type { CatalogModel } from "@/contract";
 import { VIDEO_ASPECTS, VIDEO_DURATIONS, VIDEO_RESOLUTIONS } from "./genParams";
 
 export type VideoMethod = "omni" | "frames";
@@ -44,11 +44,30 @@ export interface VideoReqOptions {
 	durations: number[];
 }
 
-const field = (m: CatalogModel | undefined, key: string): ParamField | undefined =>
+/** 结构化最小声明：兼容 contract.ParamField 与 adapters/types.ParamField（本地渠道 mode.paramsSchema） */
+export interface ParamFieldLike {
+	key: string;
+	type: string;
+	options?: string[];
+	min?: number;
+	max?: number;
+}
+/** 只用 params 的最小模型形状——catalog 模型与本地适配器的参数表都能喂进来 */
+export interface ParamsCarrier {
+	params?: ParamFieldLike[];
+}
+
+const field = (m: ParamsCarrier | undefined | null, key: string): ParamFieldLike | undefined =>
 	m?.params?.find((p) => p.key === key);
 
-/** 按 catalog 模型 params 取「要求」三档（服务端控档；未声明回退内置常量） */
-export function videoReqOptions(m?: CatalogModel): VideoReqOptions {
+/**
+ * 按模型 params 取「要求」三档（服务端控档；未声明回退内置常量）。
+ * ⚠ 只认「已经拿到 params 的模型对象」——**按模型 key 取档一律走
+ * [modelOptions.ts](./modelOptions.ts) 的 videoReqOptionsForKey**（它会在 catalog 查不到时
+ * 回退本地渠道适配器的 mode.paramsSchema；只查 catalog 会让 ComfyUI/LibTV/即梦这类本地模型
+ * 掉回内置三档 480p/720p/1080p——第251轮修的就是这个）。
+ */
+export function videoReqOptions(m?: ParamsCarrier | null): VideoReqOptions {
 	const res = field(m, "resolution");
 	const asp = field(m, "aspect_ratio");
 	const dur = field(m, "duration");
@@ -67,11 +86,49 @@ export function videoReqOptions(m?: CatalogModel): VideoReqOptions {
 	};
 }
 
-/** 值收敛到档位集（不在集合 → 缺省 → 第一档）；提交与显示同一把尺 */
+/**
+ * 画质档位串 → 可比较的数值（"768p"→768、"2K"→2000）；不是档位串返回 null。
+ * k 按宽、p 按高，量纲虽不同但作为**档位排序**单调正确（1080p < 2K < 4K），够就近取档用。
+ */
+function resolutionTier(s: string | undefined): number | null {
+	const m = /^\s*(\d+(?:\.\d+)?)\s*([pk])\s*$/i.exec(String(s ?? ""));
+	if (!m) return null;
+	const n = Number(m[1]);
+	if (!Number.isFinite(n)) return null;
+	return m[2].toLowerCase() === "k" ? n * 1000 : n;
+}
+
+/**
+ * 值收敛到档位集；提交与显示同一把尺。优先级：**精确匹配 → 就近取档 → 缺省 → 第一档**。
+ * ⚠ 两条勿回退：
+ *  ① 大小写不敏感匹配、但**返回档位集里的规范写法**（LibTV H3 声明的是 "768P"/"2K" 大写，
+ *    存量项目里存的是小写 "768p"——按字面比会误判越档，把用户选择重置成首档）。
+ *  ② 画质档（480p/768p/2K 这类可解析为档位数的值）越档时**就近取档、并列取小**，不要直接掉首档：
+ *    第251轮修好本地渠道档位后，存量项目里存着 720p 的会遇上 ComfyUI 的 480p/640p/768p/1080p——
+ *    掉首档=静默降质到 480p（用户莫名其妙），就近=768p 才贴合用户当初的选择。
+ *    非档位串（比例 "16:9"、画质 "low"）解析不出数值，自然走原「缺省→首档」语义。
+ */
 export function clampToOptions(v: string | undefined, options: string[], fallback?: string): string {
-	if (v && options.includes(v)) return v;
-	if (fallback && options.includes(fallback)) return fallback;
-	return options[0] ?? v ?? "";
+	const pick = (x: string | undefined): string | undefined =>
+		x == null ? undefined : options.find((o) => o.toLowerCase() === String(x).toLowerCase());
+	const exact = pick(v);
+	if (exact) return exact;
+	const tier = resolutionTier(v);
+	if (tier != null) {
+		let best: string | undefined;
+		let bestD = Infinity;
+		for (const o of options) {
+			const t = resolutionTier(o);
+			if (t == null) continue;
+			const d = Math.abs(t - tier);
+			if (d < bestD) {
+				bestD = d;
+				best = o;
+			}
+		}
+		if (best) return best;
+	}
+	return pick(fallback) ?? options[0] ?? v ?? "";
 }
 
 /** 时长收敛到档位集（就近取档；空集回退原值） */

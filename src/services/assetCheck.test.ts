@@ -10,90 +10,104 @@ import {
 	assetEntityTargets,
 	allProjectAssetTargets,
 	nodeCheckTargets,
-	type CheckDeps,
+	type CheckOpts,
 } from "@/services/assetCheck";
+import { _resetAliveCache, type RecoverDeps } from "@/services/assetRecover";
 
-function mkDeps(over: Partial<CheckDeps> = {}): CheckDeps {
+function mkOpts(over: Partial<RecoverDeps> = {}): CheckOpts {
 	return {
-		isTauri: () => true,
-		blobById: () => undefined,
-		findLocalById: async () => null,
-		readLocal: async () => new Uint8Array([1]),
-		alive: async () => ({ alive: false }),
-		reput: async () => ({ url: "https://oss/healed.png" }),
-		adoptUrl: () => {},
-		...over,
+		retryDelayMs: 0,
+		deps: {
+			isTauri: () => true,
+			blobById: () => undefined,
+			findLocalById: async () => null,
+			fileExists: async () => true,
+			readLocal: async () => new Uint8Array([1]),
+			alive: async () => ({ alive: false }),
+			reput: async () => ({ ok: true, id: "x", url: "https://oss/healed.png" }),
+			adoptUrl: () => {},
+			registerLocal: () => {},
+			...over,
+		},
 	};
 }
 
 describe("assetCheck 检查素材", () => {
 	beforeEach(() => {
+		_resetAliveCache();
 		useProjectStore.setState({ assetBlobs: {}, characters: [], scenes: [], items: [], organisms: [], crowds: [] } as any);
 	});
 
 	it("checkOne：非台账 id / noLedger 标记 → missing（无 OSS 记录=异常，不探测、不跳过）", async () => {
 		const alive = vi.fn(async () => ({ alive: false }));
-		expect(await checkOne({ id: "disp123" }, mkDeps({ alive }))).toBe("missing");
-		expect(await checkOne({ id: "asset://x.png", noLedger: true }, mkDeps({ alive }))).toBe("missing");
+		expect((await checkOne({ id: "disp123" }, mkOpts({ alive }))).status).toBe("missing");
+		expect((await checkOne({ id: "asset://x.png", noLedger: true }, mkOpts({ alive }))).status).toBe("missing");
 		expect(alive).not.toHaveBeenCalled();
 	});
 
 	it("checkOne：直链存活 → ok，并把服务端 url 回写映射（别人桥接恢复过=直接换链接）", async () => {
 		const adoptUrl = vi.fn();
 		const NEW = "https://jianqiji.cn-sy1.rains3.com/jianyi/image/2026/08/C00000001.png";
-		expect(await checkOne({ id: "C00000001" }, mkDeps({ alive: async () => ({ alive: true, url: NEW }), adoptUrl }))).toBe("ok");
+		expect((await checkOne({ id: "C00000001" }, mkOpts({ alive: async () => ({ alive: true, url: NEW }), adoptUrl }))).status).toBe("ok");
 		expect(adoptUrl).toHaveBeenCalledWith("C00000001", NEW);
 	});
 
 	it("checkOne：死链 + 本地副本（映射表）→ healed，恢复后 url 回写映射", async () => {
-		const reput = vi.fn(async () => ({ url: "https://oss/h.png" }));
+		const reput = vi.fn(async () => ({ ok: true as const, id: "S00000002", url: "https://oss/h.png" }));
 		const adoptUrl = vi.fn();
-		expect(await checkOne({ id: "S00000002" }, mkDeps({
+		expect((await checkOne({ id: "S00000002" }, mkOpts({
 			alive: async () => ({ alive: false }),
 			blobById: () => ({ localPath: "/x.png", mime: "image/png", ext: "png" }),
 			reput, adoptUrl,
-		}))).toBe("healed");
+		}))).status).toBe("healed");
 		expect(reput).toHaveBeenCalledTimes(1);
 		expect(adoptUrl).toHaveBeenCalledWith("S00000002", "https://oss/h.png");
 	});
 
 	it("checkOne：死链 + 映射表缺记录 + findLocalById 扫到磁盘文件 → healed，修复后登记进映射", async () => {
-		const adoptUrl = vi.fn();
-		// spy registerAssetBlob（merge 模式：只覆盖 assetBlobs，保留 store 既有函数）
-		useProjectStore.setState({ assetBlobs: {}, registerAssetBlob: vi.fn() } as any);
-		expect(await checkOne({ id: "C00000003" }, mkDeps({
+		const registerLocal = vi.fn();
+		expect((await checkOne({ id: "C00000003" }, mkOpts({
 			alive: async () => ({ alive: false }),
 			findLocalById: async () => ({ localPath: "/proj/assets/C00000003.png", ext: "png", mime: "image/png" }),
-			adoptUrl,
-		}))).toBe("healed");
-		expect((useProjectStore.getState() as any).registerAssetBlob).toHaveBeenCalledWith(
-			expect.objectContaining({ id: "C00000003", localPath: "/proj/assets/C00000003.png" }),
-		);
+			registerLocal,
+		}))).status).toBe("healed");
+		expect(registerLocal).toHaveBeenCalledWith("C00000003", expect.objectContaining({ localPath: "/proj/assets/C00000003.png" }));
 	});
 
 	it("checkOne：死链 + 映射表缺记录 + findLocalById 也未找到 → dead", async () => {
-		expect(await checkOne({ id: "C00000004" }, mkDeps({
+		expect((await checkOne({ id: "C00000004" }, mkOpts({
 			alive: async () => ({ alive: false }),
 			blobById: () => undefined,
 			findLocalById: async () => null,
-		}))).toBe("dead");
+		}))).status).toBe("dead");
 	});
 
 	it("checkOne：死链 + 无本地副本（映射+磁盘均无） → dead", async () => {
-		expect(await checkOne({ id: "C00000001" }, mkDeps({ alive: async () => ({ alive: false }) }))).toBe("dead");
+		expect((await checkOne({ id: "C00000001" }, mkOpts({ alive: async () => ({ alive: false }) }))).status).toBe("dead");
 	});
 
-	it("checkOne：死链 + reput 失败 → dead；非 Tauri + 死链 → dead", async () => {
-		expect(await checkOne({ id: "C00000001" }, mkDeps({ alive: async () => ({ alive: false }), reput: async () => null }))).toBe("dead");
-		expect(await checkOne({ id: "C00000001" }, mkDeps({ alive: async () => ({ alive: false }), isTauri: () => false }))).toBe("dead");
+	it("⚠ checkOne：本机有副本但重传失败 → failed（不是 dead）且带原因；非 Tauri + 死链 → dead", async () => {
+		const r = await checkOne({ id: "C00000001" }, mkOpts({
+			alive: async () => ({ alive: false }),
+			blobById: () => ({ localPath: "/x.png", ext: "png" }),
+			reput: async () => ({ ok: false as const, error: "HTTP 500：转存失败" }),
+		}));
+		expect(r.status).toBe("failed");
+		expect(r.reason).toContain("HTTP 500");
+		expect((await checkOne({ id: "C00000001" }, mkOpts({ alive: async () => ({ alive: false }), isTauri: () => false }))).status).toBe("dead");
+	});
+
+	it("⚠ checkOne：服务端台账已无此资产（404）→ missing（不再假报「正常」）", async () => {
+		expect((await checkOne({ id: "C00000005" }, mkOpts({ alive: async () => ({ alive: false, missing: true }) }))).status).toBe("missing");
 	});
 
 	it("summarize：分类计数", () => {
 		const r = summarize([
 			{ id: "a", status: "ok" }, { id: "b", status: "ok" },
-			{ id: "c", status: "healed" }, { id: "d", status: "dead" }, { id: "e", status: "missing" },
+			{ id: "c", status: "healed" }, { id: "d", status: "dead" },
+			{ id: "e", status: "missing" }, { id: "f", status: "failed", reason: "HTTP 500" },
 		]);
-		expect(r).toMatchObject({ total: 5, ok: 2, healed: 1, dead: 1, missing: 1 });
+		expect(r).toMatchObject({ total: 6, ok: 2, healed: 1, dead: 1, failed: 1, missing: 1 });
 	});
 
 	it("checkAssetTargets：去重 + 汇总 + 进度回调", async () => {
@@ -101,7 +115,7 @@ describe("assetCheck 检查素材", () => {
 		const r = await checkAssetTargets(
 			[{ id: "C00000001" }, { id: "C00000001" }, { id: "S00000002" }],
 			(done) => seen.push(done),
-			mkDeps({
+			mkOpts({
 				alive: async (id) => ({ alive: id === "C00000001" }),
 				blobById: () => ({ localPath: "/x.png", mime: "image/png", ext: "png" }),
 			}),

@@ -95,6 +95,24 @@ describe("describeSegment：状态 → 展示形态", () => {
 		expect(b.title).toContain("重新生成的新版本");
 	});
 
+	/**
+	 * 第251轮需求④：生成中的文案统一走 lib/queueLabel.progressLabel——
+	 * 有排队位次就显示「排队中 · 第 N 位」（此时进度多半恒为 0%，光看百分比等于没信息）。
+	 */
+	it("排队信息（TaskExtra）优先于百分比：statusText/title 显示排队位次", () => {
+		const v = describeSegment(seg({ status: "running", progress: 0 }), 300, { queuePosition: 3, queueTotal: 8 });
+		expect(v.statusText).toBe("排队中 · 第 3/8 位");
+		expect(v.title).toContain("排队中 · 第 3/8 位");
+		// 只有位次没有总数
+		expect(describeSegment(seg({ status: "running" }), 300, { queuePosition: 2 }).statusText).toBe("排队中 · 第 2 位");
+		// 阶段文案（无位次时顶替百分比）
+		expect(describeSegment(seg({ status: "running", progress: 5 }), 300, { stageText: "上传素材中" }).statusText).toBe("上传素材中");
+		// 无排队信息 → 回到「生成中 X%」（statusText 已含百分比，显示侧别再拼一次）
+		expect(describeSegment(seg({ status: "running", progress: 42 }), 300).statusText).toBe("生成中 42%");
+		// 非 running 状态不受 extra 影响
+		expect(describeSegment(seg({}), 300, { queuePosition: 3 }).statusText).toBe("待生成");
+	});
+
 	it("media 片段带着 status 也照常呈现（不静默吞状态）", () => {
 		const v = describeSegment(seg({ kind: "media", media: "video", status: "running", progress: 10 }), 300);
 		expect(v.kind).toBe("running");

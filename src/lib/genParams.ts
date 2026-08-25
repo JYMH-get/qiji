@@ -28,14 +28,21 @@ export function imageResolutionOptions(
 	const opts = [...new Set((field?.options ?? []).map((o) => String(o).toLowerCase()))].filter((o) => o in RES_LABELS);
 	return opts.length ? opts.map((v) => ({ v, label: RES_LABELS[v] })) : IMAGE_RESOLUTIONS;
 }
-// (比例, 分辨率档) → 实际请求的具体像素分辨率
+/**
+ * (比例, 分辨率档) → 实际请求的具体像素分辨率。
+ * ⚠ **全客户端唯一一份**（第251轮）：此前 资产五页/画布 用本表、表格模式 Frame161195 与
+ * 实时剪辑 shotGenActions 各自另有一份 `IMG_SIZE`，且 1K 档的 16:9/9:16 取值不同
+ * （1024x576 vs 1280x720）——同一功能三份实现。现统一取**表格那份**（主力分镜出图路径，
+ * 同档位只升不降；2K/4K 三份本就一致）。新增出图入口一律 import resolveSize，勿再抄表。
+ * 键为小写档位；resolveSize 对大小写不敏感（表格侧历史用 "1K" 大写）。
+ */
 export const SIZE_MAP: Record<string, Record<string, string>> = {
 	"1:1": { "1k": "1024x1024", "2k": "2048x2048", "4k": "4096x4096" },
-	"16:9": { "1k": "1024x576", "2k": "2048x1152", "4k": "3840x2160" },
-	"9:16": { "1k": "576x1024", "2k": "1152x2048", "4k": "2160x3840" },
+	"16:9": { "1k": "1280x720", "2k": "2048x1152", "4k": "3840x2160" },
+	"9:16": { "1k": "720x1280", "2k": "1152x2048", "4k": "2160x3840" },
 };
 export function resolveSize(aspect: string, resolution: string): string {
-	return SIZE_MAP[aspect]?.[resolution] ?? "1024x1024";
+	return SIZE_MAP[aspect]?.[String(resolution ?? "").toLowerCase()] ?? "1024x1024";
 }
 
 /** 把分辨率档归一到开放档位（旧节点/旧项目残留的档不在开放集 → 第一档） */

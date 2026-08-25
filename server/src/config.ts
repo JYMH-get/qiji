@@ -183,12 +183,33 @@ export const config = {
 		baseUrl: strip(process.env.CONGGE_BASE_URL ?? "https://congchen.top"),
 		apiKey: process.env.CONGGE_API_KEY ?? "",
 	},
+	// BYS（www.boyesir.icu·Boyesir AI）视频渠道（第252轮；异步 submit+poll，见 translators/bys.ts）。
+	// ⚠ Base URL 填根域不带 /v1（翻译器自拼 /v1/videos/generations 与 /v1/tasks/{task_id}）；
+	//    鉴权 Bearer sk-（站点控制台 → 令牌创建）。
+	bys: {
+		baseUrl: strip(process.env.BYS_BASE_URL ?? "https://www.boyesir.icu"),
+		apiKey: process.env.BYS_API_KEY ?? "",
+	},
+	// QiQi（pidoi.com·Seedance 官转 API）视频渠道（第255轮；异步 submit+poll，见 translators/qiqi.ts）。
+	// ⚠ Base URL 填根域不带 /v1（翻译器自拼 /v1/videos、/v1/videos/{task_id}、/v1/videos/{id}/content）；
+	//    鉴权 Bearer sk-（站点控制台→令牌创建，New API 系网关）。
+	qiqi: {
+		baseUrl: strip(process.env.QIQI_BASE_URL ?? "https://pidoi.com"),
+		apiKey: process.env.QIQI_API_KEY ?? "",
+	},
 	// autodl（autodl.art·ComfyUI 工作流平台）视频渠道（第234轮；异步 submit+poll，见 translators/autodl.ts）。
 	// ⚠ 鉴权=Authorization 原样 Token（**不带 Bearer 前缀**，控制台「令牌管理」创建、分组选 ComfyUI）；
 	//    Base URL 填根域（翻译器自拼 /api/v1/comfyui/comfyui_workflow/{workflow_id} 与 /result/{task_id}）。
 	autodl: {
 		baseUrl: strip(process.env.AUTODL_BASE_URL ?? "https://autodl.art"),
 		apiKey: process.env.AUTODL_API_KEY ?? "",
+	},
+	// 奇迹云（自建 autodl 云实例池 + ComfyUI 直驱；第249轮，见 store/qijicloudPool.ts + translators/qijicloud.ts）。
+	// ⚠ apiKey=autodl **开发者Token**（autodl.com 控制台→设置→开发者Token；原样 Authorization 无 Bearer）——
+	//    与 autodl 模式（上面那条）的 ComfyUI 令牌是**两把不同 token**，勿混填。
+	qijicloud: {
+		baseUrl: strip(process.env.QIJICLOUD_BASE_URL ?? "https://www.autodl.art"),
+		apiKey: process.env.QIJICLOUD_DEV_TOKEN ?? "",
 	},
 	// OSS 对象存储（S3 兼容；资产/项目云备份，公有读直链）
 	oss: ossConfig(),

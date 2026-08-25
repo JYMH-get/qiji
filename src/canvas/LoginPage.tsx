@@ -178,7 +178,7 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
 					    双击 logo 展开——渠道商节点用户/运维改地址的隐蔽入口，勿删 */}
 					<img
 						src={logoFull}
-						alt="灵创工场"
+						alt="Qiji"
 						className="h-16 select-none"
 						draggable={false}
 						onDoubleClick={() => setShowServer((v) => !v)}

@@ -4,7 +4,9 @@
  *   「分镜」页 = RtcFlowShotsPage：④ 逐集 智能推理/智能拆分 + 生成占位入轨。
  *
  * 让实时剪辑不依赖资产模式独立完成全套流程：
- *   ① 剧本：折叠摘要（字数/前几行），「编辑剧本」展开 textarea（失焦回写 projectStore.scriptText）；
+ *   ① 剧本：折叠摘要（字数/前几行）；⚠ 第251轮需求⑩——正文编辑**不再在右栏窄 textarea**，
+ *     「整理剧本」改为在**中栏摊开剧本处理面**（flow/RtcScriptEditorPane，保存才回写）；
+ *     右栏两页从此只做「属性选择」：步骤卡 + 各动作按钮；
  *   ② 剧集拆分：本地快拆四模式（episodeSplit）+ catalog「剧集」LLM 模板，重拆覆盖须 confirmDialog；
  *   ③ 资产拆分：runPurpose("script.analyze") 全链（模板与 Frame1693 同数据源；流式进度；断连保护；
  *      mergeApply 落库内挂 attachSplitPresets 预设胶囊）+ 续提；完成显示五类资产计数；
@@ -21,6 +23,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useCatalogStore } from "@/store/catalogStore";
 import { EPISODE_SPLIT_MODES } from "@/lib/episodeSplit";
 import type { VideoEpisode } from "@/services/projectFile";
+import { openRtcScriptEditor, useRtcCenterTabStore } from "../panel/rtcCenterTabStore";
 import { scriptBrief, episodesBrief } from "./flowCore";
 import {
 	splitEpisodesFlow, extractAssetsFlow, continueExtractionFlow,
@@ -73,34 +76,23 @@ function ResultLine({ res, onClose }: { res: FlowResult | null; onClose: () => v
 
 function StepScript() {
 	const scriptText = useProjectStore((s) => s.scriptText);
-	const [editing, setEditing] = useState(false);
+	const editing = useRtcCenterTabStore((s) => s.scriptEditorOpen);
 	const brief = useMemo(() => scriptBrief(scriptText), [scriptText]);
 	return (
 		<StepCard n={1} title="剧本" chip={brief.empty ? "未填写" : `${brief.chars} 字`}>
-			{editing ? (
-				<>
-					<textarea
-						defaultValue={scriptText}
-						autoFocus
-						placeholder="粘贴完整剧本原文……失焦自动保存"
-						onBlur={(e) => useProjectStore.getState().setScriptText(e.target.value)}
-						style={{ width: "100%", minHeight: 150, resize: "vertical", padding: "8px 10px", fontSize: 12, lineHeight: 1.7, borderRadius: 7, border: "1px solid rgba(139,92,246,0.4)", background: "rgba(0,0,0,0.3)", color: "rgba(255,255,255,0.9)", outline: "none" }}
-					/>
-					<div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
-						<button style={btnStyle("plain", false)} onClick={() => setEditing(false)}>收起</button>
-						<span style={hintStyle}>失焦即回写保存</span>
-					</div>
-				</>
+			{brief.empty ? (
+				<div style={hintStyle}>还没有剧本——点「整理剧本」在**中栏**摊开大编辑面粘贴全文；后续拆分/提取/推理都以它为源。</div>
 			) : (
-				<>
-					{brief.empty ? (
-						<div style={hintStyle}>还没有剧本——点「编辑剧本」粘贴全文；后续拆分/提取/推理都以它为源。</div>
-					) : (
-						<div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", lineHeight: 1.7, overflow: "hidden", textOverflow: "ellipsis" }}>{brief.preview}</div>
-					)}
-					<button style={{ ...btnStyle(brief.empty ? "primary" : "plain", false), marginTop: 8 }} onClick={() => setEditing(true)}>编辑剧本</button>
-				</>
+				<div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", lineHeight: 1.7, overflow: "hidden", textOverflow: "ellipsis" }}>{brief.preview}</div>
 			)}
+			<button
+				style={{ ...btnStyle(brief.empty ? "primary" : "plain", false), marginTop: 8 }}
+				title="在中栏摊开剧本处理面（整块大编辑区），保存后回到原来的页"
+				onClick={() => openRtcScriptEditor()}
+			>
+				{editing ? "剧本面已摊开（中栏）" : "整理剧本"}
+			</button>
+			{editing && <div style={{ ...hintStyle, marginTop: 6 }}>正在中栏编辑——保存后回到工作台/预览。</div>}
 		</StepCard>
 	);
 }

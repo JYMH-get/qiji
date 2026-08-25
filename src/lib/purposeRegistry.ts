@@ -253,6 +253,14 @@ export const PURPOSE_REGISTRY: Record<Purpose, PurposeMeta> = {
 		view: "storyboard",
 		description: "720°全景（原图→equirect 2:1 全景图；前置提示词服务端模板渲染）",
 	},
+	"image.cover": {
+		purpose: "image.cover",
+		capability: "image",
+		nodeType: "image",
+		buttonLabel: "",
+		view: "script",
+		description: "封面生成（AI 工具箱）：描述 → 海报级封面图（提示词模板服务端维护，正文不下发）",
+	},
 	"audio.tts": {
 		purpose: "audio.tts",
 		capability: "audio",

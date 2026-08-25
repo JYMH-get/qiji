@@ -1,7 +1,8 @@
 import { useNavigate } from "react-router";
 import { useEffect, useState } from "react";
-import { Settings } from "lucide-react";
+import { Settings, Wrench, Zap } from "lucide-react";
 import { useProjectStore, type RecentProject } from "@/store/projectStore";
+import { useToolboxStore } from "@/store/toolboxStore";
 import { useSettingsStore } from "@/store/settingsStore";
 import { useUiStore } from "@/store/uiStore";
 import { withStopPropagation, restoreRouteAfterLoad } from "@/views/utils/utils";
@@ -28,6 +29,9 @@ const Frame21 = () => {
             navigate(restoreRouteAfterLoad());
         }
     }, [loadedOnStartup, navigate]);
+
+    // 侧栏图标颜色随主题（原 svg 走 CSS url 固定色；lucide 组件用它保持两主题下可见）
+    const iconColor = theme === "dark" ? "rgba(255,255,255,0.82)" : "#333a4d";
 
     const toggleTheme = () => {
         const newTheme = theme === "dark" ? "light" : "dark";
@@ -131,7 +135,21 @@ const Frame21 = () => {
                                     <div id="2_21" className="Pixso-vector-2_21"></div>
                                 </div>
                             </div>
-                             {/* Settings / Theme toggle */}
+                             {/* AI 工具箱（第245轮）：独立小工具（小说转剧本 / 封面生成），无需打开项目 */}
+                             <div
+                                 id="sidebar-toolbox"
+                                 className="Pixso-frame-2_151 hover:bg-black/10 dark:hover:bg-white/10"
+                                 onClick={() => useToolboxStore.getState().setOpen(true)}
+                                 style={{ cursor: "pointer" }}
+                                 title="AI 工具箱"
+                             >
+                                 <div className="frame-content-2_151">
+                                     <Wrench size={18} style={{ color: iconColor }} />
+                                 </div>
+                             </div>
+                             {/* Settings / Theme toggle。⚠ 图标用 lucide 组件：内联 style 的
+                                 url(@/assets/…) 不经 Vite 别名解析（只有 import 与 CSS 里的别名会被处理），
+                                 之前这两个按钮因此渲染为空白（图标丢失） */}
                              <div id="2_44" className="Pixso-frame-2_44">
                                  <div className="frame-content-2_44">
                                      <div
@@ -142,10 +160,7 @@ const Frame21 = () => {
                                          title="全局设置"
                                      >
                                          <div className="frame-content-2_151">
-                                             <div
-                                                 className="Pixso-vector-2_152"
-                                                 style={{ backgroundImage: "url(@/assets/images/settings.svg)" }}
-                                             ></div>
+                                             <Settings size={18} style={{ color: iconColor }} />
                                          </div>
                                      </div>
                                      <div
@@ -156,11 +171,7 @@ const Frame21 = () => {
                                          title="切换主题"
                                      >
                                          <div className="frame-content-2_151">
-                                             <div
-                                                 id="2_152"
-                                                 className="Pixso-vector-2_152"
-                                                 style={{ backgroundImage: "url(@/assets/images/zap.svg)" }}
-                                             ></div>
+                                             <Zap size={18} style={{ color: iconColor }} />
                                          </div>
                                      </div>
                                  </div>

@@ -1,22 +1,25 @@
 /**
- * 实时剪辑 · 中央区（双页签「AI 工作台 / 预览」；第240轮：页签行收进中栏标题栏——
- * 切换控件是 [RtcCenterTabSwitch](./panel/RtcCenterTabSwitch.tsx)，经 FrameEditor 的 headerExtra
- * 与分集切换器并排挂载，本文件只按 rtcCenterTabStore 渲染对应页正文，不再自渲染页签行）：
- *   - 「预览」页 = 原单一预览视口：底层时间指针预览（RtcSequencePlayer）+ 左栏素材选中时的
- *     素材预览叠层（AssetPreviewLayer，五类资产带右缘「生成历史」缩略条）；
- *   - 「AI 工作台」页 = 不透明叠层覆盖视口：绑定 useWorkbenchTarget（**选中占位符优先、
- *     无选中回退播放头下主轨占位符**——补充3 用户定稿「默认显示当前时间的 ai 界面…不要黑屏」）：
- *     分镜占位（shotRef）→ RtcShotAiWorkbench；自由结果占位（无 shotRef）→ RtcFreeGenWorkbench
- *     （提示词/垫素材编辑，右栏只留 AI 设置）；两处都无目标才显示引导；
- *   - 页签自动切换（rtcCenterTabCore 纯函数，配单测）：新选中任何占位符→工作台；新选中左栏
- *     素材/资产预览→预览；占位符被成片替换（同 segId placeholder→media）→预览；**播放头进入
- *     新片段（或所在占位被成片替换）→ 占位=工作台/有结果=预览（补充3 播放头跟随）**；初始页签=
- *     播放头处片段定，空白按 doc 有无可播片段兜底；手动点页签永远生效。
+ * 实时剪辑 · 中央区（双页签「AI 工作台 / 预览」；页签行在中栏标题栏，切换控件是
+ * [RtcCenterTabSwitch](./panel/RtcCenterTabSwitch.tsx)，经 FrameEditor 的 headerExtra 与分集切换器并排挂载）。
  *
- * ⚠ 播放不中断（勿回退）：RtcSequencePlayer 常驻挂载在视口列里，「AI 工作台」与素材预览的显隐
- * 都是**叠层覆盖/条件渲染叠层**（绝不条件卸载播放器）——切页签/切素材选中不打断播放。
+ * 【层级语义（第251轮需求⑨ 用户定稿，勿回退）】**AI 工作台是底，结果预览是面**：
+ *   - 页签**只能手动切换**——第240轮那套自动切换（选中/播放头跟随/成片替换）已整体删除：
+ *     用户实报「时间轴一动就会回到预览，很影响正在整理提示词的状态」；
+ *   - 「AI 工作台」页：面层全部让开，工作台占满视口；
+ *   - 「预览」页：播放头所在主轨片段**有成片**才盖住工作台（resultLayerVisible）；
+ *     播到占位符 / 空白区间 → 面层让开，露出底下的工作台（**页签态不变**）；
+ *     左栏选中素材/资产卡时同样让开，改显不透明的素材预览叠层（AssetPreviewLayer）；
+ *   - 另有一层**剧本处理面**（需求⑪，右栏「整理剧本」打开）盖在最上，用户手动关闭。
+ *
+ * 工作台绑定 useWorkbenchTarget（选中优先、无选中回退播放头下主轨片段）：
+ *   带 shotRef 的片段（占位符**与已出片的成片**，第251轮需求⑦）→ RtcShotAiWorkbench；
+ *   无 shotRef 的自由结果占位 → RtcFreeGenWorkbench；都没有才显示引导。
+ *
+ * ⚠ 播放不中断（第236/239轮红线，勿回退）：RtcSequencePlayer **常驻挂载在视口列里**，
+ *   工作台与素材预览都是**不透明叠层的显隐**（绝不条件卸载播放器）——
+ *   切页签 / 播过占位区间 / 切素材选中 都不打断播放。
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Music } from "lucide-react";
 import { useProjectStore } from "@/store/projectStore";
 import { activeRtcDoc, useRtcStore } from "@/store/rtcStore";
@@ -26,16 +29,12 @@ import { RtcSequencePlayer } from "./RtcSequencePlayer";
 import { docHasAnySegment } from "./rtcPlayback";
 import { useRtcAssetSelStore } from "./rtcAssetSelStore";
 import { collectProjectImageItems } from "./asset/rtcAssetData";
-import { useRtcSelected, useWorkbenchTarget } from "./panel/useRtcSelected";
+import { useWorkbenchTarget } from "./panel/useRtcSelected";
 import { RtcShotAiWorkbench } from "./panel/RtcShotAiWorkbench";
 import { RtcFreeGenWorkbench } from "./panel/RtcFreeGenWorkbench";
-import {
-	type CenterSelSnapshot,
-	centerTabAutoSwitch,
-	initialCenterTab,
-	mainTrackSegAt,
-} from "./panel/rtcCenterTabCore";
+import { initialCenterTab, mainTrackSegAt, resultLayerVisible } from "./panel/rtcCenterTabCore";
 import { useRtcCenterTabStore } from "./panel/rtcCenterTabStore";
+import { RtcScriptEditorPane } from "./flow/RtcScriptEditorPane";
 import { ensureShotForPlaceholder } from "./panel/segShotBinding";
 
 /** 顺序预览播放器挂载点：doc 有任何片段才显示；布尔选择器——选中/播放头变化不重渲本壳。 */
@@ -168,41 +167,16 @@ function AssetPreviewLayer() {
 	);
 }
 
-/* ════════════════ 双页签：自动切换 + 初始页签 ════════════════ */
+/* ════════════════ 「AI 工作台」页正文 ════════════════ */
 
 /**
- * 页签自动切换（规则见 rtcCenterTabCore 头注释）：快照 ref 比对「新的选中动作/占位符被替换」，
- * 命中即 setTab（与 RtcPropertyPanel 的 shouldAutoSwitchToProps 同范式）。
- */
-function useCenterTabAutoSwitch() {
-	const sel = useRtcSelected();
-	const assetSel = useRtcAssetSelStore((s) => s.selected);
-	const mediaSel = useRtcAssetSelStore((s) => s.mediaSel);
-	// 规则 6（补充3 播放头跟随）：播放头下主轨片段的 id/kind——标量选择器，
-	// 帧级 playheadUs 变化下结果不变=不重渲染；进入新片段/占位被成片替换才触发。
-	const phSegId = useRtcStore((s) => mainTrackSegAt(activeRtcDoc(s), s.playheadUs)?.seg.id ?? null);
-	const phSegKind = useRtcStore((s) => mainTrackSegAt(activeRtcDoc(s), s.playheadUs)?.seg.kind ?? null);
-	const segId = sel?.seg.id ?? null;
-	const segKind = sel?.seg.kind ?? null;
-	const assetKey = assetSel ? `${assetSel.cat}:${assetSel.id}` : null;
-	const mediaKey = mediaSel?.key ?? null;
-	const snapRef = useRef<CenterSelSnapshot>({ segId, segKind, assetKey, mediaKey, phSegId, phSegKind });
-	useEffect(() => {
-		const prev = snapRef.current;
-		const next: CenterSelSnapshot = { segId, segKind, assetKey, mediaKey, phSegId, phSegKind };
-		snapRef.current = next;
-		const to = centerTabAutoSwitch(prev, next);
-		if (to) useRtcCenterTabStore.getState().setTab(to);
-	}, [segId, segKind, assetKey, mediaKey, phSegId, phSegKind]);
-}
-
-/**
- * 「AI 工作台」页正文分派（第240轮；补充3 改绑 useWorkbenchTarget=选中占位符优先、
- * 无选中回退**播放头下主轨占位符**——播放头停在待生成片段上时工作台直接绑定它，不再黑屏引导）。
+ * 「AI 工作台」页正文分派（绑 useWorkbenchTarget：选中优先、无选中回退播放头下主轨片段）。
+ *
+ * ⚠ 第251轮需求⑦：分派只看 **shotRef 有没有**，不看 kind——占位生成成功变成片后
+ *   shotRef 原样保留，它仍该回分镜工作台二次编辑（提示词/垫图/历史都还在）。
  * 补充6（用户定稿「普通占位与分镜占位完全一致，不要两种实现」）：普通占位（视频/图片）创建时
- * 已挂真实分镜（segShotBinding）；**存量旧占位**在这里绑定那一刻补挂同一函数（幂等）——升级后
- * 走 RtcShotAiWorkbench 同一条实现。仍无 shotRef 的残余（音频占位/超分·去字幕坑位/生成中的
- * 存量自由占位——ensureShotForPlaceholder 内部拒绝升级的三类）→ RtcFreeGenWorkbench。
+ * 已挂真实分镜（segShotBinding）；**存量旧占位**在这里绑定那一刻补挂同一函数（幂等）。
+ * 仍无 shotRef 的残余（音频占位/超分·去字幕坑位/生成中的存量自由占位）→ RtcFreeGenWorkbench。
  * key=segId：换目标即重置本地编辑态。
  */
 function WorkbenchBody() {
@@ -219,9 +193,19 @@ function WorkbenchBody() {
 
 export function RtcCenterStage() {
 	const tab = useRtcCenterTabStore((s) => s.tab);
-	useCenterTabAutoSwitch();
-	// 初始页签（规则 4，会话首次挂载定一次；补充3：优先按播放头下主轨片段——占位=工作台/有结果=预览，
-	// 空白处按 doc 是否已有可播片段兜底）
+	// 面层（结果预览）是否露出：预览页 + 播放头所在主轨片段有成片。
+	// ⚠ 性能红线（第236轮）：只订阅**标量**（片段 kind），绝不订阅帧级 playheadUs——
+	//   帧级订阅会让整个中栏每帧重渲；kind 不变时 zustand 按 Object.is 比对直接跳过重渲。
+	const phSegKind = useRtcStore((s) => mainTrackSegAt(activeRtcDoc(s), s.playheadUs)?.seg.kind ?? null);
+	const showResult = resultLayerVisible(tab, phSegKind);
+	// 左栏选中素材/资产卡（布尔选择器）：预览页选了卡就该看到它，
+	// 工作台叠层同样让位（否则播放头停在占位区时工作台会盖住素材预览）。
+	const hasAssetSel = useRtcAssetSelStore((s) => !!s.selected || !!s.mediaSel);
+	const showWorkbench = !showResult && !(tab === "preview" && hasAssetSel);
+	// 剧本处理面（需求⑪）：右栏「整理剧本」打开的最上层叠层
+	const scriptEditorOpen = useRtcCenterTabStore((s) => s.scriptEditorOpen);
+	// 初始页签（会话首次挂载定一次）：优先按播放头下主轨片段——占位=工作台/有结果=预览，
+	// 空白处按 doc 是否已有可播片段兜底。之后只有用户手动能换页签（需求⑨）。
 	useEffect(() => {
 		const st = useRtcStore.getState();
 		const doc = st.doc;
@@ -233,16 +217,21 @@ export function RtcCenterStage() {
 	return (
 		<main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
 			{/* 页签行已收进中栏标题栏（RtcCenterTabSwitch 经 FrameEditor headerExtra 挂载，第240轮） */}
-			{/* ── 视口：底层=顺序播放器（⚠ 常驻挂载勿条件卸载），预览页素材叠层 / 工作台页不透明叠层 ── */}
 			<div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden" style={{ position: "relative" }}>
+				{/* ── 面：结果预览（顺序播放器常驻挂载，⚠ 绝不条件卸载）── */}
 				<SequencePreviewSlot />
 				<ViewportIdleHint />
-				{tab === "preview" && <AssetPreviewLayer />}
-				{tab === "workbench" && (
+				{/* ── 底：AI 工作台——不透明叠层盖住播放器（需求⑨的「底/面」在观感上等价：
+				     面要露出时只需把本叠层去掉）。它常驻渲染，仅在成片预览时让位 */}
+				{showWorkbench && (
 					<div style={{ position: "absolute", inset: 0, zIndex: 7, background: "#101018", display: "flex", flexDirection: "column", minHeight: 0, overflow: "hidden" }}>
 						<WorkbenchBody />
 					</div>
 				)}
+				{/* ── 最上：左栏选中素材/资产卡的预览叠层（仅「预览」页，自带不透明底）── */}
+				{tab === "preview" && <AssetPreviewLayer />}
+				{/* ── 剧本处理面（需求⑪）：右栏「整理剧本」打开，盖在最上层，用户手动关闭── */}
+				{scriptEditorOpen && <RtcScriptEditorPane />}
 			</div>
 		</main>
 	);

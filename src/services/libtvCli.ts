@@ -222,9 +222,10 @@ export async function libtvUploadRef(
 
 /** 渠道内各款模型的稳定 modelKey（CLI `-s model=` 只收**名字**且名字会漂——实测线上叫
  *  「Seedance 2.0 VIP / Seedance 2.0 Fast VIP / Minimax H3」——故运行时按 key 反查当前实名）。
- *  ⚠ 名字兜底匹配须排除同前缀的别家变体（"Seedance 2.0" 前缀会同时命中 Fast/Mini）。
+ *  ⚠ 名字兜底匹配须排除同前缀的别家变体（"Seedance 2.0" 前缀会同时命中 Fast/Mini；
+ *  Mini 的 schema 里 modelName 写作 "StarVideo 2.0 Mini"、search 里写作 "Seedance 2.0 Mini"，两种都认）。
  *  enableSound：仅 Seedance 系 schema 有该设置键（H3 schema 无，发了可能被拒——2026-08-06 实测对比）。 */
-export type LibtvSeedanceVariant = "seedance2" | "seedance2fast" | "minimaxH3";
+export type LibtvSeedanceVariant = "seedance2" | "seedance2fast" | "seedance2mini" | "seedance25" | "minimaxH3";
 const SEEDANCE_VARIANTS: Record<LibtvSeedanceVariant, { modelKey: string; fallback: string; enableSound: boolean; nameHit: (n: string) => boolean }> = {
 	seedance2: {
 		modelKey: "star-video2",
@@ -238,6 +239,18 @@ const SEEDANCE_VARIANTS: Record<LibtvSeedanceVariant, { modelKey: string; fallba
 		enableSound: true,
 		nameHit: (n) => n.startsWith("Seedance 2.0") && /fast/i.test(n),
 	},
+	seedance2mini: {
+		modelKey: "star-video2-mini",
+		fallback: "Seedance 2.0 Mini",
+		enableSound: true,
+		nameHit: (n) => /^(seedance|starvideo)\s*2\.0\b/i.test(n) && /mini/i.test(n),
+	},
+	seedance25: {
+		modelKey: "star-video2.5",
+		fallback: "Seedance 2.5",
+		enableSound: true,
+		nameHit: (n) => /^(seedance|starvideo)\s*2\.5\b/i.test(n),
+	},
 	minimaxH3: {
 		modelKey: "MiniMax-Hailuo-H3",
 		fallback: "Minimax H3",
@@ -247,7 +260,12 @@ const SEEDANCE_VARIANTS: Record<LibtvSeedanceVariant, { modelKey: string; fallba
 };
 const cachedSeedanceNames = new Map<LibtvSeedanceVariant, string>();
 
-/** 解析 Seedance 2.0（含 Fast 变体）当前的 modelName（`model search --type video` 按 modelKey 命中；会话内缓存） */
+/** 变体元数据只读访问（供单测锁定 modelKey / enableSound / 名字兜底匹配；运行时勿绕过 resolveSeedanceModelName） */
+export function libtvVariantMeta(variant: LibtvSeedanceVariant): { modelKey: string; fallback: string; enableSound: boolean; nameHit: (n: string) => boolean } {
+	return SEEDANCE_VARIANTS[variant];
+}
+
+/** 解析该变体当前的 modelName（`model search --type video` 按 modelKey 命中；会话内缓存） */
 export async function resolveSeedanceModelName(variant: LibtvSeedanceVariant = "seedance2"): Promise<string> {
 	const cached = cachedSeedanceNames.get(variant);
 	if (cached) return cached;
@@ -282,7 +300,7 @@ export interface LibtvVideoNodeSpec {
 	duration: number;
 	/** 已上传的参考图节点名（≥1 → mixed2video，0 → text2video） */
 	refNodeNames: string[];
-	/** 模型变体（缺省=Seedance 2.0 基础版；fast=star-video2-fast；minimaxH3=MiniMax-Hailuo-H3） */
+	/** 模型变体（缺省=Seedance 2.0 基础版；见 SEEDANCE_VARIANTS 的 modelKey 映射） */
 	variant?: LibtvSeedanceVariant;
 }
 

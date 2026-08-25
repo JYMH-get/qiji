@@ -37,6 +37,9 @@ import { translateYaliImage } from "./yali.ts";
 import { submitRelay808Image, pollRelay808Image } from "./relay808.ts";
 import { translateConggeImage, submitConggeVideo, pollConggeVideo } from "./congge.ts";
 import { submitAutodlVideo, pollAutodlVideo } from "./autodl.ts";
+import { submitQijicloudVideo, pollQijicloudVideo } from "./qijicloud.ts";
+import { submitBysVideo, pollBysVideo } from "./bys.ts";
+import { submitQiqiVideo, pollQiqiVideo } from "./qiqi.ts";
 import { isBuiltinProtocol, getProtocolDef, type CustomProtocol } from "../store/protocols.ts";
 import { runCustomText, runCustomImmediate, customSubmit, customPoll } from "./custom.ts";
 import { resolveContentType } from "./contentType.ts";
@@ -145,13 +148,25 @@ const VIDEO_DRIVERS: Record<string, VideoDriver> = {
 	"congge-video": { submit: submitConggeVideo, poll: pollConggeVideo },
 	// autodl（autodl.art·ComfyUI 工作流，第234轮）：提交 /comfyui_workflow/{workflow_id}、查询 /result/{task_id}
 	"autodl-video": { submit: submitAutodlVideo, poll: pollAutodlVideo },
+	// 奇迹云（第249轮，自建 autodl 实例池 + ComfyUI 直驱）：submit=入本地队列、poll=读池（均零外发 HTTP）
+	"qijicloud-comfy": { submit: submitQijicloudVideo, poll: pollQijicloudVideo },
+	// BYS（www.boyesir.icu，第252轮）：提交 /v1/videos/generations、查询 /v1/tasks/{task_id}
+	"bys-video": { submit: submitBysVideo, poll: pollBysVideo },
+	// QiQi（pidoi.com·Seedance 官转，第255轮）：提交 /v1/videos、查询 /v1/videos/{task_id}
+	"qiqi-video": { submit: submitQiqiVideo, poll: pollQiqiVideo },
 };
 
 /** 内置协议轮询间隔覆盖（缺省 8s）。Aivide 文档 §4.4 明确要求 10-15s、勿高频轮询 → 12s；
  *  简梦P 文档建议每 10-15 秒轮询一次 → 同 12s；简梦T/简梦F 文档建议每 3-5 秒轮询 → 5s；
  *  congge 文档「接入注意」建议 3-8 秒一次 → 5s。
  *  提交（createVideoPollingTask）与重启续轮询（resumeVideoPolling）共用本表。 */
-const BUILTIN_POLL_INTERVALS: Record<string, number> = { "aivide-video": 12000, "jianmengp-video": 12000, "jmt-video": 5000, "jmf-video": 5000, "congge-video": 5000 };
+const BUILTIN_POLL_INTERVALS: Record<string, number> = { "aivide-video": 12000, "jianmengp-video": 12000, "jmt-video": 5000, "jmf-video": 5000, "congge-video": 5000,
+	// BYS 文档「建议每 5~10 秒轮询一次」→ 取 6s
+	"bys-video": 6000,
+	// QiQi 文档 §2/§16「每隔 3～5 秒查询一次」→ 取 4s
+	"qiqi-video": 4000,
+	// 奇迹云：poll 读内存零网络，3s 让排队/派单进度更跟手（不打任何上游）
+	"qijicloud-comfy": 3000 };
 
 /** 自定义协议（async-poll）→ 视频驱动：把数据配置包成 submit/poll */
 function customVideoDriver(proto: CustomProtocol): VideoDriver {
@@ -192,9 +207,12 @@ async function runVideoPollLoop(opts: {
 	const { taskId, req, up, driver, upstreamTaskId, deadline, logId, onUpstream } = opts;
 	const capability = opts.capability ?? "video";
 	const interval = Math.max(2000, opts.intervalMs || 8000);
+	// 第251轮：排队毫秒（仅服务端自有队列会带）——途中记下，终态写进请求记录供「实际生成（排队）」显示
+	let queuedMs: number | undefined;
 	while (Date.now() < deadline) {
 		await sleep(interval);
 		const st = await driver.poll(up, upstreamTaskId, onUpstream);
+		if (st.queuedMs !== undefined) queuedMs = st.queuedMs;
 		if (st.status === "completed") {
 			let result: TaskState["result"];
 			if (capability === "video") {
@@ -219,24 +237,24 @@ async function runVideoPollLoop(opts: {
 				} catch (e) {
 					const m = (e as Error).message;
 					failTask(taskId, m);
-					if (logId) finishLog(logId, { status: "failed", error: m, taskId });
+					if (logId) finishLog(logId, { status: "failed", error: m, taskId, queuedMs });
 					return;
 				}
 			}
 			completeTask(taskId, result);
-			if (logId) finishLog(logId, { status: "success", response: result, taskId });
+			if (logId) finishLog(logId, { status: "success", response: result, taskId, queuedMs });
 			return;
 		}
 		if (st.status === "failed") {
 			failTask(taskId, st.error);
-			if (logId) finishLog(logId, { status: "failed", error: st.error, taskId });
+			if (logId) finishLog(logId, { status: "failed", error: st.error, taskId, queuedMs });
 			return;
 		}
-		setTaskProgress(taskId, st.progress);
+		setTaskProgress(taskId, st.progress, { queuePosition: st.queuePosition, queueTotal: st.queueTotal, stageText: st.stageText, queuedMs: st.queuedMs });
 	}
 	const to = "生成超时（超过轮询时限）";
 	failTask(taskId, to);
-	if (logId) finishLog(logId, { status: "failed", error: to, taskId });
+	if (logId) finishLog(logId, { status: "failed", error: to, taskId, queuedMs });
 }
 
 /**
@@ -489,6 +507,9 @@ export async function dispatchGenerate(
 		case "suanli-video":
 		case "congge-video":
 		case "autodl-video":
+		case "qijicloud-comfy":
+		case "bys-video":
+		case "qiqi-video":
 			return createVideoPollingTask(req, up, model.protocol, VIDEO_DRIVERS[model.protocol], logId, onUpstream,
 				"video", { intervalMs: BUILTIN_POLL_INTERVALS[model.protocol] });
 		case "jmz-image":

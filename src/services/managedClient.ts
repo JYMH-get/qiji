@@ -480,6 +480,25 @@ export const managedClient = {
 		}
 	},
 
+	/** 会员（第246轮）：方案（enabled 才有）+ 我的会员状态 */
+	async getMembership(): Promise<{ plan?: import("@/contract").MembershipPlanInfo; membership?: import("@/contract").MembershipInfo }> {
+		try {
+			return await request("GET", Endpoints.membership, undefined, 15000);
+		} catch {
+			return {};
+		}
+	},
+
+	/** 会员卡核销：开通/续费会员（未过期顺延）+ 开通即到账算力 */
+	async redeemMembershipCard(code: string): Promise<{ ok: boolean; added?: number; credits?: number; membership?: import("@/contract").MembershipInfo; error?: string }> {
+		try {
+			const data = await request<{ ok: boolean; added: number; credits: number; membership?: import("@/contract").MembershipInfo }>("POST", Endpoints.membershipRedeem, { code }, 20000);
+			return { ok: true, added: data.added, credits: data.credits, membership: data.membership };
+		} catch (err) {
+			return { ok: false, error: err instanceof ManagedClientError ? err.message : (err as Error).message };
+		}
+	},
+
 	/** 兑换积分码：成功返回新余额与本次入账面额 */
 	async redeem(code: string): Promise<{ ok: boolean; credits?: number; added?: number; error?: string }> {
 		try {
@@ -596,20 +615,31 @@ export const managedClient = {
 
 	/**
 	 * 死链自愈①：探资产 OSS 直链是否可达（服务端 HEAD，绕 webview CORS）。
-	 * 查不了一律当「活着」（失败安全：绝不因探测失败误判死链而白重传）。
 	 * 第224轮起附带服务端当前 url——别人已桥接恢复到新 OSS 时，本机据此直接换用新链接。
+	 *
+	 * ⚠ 三态（第254轮，勿再合并成布尔）：
+	 *  - alive：对象可达；
+	 *  - dead：服务端明确判死（含旧桶已舍弃）——可用本地副本 reput 恢复；
+	 *  - missing：**服务端台账里没有这个 id**（404，换服务器/被清理）——重传也无处可写，
+	 *    此前被 catch 成「活着」→ 检查素材报「正常」，掩盖了真问题。
+	 * 其余异常（网络/超时）仍失败安全当「活着」，绝不因探测失败误判死链而白重传。
 	 */
-	async assetAlive(assetId: string): Promise<{ alive: boolean; url?: string }> {
+	async assetAlive(assetId: string): Promise<{ alive: boolean; missing?: boolean; url?: string }> {
 		try {
 			const data = await request<{ alive: boolean; url?: string }>("GET", `${Endpoints.assets}/${assetId}/alive`, undefined, 15000);
 			return { alive: !!data.alive, url: typeof data.url === "string" && data.url ? data.url : undefined };
-		} catch {
+		} catch (e) {
+			if (e instanceof ManagedClientError && e.status === 404) return { alive: false, missing: true };
 			return { alive: true };
 		}
 	},
 
-	/** 死链自愈②：用本地副本字节把资产写回 OSS 原键（url 不变），修复丢失对象。失败返回 null。 */
-	async reputAsset(assetId: string, blob: Blob, filename: string): Promise<{ id: string; url: string } | null> {
+	/**
+	 * 死链自愈②：用本地副本字节把资产写回 OSS（常规=原键 url 不变；旧桶桥接=新键 url 更新）。
+	 * ⚠ 失败必须带出原因（第254轮）：此前一律 return null，上层只能笼统报「无本地副本无法修复」——
+	 * 而真实失败多是对象存储 PUT 抖动（第197轮已实锤 rains3 会重置连接），文案完全误导用户。
+	 */
+	async reputAsset(assetId: string, blob: Blob, filename: string): Promise<{ ok: true; id: string; url: string } | { ok: false; error: string }> {
 		const form = new FormData();
 		form.append("file", blob, filename);
 		try {
@@ -620,11 +650,14 @@ export const managedClient = {
 				signal: AbortSignal.timeout(uploadTimeoutMs(blob.size)),
 			});
 			const data = await resp.json().catch(() => ({}));
-			if (!resp.ok) return null;
-			return { id: (data as any).id, url: (data as any).url };
+			if (!resp.ok) {
+				const msg = (data as any)?.error?.message || (data as any)?.message;
+				return { ok: false, error: msg ? `HTTP ${resp.status}：${msg}` : `HTTP ${resp.status}` };
+			}
+			return { ok: true, id: (data as any).id, url: (data as any).url };
 		} catch (e) {
 			console.warn("[managedClient] reputAsset failed:", e);
-			return null;
+			return { ok: false, error: (e as Error)?.message || "网络异常" };
 		}
 	},
 

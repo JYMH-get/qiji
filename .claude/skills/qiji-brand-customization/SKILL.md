@@ -9,7 +9,7 @@ description: "更换 Qiji 客户端与两控制台的品牌资产（logo、应�
 
 ## 何时使用
 
-- 更换品牌 logo / 应用图标 / 窗口标题 / 控制台品牌字样（当前品牌为「灵创工场」，第 135/136 轮接入）。
+- 更换品牌 logo / 应用图标 / 窗口标题 / 控制台品牌字样（当前品牌为「Qiji」，第 241 轮改回；「灵创工场」为第 135/136 轮旧品牌）。
 - 调整品牌蓝 `#6890F8` 或整体换色。
 - 白标定制：给渠道商出一版换皮客户端。
 - **不适用**：改 `productName`、`identifier`、CSS 类名、localStorage 键——这些是技术标识，见「踩坑红线」第 1 条，任何品牌需求都不构成改它们的理由。
@@ -70,7 +70,7 @@ ls "src-tauri\icons"                                              # 核对 icon.
 
 ### 4. 窗口标题（tauri.conf.json）
 
-只改 `app.windows[0].title`（当前为 `"灵创工场"`）这一处。**同文件的 `productName`、`identifier`、`additionalBrowserArgs`、`csp` 一律不碰**（后两者是打包红线，见 qiji-pack-client-tauri skill）。
+只改 `app.windows[0].title`（当前为 `"Qiji"`；弹出窗标题在 lib.rs .title 同名同改）这一处。**同文件的 `productName`、`identifier`、`additionalBrowserArgs`、`csp` 一律不碰**（后两者是打包红线，见 qiji-pack-client-tauri skill）。
 
 ### 5. 两控制台 HTML（title / favicon / 侧栏 / 登录卡）
 
@@ -78,13 +78,13 @@ ls "src-tauri\icons"                                              # 核对 icon.
 
 | 文件 | 改动点（本次实测行号，可能漂移，以 grep 为准） |
 |---|---|
-| `server\src\admin\index.html` | 第 6 行 `<title>灵创工场 · 管理端控制台</title>`；第 7 行 `<link rel="icon"...>`（mark 图 data-URI）；侧栏品牌块；SMTP 占位文案（约 3678/3694 行含「灵创工场」） |
-| `server\src\agent\index.html` | 第 6 行 `<title>灵创工场 · 渠道商控制台</title>`；favicon；侧栏白底磁贴 + mark 图 +「灵创工场」；登录卡横版全 logo |
+| `server\src\admin\index.html` | 第 6 行 `<title>Qiji · 管理端控制台</title>`；第 7 行 `<link rel="icon"...>`（mark 图 data-URI）；侧栏品牌块；SMTP 占位文案（约 3678/3694 行含品牌名） |
+| `server\src\agent\index.html` | 第 6 行 `<title>Qiji · 渠道商控制台</title>`；favicon；侧栏白底磁贴 + mark 图 + 品牌名；登录卡横版全 logo |
 
 定位命令（Claude 用 Grep 工具同理）：
 
 ```powershell
-Select-String -Path "server\src\admin\index.html","server\src\agent\index.html" -Pattern "灵创工场" | Select-Object Path, LineNumber
+Select-String -Path "server\src\admin\index.html","server\src\agent\index.html" -Pattern "<当前品牌名>" | Select-Object Path, LineNumber
 ```
 
 新 logo 要嵌入 HTML 时转 base64 data-URI（沿用现状做法，控制台是自包含单页不引外部资源）。
@@ -131,7 +131,7 @@ npm run build
 3. ⚠ **源图是透明底 PNG，白色只是预览背景**——别当白底图处理、别给它加白底；图片处理用项目自带 `src-tauri\resources\ffmpeg\ffmpeg.exe`，不引外部工具。
 4. ⚠ **改了 admin/agent HTML 必做 script 语法校验**（`qiji-preflight-check`）——巨型内嵌 `<script>` 出语法错=控制台整页白屏，tsc 完全覆盖不到。
 5. ⚠ **控制台品牌改动须重新部署服务端；客户端资产/图标/标题改动须重新打包客户端**——只做一半就是两端品牌不一致。
-6. ⚠ **门户品牌 =「灵创工场 · 渠道商控制台」是第 136 轮用户定稿**（覆盖更早的「门户品牌=商名」方案），商名只保留在侧栏底部 `#me_name`——除非用户明确要求，不要把门户品牌改回商名。
+6. ⚠ **门户品牌与源站一致是第 136 轮用户定稿**（现为「Qiji · 渠道商控制台」，第 241 轮品牌换回 Qiji；覆盖更早的「门户品牌=商名」方案），商名只保留在侧栏底部 `#me_name`——除非用户明确要求，不要把门户品牌改回商名。
 7. ⚠ **动 tauri.conf.json 时别顺手碰 `additionalBrowserArgs` 与 CSP**——前者会整体替换 wry 默认参数、后者 `script-src` 缺 `blob:` 会让打包版 ONNX 全挂且 dev 复现不出（打包红线归 `qiji-pack-client-tauri` 管，此处只提醒别误伤）。
 
 ## 相关文件

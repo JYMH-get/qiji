@@ -7,6 +7,12 @@
  *   提示词推理 = inferRun.startInfer（锁定/找回同理）。
  *   本文件不拼任何提示词正文模板、不改写生成参数语义——参数组装逐行对齐 Frame161195
  *   的 genStoryboard/genVideo/inferShot（同一分镜行为的属性化视图，两处必须同尺）。
+ *
+ * ⚠ 档位一把尺（第251轮，勿回退成 `catalog.models.find(...)`）：所有「已知模型 key → 取档位」
+ *   一律走 [modelOptions](@/lib/modelOptions)（videoReqOptionsForKey/imageResolutionOptionsForKey/
+ *   modelMethodsForKey）——它对 ComfyUI 直连 / LibTV / 即梦 这类**不在 catalog 里**的本地渠道模型
+ *   会回退到适配器自己的 paramsSchema，否则显示与提交都会掉回内置三档并把 720p 发给只收 768p 的上游。
+ *   出图 size 走 genParams.resolveSize（全客户端唯一一份 SIZE_MAP）。
  */
 import { useProjectStore } from "@/store/projectStore";
 import { useCatalogStore } from "@/store/catalogStore";
@@ -17,19 +23,12 @@ import { mediaOf } from "@/lib/shotMaterials";
 import { buildAssetListVars } from "@/lib/assetVars";
 import { buildNeighborVars } from "@/lib/inferContext";
 import { resolvePresets, countUnifiedShots, gridPresetForShotCount, presetBody, hasGridInstruction } from "@/lib/presetSchemes";
-import { modelMethods, clampMethod, videoReqOptions, clampToOptions, clampDurationTo } from "@/lib/videoMethods";
-import { clampDuration, imageResolutionOptions, clampImageResolution } from "@/lib/genParams";
+import { clampMethod, clampToOptions, clampDurationTo } from "@/lib/videoMethods";
+import { clampDuration, clampImageResolution, resolveSize } from "@/lib/genParams";
+import { imageResolutionOptionsForKey, modelMethodsForKey, videoReqOptionsForKey } from "@/lib/modelOptions";
 import { SMART_INFER_SINGLE_TPL, SMART_INFER_UNIFIED_SINGLE_TPL } from "@/lib/smartInferPrompts";
 import type { StoryboardShot } from "@/services/projectFile";
 import { armPlaceholderSwap } from "./placeholderSwap";
-
-// 图像「比例 × 分辨率」→ 出图 size（与 Frame161195 的 IMG_SIZE 同表——分镜行出图参数一把尺，勿改值；
-// 导出供右栏「AI 生成属性」视图取比例档位/size 提示，值域单一来源）
-export const IMG_SIZE: Record<string, Record<string, string>> = {
-	"16:9": { "1K": "1280x720", "2K": "2048x1152", "4K": "3840x2160" },
-	"9:16": { "1K": "720x1280", "2K": "1152x2048", "4K": "2160x3840" },
-	"1:1": { "1K": "1024x1024", "2K": "2048x2048", "4K": "4096x4096" },
-};
 
 /** 项目是否图视同源模式（故事板/视频共用 unifiedPrompt） */
 export function isSameSource(): boolean {
@@ -104,13 +103,12 @@ export async function genShotStoryboard(episodeId: string, shotId: string, opts?
 		if (!u) { alert(`素材「${m.name}」无法取得公网直链（原文件失效或网络异常），请重新上传该素材或删除后重试。`); return false; }
 		imgs.push({ url: u, name: m.name });
 	}
-	// 分辨率档按当前生效图像模型的 catalog params 收敛（服务端控档一把尺）
+	// 分辨率档按当前生效图像模型收敛（catalog 优先、本地渠道回退适配器 schema——modelOptions 一把尺）
 	const modelKey = effectiveModelKey("image") || "";
-	const model = useCatalogStore.getState().model(modelKey);
-	const resOptions = imageResolutionOptions(model);
+	const resOptions = imageResolutionOptionsForKey(modelKey);
 	const imageAspect = ms.imageAspect ?? "16:9";
-	const imageResolution = clampImageResolution(ms.imageResolution, resOptions).toUpperCase();
-	const size = IMG_SIZE[imageAspect]?.[imageResolution] || "2048x1152";
+	const imageResolution = clampImageResolution(ms.imageResolution, resOptions);
+	const size = resolveSize(imageAspect, imageResolution);
 	const pendingId = startShotGeneration({
 		episodeId, shotId, field: "storyboard",
 		purpose: "asset.scene.image",
@@ -141,11 +139,12 @@ export async function genShotVideo(episodeId: string, shotId: string, opts?: { s
 	const prompt = resolvePresets((sameSource ? shot.unifiedPrompt : shot.videoPrompt) || shot.scriptSegment || "");
 	if (!prompt.trim()) { alert(sameSource ? "该分镜还没有同源提示词，请先「推理提示词」生成，或手动填写。" : "该分镜还没有视频提示词，请先「推理提示词」生成，或手动填写。"); return false; }
 	if (genWithStory && !shot.storyboardUri) { alert("已开启「带故事板」但该分镜尚未生成故事板，请先生成故事板（或到视频设置关闭「带故事板」）。"); return false; }
-	// 模型→方法→要求 按 catalog 解析（方法/档位服务端控；本地 CLI 模型无 catalog=仅全能参考）
+	// 模型→方法→要求（档位走 modelOptions：catalog 优先、本地渠道回退适配器 schema；
+	// 方法只认 catalog——本地渠道本就只有全能参考）
 	const ov = shot.overrides || {};
 	const vModelKey = ov.videoModelKey || effectiveModelKey("video") || "";
-	const vModel = useCatalogStore.getState().model(vModelKey);
-	const methods = modelMethods(vModel);
+	const vModel = useCatalogStore.getState().model(vModelKey); // 仅用于 officialAssets 标记
+	const methods = modelMethodsForKey(vModelKey);
 	const method = clampMethod(ov.method || ms.videoMethod, methods);
 	if (method === "frames") {
 		// 首尾帧前置校验（与服务端同尺）：首帧=故事板图或素材第 1 张图；尾帧=素材下一张图
@@ -178,7 +177,7 @@ export async function genShotVideo(episodeId: string, shotId: string, opts?: { s
 	if (images.length) input.images = images;
 	if (videos.length) input.videos = videos;
 	if (audios.length) input.audios = audios;
-	const req = videoReqOptions(vModel);
+	const req = videoReqOptionsForKey(vModelKey);
 	const officialIdx = vModel?.officialAssets && method === "omni"
 		? (ov.officialAssetIndexes ?? []).filter((i) => i >= 0 && i < images.length)
 		: [];

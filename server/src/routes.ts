@@ -19,7 +19,8 @@ import { sendCodeMail, isSmtpConfigured } from "./services/mailer.ts";
 import { sendSmsCode, isSmsConfigured } from "./services/smsAliyun.ts";
 import { profileOf } from "./store/storage.ts";
 import { isOssConfigured, ossPresignPut, ossPublicUrl } from "./store/oss.ts";
-import { getUser, getUserByAccessKey, getUserByAccount, verifyUserPassword, bindAccount, setUserPassword, createUser, registerDeviceOnLogin, isEmailAccount, isPhoneAccount, getUserByInviteCode, ensureUserInviteCode, invitedCountOf, grantCredits, transferCredits, dailySpentToday, genAccessKey, persistUsers } from "./store/users.ts";
+import { getUser, getUserByAccessKey, getUserByAccount, verifyUserPassword, bindAccount, setUserPassword, createUser, registerDeviceOnLogin, isEmailAccount, isPhoneAccount, getUserByInviteCode, ensureUserInviteCode, invitedCountOf, grantCredits, transferCredits, dailySpentToday, genAccessKey, persistUsers, activeMembershipOf, applyMembershipGrant } from "./store/users.ts";
+import { getMembershipPlan, getMembershipCard, useMembershipCard, membershipModelDiscountOf } from "./store/membership.ts";
 import type { User } from "./store/users.ts";
 import {
 	teamOfUser, createTeam, updateTeam, removeTeamMember, dissolveTeam, sanitizeTeams, effectiveTeamLimit,
@@ -135,14 +136,35 @@ function userFavQuota(u: User): ReturnType<typeof favQuotaById> {
 	return favQuotaById(u.id, u.favQuotaBytes);
 }
 
+/**
+ * 会员折扣（第246轮）：按**付款人**（共享团队=团长——钱是谁的、折扣就是谁的）的生效会员折价。
+ * 折扣率取值（第247轮加按模型调控）：方案的按模型覆盖表 modelDiscounts[modelId]（实时生效，
+ * 运营可单独调某模型）**优先**，未设置才用会员自身基础折扣（卡上冻结的 discountPercent）。
+ * 向上取整、最低 1（cost>0 不折成 0）；100=无折扣。折扣后金额贯穿 预检/实扣/任务 billing/日志，
+ * 退款按 billing 快照（=实扣的折后金额）原路退，天然自洽。客户端预估仍显示标准价（保守，
+ * 折后实扣 ≤ 预估，无误伤）；节点计费（planNodeBilling=商积分池）不参与会员折扣。
+ * ⚠ 覆盖表只对**生效中会员**起作用——非会员永远原价，勿把它做成全员改价的第二条定价通道。
+ * 第248轮：覆盖值 **0=限免（会员免费）**——实扣 0、余额预检天然放行（与零价模型同路径）；
+ * 「最低 1 不归零」的下限只保护折扣路径，限免是明确 0 不受它约束。
+ */
+function membershipDiscounted(payer: User, cost: number, modelId?: string): number {
+	if (cost <= 0) return cost;
+	const m = activeMembershipOf(payer);
+	if (!m) return cost;
+	const pct = (modelId ? membershipModelDiscountOf(modelId) : undefined) ?? m.discountPercent;
+	if (pct <= 0) return 0; // 限免：会员免费
+	if (pct >= 100) return cost;
+	return Math.max(1, Math.ceil((cost * pct) / 100));
+}
+
 function planBilling(
 	user: User,
 	md: ModelDef | undefined,
 	params?: Record<string, unknown>,
 ): { cost: number; payer: User; reject?: string } {
-	const cost = md ? resolveModelCost(md, params) : 0;
 	// 共享积分模式：余额校验/扣费对象=团长的池；价格口径不变（统一平台价，catalog 预估仍=实扣）
 	const { payer } = teamPayerFor(user);
+	const cost = membershipDiscounted(payer, md ? resolveModelCost(md, params) : 0, md?.id);
 	if (cost > 0 && payer.credits < cost) {
 		return {
 			cost, payer,
@@ -249,6 +271,7 @@ const REHOST_ALLOW_SUFFIXES = [
 	"zexitongxue.com", // 简梦Z API 域（成片可能返回本站绝对地址）
 	".chre3.com", // 简梦T（llm.chre3.com）API 域（文档成片示例 llm.chre3.com/outputs/*.mp4 本站托管）
 	".vosle.xyz", // 简梦F（new.vosle.xyz）API 域（成片本站托管、下载须带 Bearer——轮询循环经 resultHeaders 带头转存）
+	".pixellelabs.com", // 简梦P（api.pixellelabs.com）API 域（第242轮新文档明给；成片下载端点 /v1/videos/{id}/content 本站托管、须带 Bearer——轮询循环经 resultHeaders 带头转存）
 	".aiid.edu.kg", // 出海营（api.aiid.edu.kg）API 域（成片若返回本站相对/绝对地址）
 	".zhongzhuan.chat", // 出海营素材/成片代理域（文档示例 imageproxy.zhongzhuan.chat）
 	".xienlive.com", // 算力（OctopusAI）API 域（第217轮；成片若返回本站地址）
@@ -264,6 +287,16 @@ const REHOST_ALLOW_SUFFIXES = [
 	//    真单转存失败时到请求记录 ④ 段看实际域名并在此增补。
 	".autodl.art", // autodl（autodl.art）API 域（第234轮；结果 results[].url 若为本站托管，下载防御式带 Token）
 	"autodl.art",
+	// 奇迹云（第249轮）：实例成片 /view 直链域——ComfyUI 入口（service_6006_domain）落在这几个域下
+	".autodl.com",
+	".gpuhub.com",
+	".seetacloud.com",
+	".boyesir.icu", // BYS（www.boyesir.icu）API 域（第252轮；成片 result.videos[0] 若为本站托管，下载防御式带 Bearer）
+	"boyesir.icu",
+	".pidoi.com", // QiQi（pidoi.com）API 域（第255轮；成片 video_url=本站 /video/task_xxx.mp4，下载带 Bearer）
+	"pidoi.com",
+	// ⚠ BYS 成片的实际 CDN 域未知（文档只写「https://.../xxx.mp4」占位、且明言保留 48 小时）——
+	//    真单转存失败时到请求记录 ④ 段看 result.videos[0] 实际域名并在此增补后缀。
 	// ⚠ autodl 成片的实际托管域未知（文档只写「https://」占位、且明言链接时效很短）——
 	//    真单转存失败时到请求记录 ④ 段看 results[].url 实际域名并在此增补后缀。
 	".aliyuncs.com",
@@ -368,7 +401,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 		registerDeviceOnLogin(user, body.deviceId || body.machineCode || deviceIdOf(req));
 		// 回传 accessKey：账号登录时客户端据此拿到真凭证并存储
 		const tv = sessionTeamView(user);
-		return { ok: true, accessKey: user.accessKey, user: { id: user.id, name: user.name, credits: tv.credits, team: tv.team, features: applyAgentFeatureGate(user.agentId, user.features) } };
+		return { ok: true, accessKey: user.accessKey, user: { id: user.id, name: user.name, credits: tv.credits, team: tv.team, membership: activeMembershipOf(user), features: applyAgentFeatureGate(user.agentId, user.features) } };
 	});
 
 	// （P2b 移除：激活码注册端点 /v1/register——激活码机制整体退役，注册一律走 /v1/register/account）
@@ -546,7 +579,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			// 第121轮：先过渠道商级闸门（商关的模式对其名下用户硬禁，AND 合成）
 			// 第172轮：team 随心跳下发（共享积分模式的团员 credits=团队池余额，见 sessionTeamView）
 			const tv = sessionTeamView(u);
-			return { ok: true, user: { id: u.id, name: u.name, credits: tv.credits, team: tv.team, features: applyAgentFeatureGate(u.agentId, u.features) } };
+			return { ok: true, user: { id: u.id, name: u.name, credits: tv.credits, team: tv.team, membership: activeMembershipOf(u), features: applyAgentFeatureGate(u.agentId, u.features) } };
 		});
 
 		// P3 渠道节点自身状态：节点管理端「源站连接」卡显示池余额/连通性用（仅 ank- 凭证可达）
@@ -565,6 +598,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 				totalSpent: u.totalSpent || 0, dailySpent: dailySpentToday(u), note: u.note,
 				inviteCode: ensureUserInviteCode(u),
 				invitedCount: invitedCountOf(u.id),
+				membership: activeMembershipOf(u),
 			};
 		});
 
@@ -660,6 +694,38 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			const r = setUserPassword(u, body.newPassword ?? "");
 			if (!r.ok) return reply.code(400).send({ error: { message: r.error } });
 			return { ok: true };
+		});
+
+		// ── 会员（第246轮）：单档方案 + 会员卡兑换码开通（仅源站签发）──
+		// 充值中心「会员套餐」页数据：方案（enabled 才下发）+ 我的会员状态
+		api.get("/v1/membership", async (req) => {
+			// P3 relay 边界：会员是源站签发体系，节点 v1 暂不支持（方案不下发=客户端显示未开放）
+			if (isRelay()) return { plan: undefined, membership: undefined };
+			const u = req.user!;
+			const p = getMembershipPlan();
+			return {
+				plan: p.enabled
+					? { name: p.name, priceLabel: p.priceLabel, days: p.days, credits: p.credits, discountPercent: p.discountPercent, benefitsNote: p.benefitsNote }
+					: undefined,
+				membership: activeMembershipOf(u),
+			};
+		});
+
+		// 会员卡核销：开通/续费（未过期顺延）+ 开通即到账算力。
+		// ⚠ 权益按卡上**冻结的规格**授予（不是核销时的方案）——事后调方案不改变用户已买到手的东西
+		api.post("/v1/membership/redeem", async (req, reply) => {
+			if (isRelay()) return reply.code(400).send({ error: { message: "渠道节点暂不支持会员，请联系你的服务商" } });
+			const u = req.user!;
+			const { code } = (req.body ?? {}) as { code?: string };
+			if (!code?.trim()) return reply.code(400).send({ error: { message: "缺少会员卡号" } });
+			if (!getMembershipPlan().enabled) return reply.code(400).send({ error: { message: "会员功能暂未开放，请联系管理员" } });
+			const card = getMembershipCard(code);
+			if (!card) return reply.code(404).send({ error: { message: "会员卡不存在" } });
+			const r = useMembershipCard(code, u.id, u.name || u.account || "");
+			if (!r.ok) return reply.code(400).send({ error: { message: r.error } });
+			applyMembershipGrant(u.id, { planName: r.card.planName, days: r.card.days, discountPercent: r.card.discountPercent });
+			const credits = r.card.credits > 0 ? (grantCredits(u.id, r.card.credits) ?? u.credits) : u.credits;
+			return { ok: true, added: r.card.credits, credits, membership: activeMembershipOf(u) };
 		});
 
 		// 兑换积分码：一次性码，成功则把面额充入余额
@@ -1309,6 +1375,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 					startedAt: l.startedAt,
 					finishedAt: l.finishedAt,
 					durationMs: l.durationMs,
+					queuedMs: l.queuedMs, // 第251轮：排队毫秒（客户端显示「365s（956s）」=实际生成（排队））
 					purpose: l.purpose,
 					purposeLabel: l.purpose ? PURPOSE_LABELS[l.purpose] || l.purpose : "",
 					model: l.model,

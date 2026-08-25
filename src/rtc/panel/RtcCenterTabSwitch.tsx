@@ -1,7 +1,8 @@
 /**
  * RtcCenterTabSwitch —— 中栏标题栏里的「AI 工作台 / 预览」紧凑页签（第240轮：从 RtcCenterStage
  * 顶部整行 nav 收进标题栏省一行竖向空间；经 FrameEditor 的 headerExtra 与分集切换器并排挂载）。
- * 读写 rtcCenterTabStore（自动切换信号 centerTabAutoSwitch 仍在 RtcCenterStage 里发，本组件只显示/手动切）。
+ * 读写 rtcCenterTabStore。⚠ 第251轮需求⑨起页签**只能手动切**——原自动切换信号已整体删除，
+ * 本组件是唯一的换页签入口（「播到无结果区间露出工作台」是层级语义，不动页签态）。
  * ⚠ 标题栏整条可拖起换面板（RtcPanelFrame 第236轮）：内部控件 draggable={false} + mousedown 不冒泡
  *   （照 RtcEpisodeSwitcher 同款做法）。
  */

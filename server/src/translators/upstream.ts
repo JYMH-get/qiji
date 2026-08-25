@@ -66,6 +66,12 @@ export function resolveUpstream(m: ModelDef, req?: GenerateRequest): Upstream {
 																			? { baseUrl: config.congge.baseUrl, apiKey: config.congge.apiKey }
 																	: m.protocol === "autodl-video"
 																		? { baseUrl: config.autodl.baseUrl, apiKey: config.autodl.apiKey }
+																	: m.protocol === "qijicloud-comfy"
+																		? { baseUrl: config.qijicloud.baseUrl, apiKey: config.qijicloud.apiKey }
+																	: m.protocol === "bys-video"
+																		? { baseUrl: config.bys.baseUrl, apiKey: config.bys.apiKey }
+																	: m.protocol === "qiqi-video"
+																		? { baseUrl: config.qiqi.baseUrl, apiKey: config.qiqi.apiKey }
 																	: { baseUrl: config.gateway.baseUrl, apiKey: config.gateway.apiKey };
 
 	const baseUrl = m.baseUrl || ch?.baseUrl || fallback.baseUrl;

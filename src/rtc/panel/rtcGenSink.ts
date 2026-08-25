@@ -20,7 +20,9 @@
 import { useProjectStore, resolveEpisodeKey } from "@/store/projectStore";
 import { useRtcStore } from "@/store/rtcStore";
 import type { AssetBlob } from "@/services/projectFile";
+import type { TaskExtra } from "@/services/adapters/types";
 import type { RtcDoc, RtcSegment } from "@/types/rtc";
+import { useRtcQueueStore } from "./rtcQueueStore";
 import {
 	clampProgress,
 	failedPatch,
@@ -137,6 +139,7 @@ export function liveSegment(segId: string): RtcSegment | null {
  * taskRef 语义见 [rtcGenCore.parseTaskRef]（pending 台账 id 或 `adapterKey|taskId`）。
  */
 export function armRunning(segId: string, taskRef?: string, owner?: string): void {
+	useRtcQueueStore.getState().setInfo(segId, null); // 清掉上一轮的排队信息（新任务从零起算）
 	commitPatch(segId, runningPatch(taskRef ? { taskRef } : undefined), owner);
 }
 
@@ -151,9 +154,14 @@ const progressMark = new Map<string, { at: number; val: number }>();
 /**
  * 进度回填（不进撤销栈 + 节流）：变化 <2% 且距上次 <500ms 的帧直接丢弃，
  * 不惊动 doc 回写 / 去抖落盘 / React 渲染。
+ *
+ * `extra`（排队位次/阶段文案，第251轮）走 [rtcQueueStore](./rtcQueueStore.ts) **只进内存不落盘**——
+ * 它每轮轮询都在变、且重开客户端后由首帧重新给出，写进片段只会白白惊动落盘链；
+ * ⚠ 且它**不受进度节流约束**（0% 排队期间进度恒定不动，位次却在往前走，节流会把它全丢掉）。
  */
-export function mirrorProgress(segId: string, progress: number, owner?: string): void {
+export function mirrorProgress(segId: string, progress: number, owner?: string, extra?: TaskExtra): void {
 	if (owner && !ownerAlive(owner)) return;
+	useRtcQueueStore.getState().setInfo(segId, extra ?? null);
 	const now = Date.now();
 	const mark = progressMark.get(segId);
 	const val = clampProgress(progress);
@@ -165,6 +173,7 @@ export function mirrorProgress(segId: string, progress: number, owner?: string):
 /** 生成失败（终态，进撤销栈）：片段**保留不删**，用户能看到失败原因并重试 */
 export function markFailed(segId: string, error: string, owner?: string): void {
 	progressMark.delete(segId);
+	useRtcQueueStore.getState().setInfo(segId, null);
 	commitPatch(segId, failedPatch(error), owner);
 }
 
@@ -187,6 +196,7 @@ export function landMedia(
 	},
 ): void {
 	progressMark.delete(segId);
+	useRtcQueueStore.getState().setInfo(segId, null);
 	const source =
 		args.sourceWindow !== undefined ? args.sourceWindow : sourceWindowFor(args.media, args.durationSec ?? 0);
 	commitPatch(segId, mediaPatch(args.media, args.uri, args.assetId, source), args.owner);

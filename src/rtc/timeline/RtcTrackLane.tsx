@@ -28,7 +28,10 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Clock, Film, GitBranch, Image as ImageIcon, Layers, Music } from "lucide-react";
 import type { RtcSegment, RtcTrack, RtcTrackType } from "@/types/rtc";
+import type { TaskExtra } from "@/services/adapters/types";
+import { progressLabel } from "@/lib/queueLabel";
 import { useRtcStore } from "@/store/rtcStore";
+import { useSegQueueInfo } from "../panel/rtcQueueStore";
 import { ensureVideoDuration } from "@/store/videoDurationStore";
 import {
 	getCachedPeaks,
@@ -64,7 +67,10 @@ export type SegVisualKind = "media" | "pending" | "running" | "failed";
 export interface SegVisual {
 	/** 展示形态：真实素材 / 待生成 / 生成中 / 失败 */
 	kind: SegVisualKind;
-	/** 状态文案（media 为空串） */
+	/**
+	 * 状态文案（media 为空串）。生成中一律取 [progressLabel](@/lib/queueLabel) 的成品文案
+	 * ——**已含百分比或排队位次**（「排队中 · 第 3 位」/「生成中 42%」），显示侧直接用，别再拼百分号。
+	 */
 	statusText: string;
 	/** 占位要生成的产物类型（取不到时回退片段自身 media，再取不到为 null）。
 	 *  ⚠ 类型从 RtcSegment 派生——types 侧扩枚举（如新增 "shot"）时这里零改动，
@@ -74,7 +80,7 @@ export interface SegVisual {
 	progress: number | null;
 	/** 是否画进度条 */
 	showProgressBar: boolean;
-	/** 是否显示百分比数字（窄片段省略） */
+	/** 有确定进度且非窄片段（statusText 里已含百分比，本字段仅供调用方判断「进度是否可读」） */
 	showPercent: boolean;
 	/** 虚线边框（待生成/生成中） */
 	dashed: boolean;
@@ -93,8 +99,9 @@ export interface SegVisual {
 /**
  * 片段 → 展示形态。status 只在占位片段上有意义（生成成功=落成 media 并清空该组字段），
  * 但 media 片段若带着 status 也照常呈现（防御式，不静默吞掉状态）。
+ * `extra`=该片段在途的排队信息（rtcQueueStore，只在内存不落盘）——决定「生成中 x%」还是「排队中 · 第 N 位」。
  */
-export function describeSegment(seg: RtcSegment, widthPx: number): SegVisual {
+export function describeSegment(seg: RtcSegment, widthPx: number, extra?: TaskExtra): SegVisual {
 	const isPh = seg.kind === "placeholder";
 	const status: SegVisualKind = seg.status ?? (isPh ? "pending" : "media");
 	const raw = seg.progress;
@@ -107,10 +114,16 @@ export function describeSegment(seg: RtcSegment, widthPx: number): SegVisual {
 	const isCompound = seg.kind === "compound";
 	const name = seg.name || (isPh ? "结果占位" : isCompound ? "复合片段" : "素材");
 	const statusText =
-		status === "pending" ? "待生成" : status === "running" ? "生成中" : status === "failed" ? "生成失败" : "";
+		status === "pending"
+			? "待生成"
+			: status === "running"
+				? progressLabel(progress, extra) // 已含百分比/排队位次
+				: status === "failed"
+					? "生成失败"
+					: "";
 	const isVersion = !!seg.originSegId;
 	const parts = [name];
-	if (statusText) parts.push(progress !== null ? `${statusText} ${progress}%` : statusText);
+	if (statusText) parts.push(statusText);
 	if (status === "failed" && seg.error) parts.push(seg.error);
 	if (isVersion) parts.push("重新生成的新版本");
 	if (isCompound) parts.push("复合片段 · 双击进入编辑");
@@ -297,7 +310,9 @@ const SegmentView = memo(function SegmentView({
 	const slim = rowH < 48;
 	const segH = rowH - (slim ? 8 : 12);
 	const color = TRACK_COLORS[trackType];
-	const v = describeSegment(seg, width);
+	// 在途排队信息（内存态；值不变时选择器返回同一引用=不额外重渲染）
+	const queueInfo = useSegQueueInfo(seg.id);
+	const v = describeSegment(seg, width, queueInfo);
 	const isPh = v.kind !== "media";
 	const isCompound = seg.kind === "compound"; // 第四批：复合片段（双击进入子时间轴编辑）
 	const isVideo = seg.kind === "media" && seg.media === "video" && !!seg.uri;
@@ -586,10 +601,7 @@ const PlaceholderBody = memo(function PlaceholderBody({
 			{!v.compact && (
 				<span className="flex items-center gap-1 text-[9px] leading-none truncate" style={{ color: tint }}>
 					{v.kind === "failed" ? <AlertTriangle size={9} /> : <GenIcon kind={v.genKind} color={tint} />}
-					<span className="truncate">
-						{v.statusText}
-						{v.showPercent ? ` ${v.progress}%` : ""}
-					</span>
+					<span className="truncate">{v.statusText}</span>
 				</span>
 			)}
 			{v.showProgressBar && (

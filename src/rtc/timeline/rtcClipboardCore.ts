@@ -13,8 +13,13 @@
  *   originSegId 是「重新生成」的血缘，副本并不是那次重生成，留着会让超分/去字幕误沿用别人的源窗口。
  *   取舍：**允许复制在途占位，但副本落成干净的 pending 占位**（不禁止操作——用户复制占位多半是想
  *   多要一版；把它变成「还没提交过」的占位，用户点生成即可，语义清晰且不会抢别人的任务）。
- * shotRef **保留**：它是「这个占位属于哪个分镜」的引用（同 assetId 性质），生成按 segId 各算各的，
- *   两个占位指向同一分镜 = 同一分镜的两版结果，与「重新生成」的版本堆叠语义一致。
+ * ⚠ **shotRef 不继承（第251轮需求⑧，推翻第240轮补充6 的「两个占位指向同一分镜」，勿回退）**：
+ *   用户实报「目前是完全复制，导致俩个素材接收同一结果，失去了复制出来同时出两套结果选择的机会」。
+ *   共用同一分镜时，两个片段的提示词/垫图/历史都是同一份，改一个动两个、生成结果也只落一处。
+ *   现改为：模板里剥掉 shotRef，落位后由 [segShotBinding.deriveShotForCopy](../panel/segShotBinding.ts)
+ *   **派生一个独立分镜**（内容整份复制、标记补镜头、插在源分镜之后 → 重排出「分镜3-1」）。
+ *   为此模板旁边留一个 {@link RtcClipEntry.srcShotRef} 只读线索——它**不是**副本的 shotRef，
+ *   只是「从哪个分镜派生」的出处；纯素材片段（无 shotRef）不受影响，仍是纯时间窗口复制。
  */
 import type { RtcPasteEntry } from "@/lib/rtcOps";
 import type { RtcDoc, RtcSegment, RtcTrackType } from "@/types/rtc";
@@ -28,15 +33,22 @@ export interface RtcClipEntry {
 	trackType: RtcTrackType;
 	/** 相对整批最早起点的偏移（微秒） */
 	offsetUs: number;
+	/**
+	 * 源片段的分镜出处（需求⑧）——**副本不继承它作为 shotRef**，仅供落位后派生一个独立分镜。
+	 * 源片段没有分镜（纯素材/字幕/复合）时缺省。
+	 */
+	srcShotRef?: { episodeId: string; shotId: string };
 }
 
 /**
- * 片段 → 剪贴板模板：剥 id 与在途状态；占位片段统一落成干净的 pending。
- * 其余字段（assetId/uri/name/source 窗口/speed/volume/muted/shotRef/genKind/groupId）原样保留。
+ * 片段 → 剪贴板模板：剥 id、在途状态与 **shotRef**；占位片段统一落成干净的 pending。
+ * 其余字段（assetId/uri/name/source 窗口/speed/volume/muted/genKind/groupId）原样保留。
+ * ⚠ shotRef 剥掉的理由见文件头「需求⑧」：副本要有**自己的**分镜（落位后由调用方派生），
+ *   共用会让两个片段抢同一份提示词与同一处结果。
  */
 export function copiedSegTemplate(seg: RtcSegment): Omit<RtcSegment, "id"> {
-	const { id: _id, status: _s, progress: _p, taskRef: _t, error: _e, originSegId: _o, ...rest } = seg;
-	void _id; void _s; void _p; void _t; void _e; void _o;
+	const { id: _id, status: _s, progress: _p, taskRef: _t, error: _e, originSegId: _o, shotRef: _sr, ...rest } = seg;
+	void _id; void _s; void _p; void _t; void _e; void _o; void _sr;
 	const template: Omit<RtcSegment, "id"> = { ...rest };
 	if (template.kind === "placeholder") template.status = "pending"; // 干净占位：还没提交过，用户点生成即可
 	return template;
@@ -62,6 +74,7 @@ export function buildClipEntries(doc: RtcDoc, ids: string[]): RtcClipEntry[] {
 		trackId: p.trackId,
 		trackType: p.trackType,
 		offsetUs: Math.max(0, p.seg.targetStartUs - base),
+		...(p.seg.shotRef ? { srcShotRef: { ...p.seg.shotRef } } : {}),
 	}));
 }
 

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1390" height="414" viewBox="0 0 1390 414">
+  <g transform="translate(-17.27 -13.27) scale(0.8445)">
+    <path d="M 277.10 375.06 A 150 150 0 1 1 375.06 277.10" fill="none" stroke="#6890F8" stroke-width="52" stroke-linecap="round"></path>
+    <line x1="189.57" y1="189.57" x2="412.31" y2="412.31" stroke="#6890F8" stroke-width="52" stroke-linecap="round"></line>
+    <circle cx="62.29" cy="62.29" r="30" fill="#6890F8"></circle>
+    <circle cx="465.35" cy="465.35" r="24" fill="#6890F8"></circle></g>
+
+    <circle cx="591" cy="137" r="90" fill="none" stroke="#6890F8" stroke-width="50"></circle>
+    <line x1="633.43" y1="179.43" x2="695.65" y2="241.65" stroke="#6890F8" stroke-width="50" stroke-linecap="round"></line>
+    <line x1="793" y1="117" x2="793" y2="227" stroke="#6890F8" stroke-width="50" stroke-linecap="round"></line>
+    <circle cx="793" cy="46" r="29" fill="#6890F8"></circle>
+    <path d="M 888 117 L 888 252 A 56 56 0 0 1 832 308" fill="none" stroke="#6890F8" stroke-width="50" stroke-linecap="round"></path>
+    <circle cx="888" cy="46" r="29" fill="#6890F8"></circle>
+    <line x1="983" y1="117" x2="983" y2="227" stroke="#6890F8" stroke-width="50" stroke-linecap="round"></line>
+    <circle cx="983" cy="46" r="29" fill="#6890F8"></circle>
+  <text x="476" y="400" font-family="Microsoft YaHei" font-size="58" letter-spacing="10" fill="#6890F8">万物皆为灵感  创作无限可能</text>
+</svg>

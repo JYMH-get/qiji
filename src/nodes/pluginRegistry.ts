@@ -519,9 +519,16 @@ export async function defaultNodeExecute(
 			}
 		};
 
-		const onProgress = (progress: number, status: string, partialText?: string) => {
+		const onProgress = (progress: number, status: string, partialText?: string, extra?: { queuePosition?: number; queueTotal?: number; stageText?: string }) => {
 			if (status === "queued" || status === "running") {
-				setRuntime({ status, progress: progress || 10 });
+				// 第251轮：排队情报写进 runtime（无值也要写 undefined——离开排队后必须把上一拍的位次抹掉）
+				setRuntime({
+					status,
+					progress: progress || 10,
+					queuePosition: extra?.queuePosition,
+					queueTotal: extra?.queueTotal,
+					stageText: extra?.stageText,
+				});
 				// 文本类节点：边收边把部分正文写进节点（结果即显示，流式刷新）
 				if (isTextDisplay(plugin) && typeof partialText === "string" && partialText) {
 					writeResultText(nodeId, partialText);

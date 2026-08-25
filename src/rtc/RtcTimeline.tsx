@@ -95,6 +95,7 @@ import {
 } from "./timeline/rtcEditActions";
 import { useRtcClipboard } from "./rtcClipboard";
 import { copiedSegTemplate } from "./timeline/rtcClipboardCore";
+import { deriveShotForCopy } from "./panel/segShotBinding";
 /* 外部文件拖入：懒上传登记素材库（与左栏「本地导入」同链）后入轨 */
 import { uploadKindFromFile, uploadMediaToCanvasAsset } from "@/canvas/nodeUpload";
 import { useLibraryStore } from "@/store/libraryStore";
@@ -168,9 +169,10 @@ type DragState =
 const COPY_TRIAL_ID = "__rtc_copy_trial__";
 
 /**
- * Alt+拖动复制的副本模板：按原片段现做（copiedSegTemplate 剥 id/在途状态，assetId 原样共享
+ * Alt+拖动复制的副本模板：按原片段现做（copiedSegTemplate 剥 id/在途状态/**shotRef**，assetId 原样共享
  * ——⚠ 副本仍是同一素材的纯时间窗口引用，绝不产生新素材实体；复合片段共享同一 subDocId 同理）。
  * groupId 刻意剥掉：Alt+拖动只复制单段，副本不并入原片段所在的组。原片段不存在返回 null。
+ * 分镜副本的 shotRef 不在这里给——落位后由 deriveShotForCopy 派生一个独立分镜（需求⑧）。
  */
 function dragCopyClone(d: RtcDoc, segId: string, atUs: number, id: string): RtcSegment | null {
 	for (const t of d.tracks) {
@@ -748,6 +750,10 @@ export function RtcTimeline() {
 			if (drag.copy) {
 				// Alt+拖动=复制：原片段分毫不动，副本按落点放置（addSegment 夹隙，与粘贴同语义）
 				const newId = genId("seg");
+				// 需求⑧：先记下源片段的分镜出处（commit 后副本自己是没有 shotRef 的）
+				const srcShotRef = activeDocNow()
+					?.tracks.flatMap((t) => t.segments)
+					.find((sg) => sg.id === drag.segId)?.shotRef;
 				commitActiveNow((d) => {
 					const clone = dragCopyClone(d, drag.segId, drag.desiredStartUs, newId);
 					if (!clone) return d;
@@ -760,7 +766,11 @@ export function RtcTimeline() {
 				});
 				// 副本落地即成为当前选中（可立刻继续拖/删）；commit 被身份守卫丢弃时副本不存在则不动选区
 				const after = activeDocNow();
-				if (after?.tracks.some((t) => t.segments.some((s) => s.id === newId))) st.setSelection([newId]);
+				if (after?.tracks.some((t) => t.segments.some((s) => s.id === newId))) {
+					// 副本落地 → 派生独立分镜（内容整份复制、插在源分镜之后 → 「分镜N-1」），再选中
+					deriveShotForCopy(newId, srcShotRef);
+					st.setSelection([newId]);
+				}
 			} else if (gap != null) {
 				// 悬停缝隙满时长 → 在该缝隙新建同类型轨道 + 放置（同一 commit = 一条 undo）
 				const newTrackId = genId("track");

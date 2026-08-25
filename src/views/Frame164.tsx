@@ -4,7 +4,27 @@ import { useProjectStore } from "@/store/projectStore";
 import { useCatalogStore } from "@/store/catalogStore";
 import { useModeFeatures } from "@/store/connectionStore";
 import { restoreRouteAfterLoad } from "@/views/utils/utils";
+import ModelPicker from "@/components/ModelPicker";
+import TemplatePicker from "@/components/TemplatePicker";
+import { QUICK_SPLIT_CHOICES, QUICK_NN_ID } from "@/lib/splitChoices";
+import { aspectFromName } from "@/lib/templateAspect";
+import type { ProjectModelConfig } from "@/services/projectFile";
 import "@/styles/Frame164.css";
+
+// ── 第243轮：新建项目即确定 影片比例 / 各步模型 / 提示词方案（全部为项目级预填，进入项目后各界面仍可改） ──
+const ASPECT_CHOICES = [
+    { v: "16:9", label: "16:9 横屏", w: 46, h: 26 },
+    { v: "9:16", label: "9:16 竖屏", w: 26, h: 46 },
+    { v: "1:1", label: "1:1 方形", w: 36, h: 36 },
+];
+// ⚠ 第245轮补充：文字/字段颜色走 styles.css 的 qiji-sec-title/qiji-field-* 三层 CSS（深色默认/浅色页面/
+// 深色弹窗孤岛）——新建项目页支持浅色主题，颜色写内联会压过浅色规则变成白字贴白底，勿回退。
+const secTitleStyle: React.CSSProperties = { fontSize: 14, fontWeight: 600, marginBottom: 10 };
+const hintStyle: React.CSSProperties = { marginTop: 6, fontSize: 11, lineHeight: 1.5 };
+const noteStyle: React.CSSProperties = { marginTop: 6, fontSize: 11, lineHeight: 1.5 };
+const pickerLabelStyle: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 4, fontSize: 11 };
+const pickerSelectStyle: React.CSSProperties = { borderRadius: 6, padding: "6px 8px", fontSize: 12, outline: "none", cursor: "pointer" };
+const optStyle: React.CSSProperties = { background: "#1f1f2e" };
 
 /** 未配置管理端 / catalog 未含画风时的本地兜底画风（与管理端默认画风预设一致） */
 const FALLBACK_STYLES = [
@@ -71,6 +91,35 @@ const Frame164 = () => {
     const [dragOver, setDragOver] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
+    // ── 第243轮：影片比例 / 各步模型 / 提示词方案（新建即确定；只是预填项目级设置，不锁死） ──
+    const [filmAspect, setFilmAspect] = useState("16:9");
+    const [modelSel, setModelSel] = useState<{ text?: string; image?: string; video?: string }>({});
+    const [episodeTplId, setEpisodeTplId] = useState(QUICK_NN_ID); // 剧集拆分方式（默认 快速·n-n，第121轮用户定）
+    const [assetTplId, setAssetTplId] = useState("");              // 资产拆分模板；""=跟随管理端默认款（isDefault）
+    const [sameSource, setSameSource] = useState(false);           // 图视同源
+    const [inferTplId, setInferTplId] = useState("");              // 多卡推理模板（storyboard.toVideoPrompt）
+    const [unifiedTplId, setUnifiedTplId] = useState("");          // 同源多卡模板（storyboard.unified）
+
+    // 模板清单（口径与 Frame1693 一致：资产拆分=script.analyze 且非「内部」；剧集=「剧集」分类）
+    const allTemplates = useCatalogStore((s) => s.catalog?.templates);
+    const extractTemplates = useMemo(
+        () => (allTemplates ?? []).filter((t) => t.purpose === "script.analyze" && t.category !== "内部"),
+        [allTemplates],
+    );
+    const episodeTemplates = useMemo(() => (allTemplates ?? []).filter((t) => t.category === "剧集"), [allTemplates]);
+
+    // 比例决定链（用户定稿）：模板名内嵌比例（如「资产拆分9:16」）> 项目默认影片比例。
+    // 这里解析「实际将使用的模板」（显式选中款，空=默认款）的名称，给出提示并在创建时落地。
+    const defExtract = extractTemplates.find((t) => t.isDefault) ?? extractTemplates[0];
+    const effAssetTpl = (assetTplId ? extractTemplates.find((t) => t.id === assetTplId) : undefined) ?? defExtract;
+    const assetTplAspect = aspectFromName(effAssetTpl?.name);
+    const inferPurpose = sameSource ? "storyboard.unified" : "storyboard.toVideoPrompt";
+    const inferTpls = useMemo(() => (allTemplates ?? []).filter((t) => t.purpose === inferPurpose), [allTemplates, inferPurpose]);
+    const curInferTplId = sameSource ? unifiedTplId : inferTplId;
+    const effInferTpl = (curInferTplId ? inferTpls.find((t) => t.id === curInferTplId) : undefined)
+        ?? inferTpls.find((t) => t.isDefault) ?? inferTpls[0];
+    const inferTplAspect = aspectFromName(effInferTpl?.name);
+
     // catalog 异步到达后，确保选中项落在可选范围内（默认第一个）。
     useEffect(() => {
         if (styleOptions.length > 0 && !styleOptions.some((o) => o.id === artStyleId)) {
@@ -109,6 +158,25 @@ const Frame164 = () => {
         // 第174轮：记录所选画风预设 id（决定资产拆分自动附加的【画风前缀】胶囊）。
         // 仅 catalog 画风有真实预设 id；本地兜底画风（未连管理端）id 不在预设库 → 存空、不挂胶囊。
         store.setVisualStyleId(artStylesRaw.length > 0 && selectedStyle ? selectedStyle.id : "");
+
+        // 第243轮：新建即确定 各步模型 / 影片比例 / 提示词方案（项目级预填，进入项目后各界面仍可改）。
+        // 模型只写用户显式选过的（留空=沿用「自动取第一个可用」的既有默认，catalog 顺序变化时自动跟随）。
+        const pmc: ProjectModelConfig = {};
+        if (modelSel.text) pmc.text = modelSel.text;
+        if (modelSel.image) pmc.image = modelSel.image;
+        if (modelSel.video) pmc.video = modelSel.video;
+        if (Object.keys(pmc).length > 0) store.setProjectModelConfig(pmc);
+        // 比例决定链：推理模板名内嵌比例（如「同源推理9:16」）优先于所选影片比例（用户定稿）；
+        // 资产出图比例由 AssetWorkbench/RTC 按「资产拆分模板内嵌比例 > 项目默认」读取时解析，这里不写。
+        const effAspect = inferTplAspect ?? filmAspect;
+        store.setMediaSettings({
+            imageAspect: effAspect,
+            aspect: effAspect,
+            episodeTplId,
+            imgVideoSameSource: sameSource,
+            ...(assetTplId ? { assetExtractTplId: assetTplId } : {}),
+            ...(sameSource ? (unifiedTplId ? { unifiedTplId } : {}) : (inferTplId ? { inferTplId } : {})),
+        });
 
         await store.save(true);
     };
@@ -285,7 +353,7 @@ const Frame164 = () => {
                                     <div className="stroke-16_13"></div>
                                 </div>
 
-                                {/* Preferences Area — 仅保留画风 */}
+                                {/* Preferences Area — 画风 + 影片比例/生成模型/提示词方案（第243轮扩展） */}
                                 <div id="16_39" className="Pixso-frame-16_39" style={{ height: "auto" }}>
                                     <div className="frame-content-16_39">
                                         <p id="16_40" className="Pixso-paragraph-16_40">
@@ -328,6 +396,92 @@ const Frame164 = () => {
                                                     <div className="stroke-16_80"></div>
                                                 </div>
                                             </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* ── 第243轮：影片比例 / 生成模型 / 提示词方案（新建即确定；进入项目后各界面仍可单独改） ── */}
+                                <div style={{ display: "flex", flexDirection: "column", gap: 22, marginTop: 10, padding: "0 2px" }}>
+                                    {/* 影片比例 */}
+                                    <div>
+                                        <p className="qiji-sec-title" style={secTitleStyle}>{"影片比例"}</p>
+                                        <div style={{ display: "flex", gap: 12 }}>
+                                            {ASPECT_CHOICES.map((a) => {
+                                                const active = filmAspect === a.v;
+                                                return (
+                                                    <button
+                                                        key={a.v}
+                                                        type="button"
+                                                        onClick={() => setFilmAspect(a.v)}
+                                                        title="全程默认比例：故事板出图、视频生成与资产出图都按它（名称带比例的提示词模板会覆盖对应步骤；各界面仍可单独改）"
+                                                        className={`qiji-aspect-chip${active ? " on" : ""}`}
+                                                        style={{
+                                                            flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 8,
+                                                            padding: "12px 8px", borderRadius: 8, cursor: "pointer", fontSize: 12,
+                                                        }}
+                                                    >
+                                                        <span style={{ height: 46, display: "flex", alignItems: "center" }}>
+                                                            <span className="qiji-aspect-box" style={{ display: "block", width: a.w, height: a.h, borderRadius: 3 }} />
+                                                        </span>
+                                                        {a.label}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                        {inferTplAspect && inferTplAspect !== filmAspect && (
+                                            <p className="qiji-field-hint" style={hintStyle}>{`所选推理模板名称指定比例 ${inferTplAspect}——故事板/视频将按 ${inferTplAspect} 生成，其余步骤按 ${filmAspect}。`}</p>
+                                        )}
+                                    </div>
+
+                                    {/* 生成模型 */}
+                                    <div>
+                                        <p className="qiji-sec-title" style={secTitleStyle}>{"生成模型"}</p>
+                                        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                                            <ModelPicker cap="text" label="文本模型（剧集拆分 / 资产拆分 / 智能推理）" value={modelSel.text ?? ""} onChange={(id) => setModelSel((s) => ({ ...s, text: id }))} noPlaceholder />
+                                            <ModelPicker cap="image" label="图像模型（资产出图 / 故事板）" value={modelSel.image ?? ""} onChange={(id) => setModelSel((s) => ({ ...s, image: id }))} noPlaceholder />
+                                            <ModelPicker cap="video" label="视频模型（分镜成片）" value={modelSel.video ?? ""} onChange={(id) => setModelSel((s) => ({ ...s, video: id }))} noPlaceholder />
+                                        </div>
+                                        <p className="qiji-field-note" style={noteStyle}>{"未改动 = 自动使用当前第一个可用模型（与各界面默认一致）；进入项目后随时可换。"}</p>
+                                    </div>
+
+                                    {/* 提示词方案 */}
+                                    <div>
+                                        <p className="qiji-sec-title" style={secTitleStyle}>{"提示词方案"}</p>
+                                        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                                            <label className="qiji-field-label" style={pickerLabelStyle}>
+                                                {"剧集拆分方式"}
+                                                <select value={episodeTplId} onChange={(e) => setEpisodeTplId(e.target.value)} className="qiji-field-select" style={pickerSelectStyle}>
+                                                    {QUICK_SPLIT_CHOICES.map((c) => (
+                                                        <option key={c.id} value={c.id} style={optStyle}>{c.label}</option>
+                                                    ))}
+                                                    {episodeTemplates.map((t) => (
+                                                        <option key={t.id} value={t.id} style={optStyle}>{t.name}</option>
+                                                    ))}
+                                                </select>
+                                            </label>
+                                            <label className="qiji-field-label" style={pickerLabelStyle}>
+                                                {"资产拆分模板"}
+                                                <select value={assetTplId || defExtract?.id || ""} onChange={(e) => setAssetTplId(e.target.value)} className="qiji-field-select" style={pickerSelectStyle}>
+                                                    {extractTemplates.length === 0 && (
+                                                        <option value="" style={optStyle}>{"（连接管理端后可选，暂按默认）"}</option>
+                                                    )}
+                                                    {extractTemplates.map((t) => (
+                                                        <option key={t.id} value={t.id} style={optStyle}>{t.name}</option>
+                                                    ))}
+                                                </select>
+                                            </label>
+                                            {assetTplAspect && (
+                                                <p className="qiji-field-hint" style={{ ...hintStyle, marginTop: 0 }}>{`资产拆分模板名称指定比例 ${assetTplAspect}——资产出图将按 ${assetTplAspect}（其余步骤不受影响）。`}</p>
+                                            )}
+                                            <label className="qiji-check-label" style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12 }} title="开启后：故事板与视频共用同一段「同源提示词」，推理走同源模板">
+                                                <input type="checkbox" checked={sameSource} onChange={(e) => setSameSource(e.target.checked)} />
+                                                {"图视同源（故事板与视频共用同一段提示词）"}
+                                            </label>
+                                            {sameSource ? (
+                                                <TemplatePicker purpose="storyboard.unified" value={unifiedTplId} onChange={setUnifiedTplId} label="同源推理模板（多卡）" />
+                                            ) : (
+                                                <TemplatePicker purpose="storyboard.toVideoPrompt" value={inferTplId} onChange={setInferTplId} label="智能推理模板（多卡）" />
+                                            )}
                                         </div>
                                     </div>
                                 </div>

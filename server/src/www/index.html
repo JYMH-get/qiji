@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qiji 漫剧 · 万物皆为灵感，创作无限奇迹</title>
+<meta name="description" content="Qiji 漫剧是一款面向漫剧 / 短剧创作者的 AI 桌面创作工具：剧本推理、资产拆分、批量出图出片、多轨时间轴剪辑，一个软件走完全流程。">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+/* ── Nocturne 设计系统令牌（来自设计稿 _ds/styles.css，裁剪到本站用到的部分）── */
+:root{
+  --color-bg:#161826; --color-surface:#232532; --color-text:#e9e9ed;
+  --color-accent:#9184d9;
+  --color-accent-100:#f5f4ff; --color-accent-200:#e7e5fe; --color-accent-300:#d2cefd;
+  --color-accent-700:#5d5294; --color-accent-800:#423a6a;
+  --color-neutral-100:#f3f5fe; --color-neutral-800:#3f424d; --color-neutral-900:#292b31;
+  --color-divider:color-mix(in srgb,#e9e9ed 16%,transparent);
+  --color-section:#262a60; --color-section-glow:#353b80;
+  --radius-sm:4px; --radius-md:8px; --radius-lg:14px;
+  --shadow-sm:0 0 0 1px #3f424d;
+  --shadow-md:0 0 0 1px #595d6c, 0 6px 18px rgba(0,0,0,0.55);
+  --shadow-lg:0 0 0 1px #9397ab, 0 16px 40px rgba(0,0,0,0.65);
+  --font-heading:"Inter","Noto Sans SC",system-ui,sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--color-bg);color:var(--color-text);font-family:"Inter","Noto Sans SC",system-ui,sans-serif;font-size:15px;line-height:1.55}
+h1,h2,h3,h4,h5,h6{font-family:var(--font-heading);font-weight:500;line-height:1.12;letter-spacing:-0.015em;margin:0 0 5.6px}
+h1{font-size:42px}h2{font-size:32px}h3{font-size:25px}h4{font-size:20px}h5{font-size:16px}
+h6{font-size:13px;letter-spacing:0.08em;text-transform:uppercase}
+p{margin:0 0 8.4px}
+a{color:var(--color-accent);text-decoration:none;text-underline-offset:3px}
+a:hover{color:var(--color-accent-300)}
+img{display:block;max-width:100%}
+:focus{outline:none}
+:focus-visible{outline:2px solid var(--color-accent);outline-offset:2px}
+::selection{background:color-mix(in srgb,var(--color-accent) 30%,transparent)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;text-decoration:none;font-family:var(--font-heading);font-weight:500;font-size:14px;line-height:1.2;color:var(--color-text);background:transparent;border:1px solid transparent;padding:5.6px 10px;border-radius:var(--radius-md)}
+.btn-primary{color:var(--color-accent);border-color:var(--color-accent)}
+.btn-primary:hover{background:color-mix(in srgb,var(--color-accent) 12%,transparent)}
+.btn-primary:active{background:color-mix(in srgb,var(--color-accent) 22%,transparent)}
+.btn-secondary{border-color:var(--color-divider)}
+.btn-secondary:hover{background:color-mix(in srgb,var(--color-text) 7%,transparent)}
+.btn.disabled{opacity:0.45;cursor:not-allowed}
+.card{display:flex;flex-direction:column;gap:5.6px;padding:8.4px;border-radius:var(--radius-md);background:var(--color-surface)}
+.card-kicker{font-size:10px;letter-spacing:0.1em;text-transform:uppercase;color:var(--color-accent)}
+.card-title{font-family:var(--font-heading);font-weight:500;font-size:17px;line-height:1.2}
+.card-body{margin:0;font-size:13px;opacity:0.8;flex:1}
+.elev-sm{box-shadow:var(--shadow-sm)}
+.elev-md{box-shadow:var(--shadow-md)}
+.tag{display:inline-flex;align-items:center;font-size:11px;letter-spacing:0.02em;padding:3px 10px;border-radius:6px}
+.tag-accent{background:var(--color-accent-800);color:var(--color-accent-100)}
+.tag-neutral{background:var(--color-neutral-800);color:var(--color-neutral-100)}
+.tag-outline{border:1px solid var(--color-accent);color:var(--color-accent)}
+.table{width:100%;border-collapse:collapse;font-size:14px}
+.table td{padding:5.6px;border-bottom:1px solid transparent}
+.table tbody tr{background:linear-gradient(to right,transparent,color-mix(in srgb,var(--color-text) 8%,transparent) 48px,color-mix(in srgb,var(--color-text) 8%,transparent) calc(100% - 48px),transparent) no-repeat bottom / 100% 1px}
+.dialog-backdrop{position:fixed;inset:0;display:grid;place-items:center;padding:11.2px;background:color-mix(in srgb,var(--color-neutral-900) 50%,transparent)}
+.muted{color:color-mix(in srgb,var(--color-text) 60%,transparent)}
+.hide{display:none !important}
+/* ── 页面级 ── */
+@keyframes qjscrollX{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+@keyframes qjintro{0%{opacity:1}70%{opacity:1}100%{opacity:0}}
+@keyframes qjintroMark{0%{opacity:0;transform:scale(0.92)}40%{opacity:1;transform:scale(1)}100%{opacity:1;transform:scale(1)}}
+@keyframes qjintroLine{0%{width:0;opacity:0}45%{opacity:1}100%{width:180px;opacity:1}}
+.page{position:relative;z-index:1;max-width:1160px;margin:0 auto;padding:0 32px 96px}
+.zoomable{cursor:zoom-in}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:24px}
+.grid5{display:grid;grid-template-columns:repeat(5,1fr);gap:0;align-items:start}
+.feat-row{display:grid;gap:48px;align-items:center;padding:56px 0;border-top:1px solid var(--color-divider)}
+.feat-row.txt-left{grid-template-columns:minmax(0,0.85fr) minmax(0,1.15fr)}
+.feat-row.txt-right{grid-template-columns:minmax(0,1.15fr) minmax(0,0.85fr)}
+.feat-ul{margin:0;padding-left:18px;font-size:14px;line-height:1.9;color:color-mix(in srgb,var(--color-text) 72%,transparent)}
+.shot-frame{border-radius:var(--radius-md);overflow:hidden;box-shadow:var(--shadow-md);cursor:zoom-in}
+.step{border-top:1px solid var(--color-divider);padding-top:16px}
+.step.first{border-top-color:var(--color-accent)}
+.step .no{font-size:11px;letter-spacing:0.1em;color:var(--color-accent);margin-bottom:8px}
+.step h4{margin-bottom:6px}
+.step p{font-size:13px;color:color-mix(in srgb,var(--color-text) 60%,transparent);margin:0}
+#annBar{position:relative;z-index:15;background:linear-gradient(90deg,var(--color-section) 0%,var(--color-section-glow) 100%);border-bottom:1px solid var(--color-divider);cursor:pointer}
+#annBar .in{max-width:1160px;margin:0 auto;padding:8px 32px;display:flex;align-items:center;gap:10px;font-size:13px}
+#annBar .k{flex:none;font-size:10px;letter-spacing:0.12em;padding:2px 8px;border-radius:999px;border:1px solid var(--color-accent-700);color:var(--color-accent-300)}
+#annBar .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#annBar .more{margin-left:auto;flex:none;font-size:12px;color:var(--color-accent-300)}
+@media (max-width:920px){
+  h1{font-size:34px !important}
+  .page{padding-left:20px;padding-right:20px}
+  .grid3,.grid4,.grid5{grid-template-columns:1fr 1fr}
+  .feat-row.txt-left,.feat-row.txt-right{grid-template-columns:1fr}
+  .feat-row.txt-right > .shot-frame{order:2}
+  header nav{overflow-x:auto;scrollbar-width:none}
+  .dl-grid{grid-template-columns:1fr !important}
+  .join-contact{grid-template-columns:1fr !important}
+}
+@media (max-width:560px){ .grid3,.grid4,.grid5{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+<div style="min-height:100vh;position:relative;background:radial-gradient(1200px 600px at 78% -10%, rgba(38,42,96,0.7) 0%, rgba(38,42,96,0) 60%), var(--color-bg)">
+<canvas id="stars" style="position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none"></canvas>
+
+<div id="intro" style="position:fixed;inset:0;z-index:60;display:grid;place-items:center;background:var(--color-bg);animation:qjintro 2s ease forwards;pointer-events:none">
+  <div style="display:flex;flex-direction:column;align-items:center;gap:18px">
+    <img data-img="logo-full" alt="Qiji" style="height:46px;width:auto;animation:qjintroMark 1.4s cubic-bezier(.2,.7,.2,1) forwards">
+    <div style="height:1px;background:linear-gradient(to right,transparent,var(--color-accent),transparent);animation:qjintroLine 1.6s .2s cubic-bezier(.2,.7,.2,1) forwards"></div>
+    <div style="font-size:12px;letter-spacing:0.32em;color:var(--color-accent-300);opacity:0;animation:qjintroMark 1.6s .45s ease forwards">万物皆为灵感</div>
+  </div>
+</div>
+
+<div id="zoom" class="dialog-backdrop hide" style="z-index:50;background:color-mix(in srgb,#161826 88%,transparent);cursor:zoom-out;padding:48px">
+  <img id="zoomImg" alt="界面放大" style="max-width:100%;max-height:100%;border-radius:var(--radius-md);box-shadow:var(--shadow-lg)">
+  <div style="position:absolute;bottom:22px;left:0;right:0;text-align:center;font-size:12px;color:color-mix(in srgb,var(--color-text) 50%,transparent)">点击任意处关闭 · 双击界面图可放大</div>
+</div>
+
+<div id="annDlg" class="dialog-backdrop hide" style="z-index:55">
+  <div style="width:min(640px,100%);max-height:80vh;overflow:auto;display:flex;flex-direction:column;gap:8px;padding:22px 24px;border-radius:var(--radius-lg);background:var(--color-surface);box-shadow:var(--shadow-lg)">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <h3 style="margin:0;font-size:20px">公告</h3>
+      <button class="btn btn-secondary" style="margin-left:auto;padding:4px 12px" onclick="document.getElementById('annDlg').classList.add('hide')">关闭</button>
+    </div>
+    <div id="annList"></div>
+  </div>
+</div>
+
+<header style="position:sticky;top:0;z-index:20;backdrop-filter:blur(14px);background:color-mix(in srgb,#161826 82%,transparent);border-bottom:1px solid var(--color-divider)">
+  <nav style="display:flex;align-items:center;gap:28px;max-width:1160px;margin:0 auto;padding:14px 32px">
+    <a href="#home" style="margin-right:auto;flex:none"><img data-img="logo-full" alt="Qiji" style="height:26px;width:auto"></a>
+    <a href="#home" data-nav="home" style="font-size:14px;flex:none">首页</a>
+    <a href="#features" data-nav="features" style="font-size:14px;flex:none">功能介绍</a>
+    <a href="#download" data-nav="download" style="font-size:14px;flex:none">软件下载</a>
+    <a href="#join" data-nav="join" style="font-size:14px;flex:none">加入我们</a>
+    <a href="#changelog" data-nav="changelog" style="font-size:14px;flex:none">更新记录</a>
+    <a href="#download" class="btn btn-primary" style="margin-left:8px;flex:none">下载 Windows 版</a>
+  </nav>
+</header>
+
+<div id="annBar" class="hide" onclick="openAnnouncements()">
+  <div class="in"><span class="k">公告</span><span class="t" id="annBarText"></span><span class="more">查看全部 ›</span></div>
+</div>
+
+<!-- ═══════════ 首页 ═══════════ -->
+<main class="page" data-page="home">
+  <section style="padding:96px 0 56px">
+    <div style="display:inline-flex;align-items:center;gap:8px;padding:5px 12px;border:1px solid var(--color-accent-700);border-radius:999px;font-size:12px;color:var(--color-accent-300);margin-bottom:26px">AI COMIC-DRAMA PIPELINE · 一体化漫剧生产流水线</div>
+    <h1 style="font-size:58px;line-height:1.08;letter-spacing:-0.02em;margin:0 0 20px">万物皆为灵感<br>创作<span style="color:var(--color-accent)">无限奇迹</span></h1>
+    <p style="font-size:17px;line-height:1.7;max-width:30em;color:color-mix(in srgb,var(--color-text) 72%,transparent);margin:0 0 14px">Qiji 漫剧是一款面向漫剧 / 短剧创作者的 AI 桌面创作工具。一份剧本进去，分集、分镜、角色资产自动拆好，批量出图出片，直接在时间轴上剪成成片。</p>
+    <p style="font-size:12px;letter-spacing:0.06em;color:color-mix(in srgb,var(--color-text) 45%,transparent);margin:0 0 30px">From script to finished episode — one desktop app.</p>
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <a href="#download" class="btn btn-primary" style="font-size:15px;padding:11px 22px">立即下载 · Windows</a>
+      <a href="#features" class="btn btn-secondary" style="font-size:15px;padding:11px 22px">看看它怎么做</a>
+    </div>
+  </section>
+
+  <section style="padding:8px 0 24px">
+    <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:18px">
+      <h6 style="color:var(--color-accent);margin:0">MADE WITH QIJI · 作品墙</h6>
+      <span style="font-size:12px;color:color-mix(in srgb,var(--color-text) 42%,transparent)">用 Qiji 漫剧生成的封面，无限拼接</span>
+    </div>
+    <div style="margin:0 -32px;overflow:hidden;mask-image:linear-gradient(to right,transparent,#000 6%,#000 94%,transparent);-webkit-mask-image:linear-gradient(to right,transparent,#000 6%,#000 94%,transparent)">
+      <div id="coverStrip" style="display:flex;gap:14px;width:max-content;animation:qjscrollX 60s linear infinite"></div>
+    </div>
+  </section>
+
+  <section id="statsSec" style="margin:0 -32px;padding:44px 32px;background:linear-gradient(120deg,var(--color-section) 0%,var(--color-section-glow) 100%)">
+    <div class="grid4" style="max-width:1096px;margin:0 auto">
+      <div><div style="font-size:40px;line-height:1;letter-spacing:-0.02em">20+</div><div style="font-size:13px;margin-top:8px;color:color-mix(in srgb,var(--color-text) 72%,transparent)">图片 / 视频生成渠道聚合</div></div>
+      <div><div style="font-size:40px;line-height:1;letter-spacing:-0.02em">5 类</div><div style="font-size:13px;margin-top:8px;color:color-mix(in srgb,var(--color-text) 72%,transparent)">角色 · 群像 · 场景 · 生物 · 物品</div></div>
+      <div><div style="font-size:40px;line-height:1;letter-spacing:-0.02em">3 种</div><div style="font-size:13px;margin-top:8px;color:color-mix(in srgb,var(--color-text) 72%,transparent)">资产 / 画布 / 实时剪辑模式</div></div>
+      <div><div style="font-size:40px;line-height:1;letter-spacing:-0.02em">1 键</div><div style="font-size:13px;margin-top:8px;color:color-mix(in srgb,var(--color-text) 72%,transparent)">导出剪映草稿继续精修</div></div>
+    </div>
+  </section>
+
+  <section style="padding:84px 0 20px">
+    <h6 style="color:var(--color-accent);margin-bottom:14px">THE PIPELINE · 全流程</h6>
+    <h2 style="font-size:36px;max-width:16em;margin-bottom:16px">不用在四五个工具之间来回倒腾</h2>
+    <p style="max-width:44em;color:color-mix(in srgb,var(--color-text) 65%,transparent);margin-bottom:44px">素材、提示词、分镜全程结构化流转——上一步的结果就是下一步的输入。</p>
+    <div class="grid5">
+      <div class="step first" style="padding-right:20px"><div class="no">01</div><h4>剧本推理</h4><p>自动拆分集，读懂人物与情节。</p></div>
+      <div class="step" style="padding-right:20px"><div class="no">02</div><h4>资产拆分</h4><p>五类资产成表，附出图提示词。</p></div>
+      <div class="step" style="padding-right:20px"><div class="no">03</div><h4>造型出图</h4><p>批量生成形象与造型变体。</p></div>
+      <div class="step" style="padding-right:20px"><div class="no">04</div><h4>整集分镜</h4><p>原文 + 故事板 + 视频提示词，自动配垫图。</p></div>
+      <div class="step"><div class="no">05</div><h4>剪辑成片</h4><p>结果自动入轨，原位替换，一键导出。</p></div>
+    </div>
+  </section>
+
+  <section class="grid3" style="padding:76px 0 30px">
+    <div class="card elev-sm" style="padding:0;overflow:hidden">
+      <div class="zoomable" title="双击放大" style="aspect-ratio:16/10;overflow:hidden;background:#0f111c"><img data-img="shot-assets" class="zoomsrc" alt="资产模式" style="width:100%;height:100%;object-fit:cover;object-position:left top"></div>
+      <div style="padding:18px 18px 20px"><div class="card-kicker">MODE 01</div><div class="card-title" style="margin:6px 0 8px">资产模式 · 表格创作</div><p class="card-body" style="margin:0">剧本进、资产出。整集的角色、场景、物品排成表，提示词随行。</p></div>
+    </div>
+    <div class="card elev-sm" style="padding:0;overflow:hidden">
+      <div class="zoomable" title="双击放大" style="aspect-ratio:16/10;overflow:hidden;background:#0f111c"><img data-img="shot-canvas" class="zoomsrc" alt="画布模式" style="width:100%;height:100%;object-fit:cover;object-position:center"></div>
+      <div style="padding:18px 18px 20px"><div class="card-kicker">MODE 02</div><div class="card-title" style="margin:6px 0 8px">画布模式 · 无限节点</div><p class="card-body" style="margin:0">8 类节点自由连线、流式裂变，涂鸦、深度图、720° 全景随手接。</p></div>
+    </div>
+    <div class="card elev-sm" style="padding:0;overflow:hidden">
+      <div class="zoomable" title="双击放大" style="aspect-ratio:16/10;overflow:hidden;background:#0f111c"><img data-img="shot-editor-1" class="zoomsrc" alt="实时剪辑模式" style="width:100%;height:100%;object-fit:cover;object-position:center"></div>
+      <div style="padding:18px 18px 20px"><div class="card-kicker">MODE 03</div><div class="card-title" style="margin:6px 0 8px">实时剪辑 · 多轨时间轴</div><p class="card-body" style="margin:0">生成结果按分镜自动占位入轨，成片原位替换，导出剪映草稿。</p></div>
+    </div>
+  </section>
+
+  <section style="padding:70px 0 0;display:flex;align-items:center;justify-content:space-between;gap:40px;flex-wrap:wrap">
+    <div><h2 style="font-size:32px;margin-bottom:8px">现在就把第一集做出来</h2><p style="margin:0;color:color-mix(in srgb,var(--color-text) 60%,transparent)">Windows 桌面端，安装即用。</p></div>
+    <a href="#download" class="btn btn-primary" style="font-size:15px;padding:12px 24px">下载 Qiji 漫剧</a>
+  </section>
+</main>
+
+<!-- ═══════════ 功能介绍 ═══════════ -->
+<main class="page hide" data-page="features">
+  <section style="padding:72px 0 20px">
+    <h6 style="color:var(--color-accent);margin-bottom:14px">FEATURES · 功能介绍</h6>
+    <h1 style="font-size:46px;max-width:14em;margin-bottom:16px">三种模式，覆盖漫剧创作的全流程</h1>
+    <p style="max-width:42em;font-size:16px;color:color-mix(in srgb,var(--color-text) 68%,transparent)">从读剧本到导出成片，每一步都留在同一个工程里。</p>
+  </section>
+
+  <section class="feat-row txt-left">
+    <div>
+      <span class="tag tag-accent">资产模式</span>
+      <h2 style="font-size:30px;margin:16px 0 14px">剧本进去，整集的资产表出来</h2>
+      <ul class="feat-ul">
+        <li>剧本推理自动拆分集，理清人物关系与情节节奏</li>
+        <li>提取角色 / 群像 / 场景 / 生物 / 物品五类资产，并生成出图提示词</li>
+        <li>资产出图与造型变体，同一角色多套服化一次生成</li>
+        <li>视频界面智能推理整集分镜：原文 + 故事板提示词 + 视频提示词，自动匹配垫图素材</li>
+      </ul>
+    </div>
+    <div class="shot-frame zoomable" title="双击放大"><img data-img="shot-assets" class="zoomsrc" alt="资产模式界面" style="width:100%"></div>
+  </section>
+
+  <section class="feat-row txt-right">
+    <div class="shot-frame zoomable" title="双击放大"><img data-img="shot-storyboard" class="zoomsrc" alt="分镜界面" style="width:100%"></div>
+    <div>
+      <span class="tag tag-accent">分镜与剧本</span>
+      <h2 style="font-size:30px;margin:16px 0 14px">分镜不再靠手敲</h2>
+      <ul class="feat-ul">
+        <li>整集分镜一次推理成表，原文与镜头一一对齐</li>
+        <li>故事板提示词、视频提示词分开可编辑，改一句重生成一镜</li>
+        <li>垫图素材自动匹配已生成资产，角色形象前后统一</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="feat-row txt-left">
+    <div>
+      <span class="tag tag-accent">画布模式</span>
+      <h2 style="font-size:30px;margin:16px 0 14px">无限画布，想到哪连到哪</h2>
+      <ul class="feat-ul">
+        <li>8 类节点自由连线、流式裂变，一张图分叉出十个方向</li>
+        <li>涂鸦标注直接改图，指哪改哪</li>
+        <li>转深度图本地推理，零费用</li>
+        <li>转视角、720° 全景、3D 导演台，镜头语言在画布上试</li>
+      </ul>
+    </div>
+    <div class="shot-frame zoomable" title="双击放大"><img data-img="shot-canvas" class="zoomsrc" alt="无限画布界面" style="width:100%"></div>
+  </section>
+
+  <section class="feat-row txt-right">
+    <div class="shot-frame zoomable" title="双击放大"><img data-img="shot-editor-2" class="zoomsrc" alt="实时剪辑界面" style="width:100%"></div>
+    <div>
+      <span class="tag tag-accent">实时剪辑</span>
+      <h2 style="font-size:30px;margin:16px 0 14px">剪映式时间轴，就在同一个窗口里</h2>
+      <ul class="feat-ul">
+        <li>多轨时间轴，AI 生成结果按分镜自动占位入轨</li>
+        <li>成片回来原位替换，占位与成片顺序不会错乱</li>
+        <li>一键导出剪映草稿，转到熟悉的工具里继续精修</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="channelsSec" style="padding:64px 0 0;border-top:1px solid var(--color-divider)">
+    <h6 style="color:var(--color-accent);margin-bottom:14px">MODEL GATEWAY · 多渠道聚合</h6>
+    <h2 style="font-size:30px;max-width:18em;margin-bottom:14px">后端网关接入 20+ 图片 / 视频生成渠道</h2>
+    <p style="max-width:42em;color:color-mix(in srgb,var(--color-text) 65%,transparent);margin-bottom:26px">模型热更新，按积分统一计费——不用自己配 Key、比价格、追新模型。</p>
+    <div style="display:flex;flex-wrap:wrap;gap:10px">
+      <span class="tag tag-outline">Seedance</span>
+      <span class="tag tag-outline">MiniMax H3</span>
+      <span class="tag tag-outline">Kling</span>
+      <span class="tag tag-outline">Sora 系</span>
+      <span class="tag tag-neutral">及其它 20+ 渠道持续接入</span>
+    </div>
+  </section>
+</main>
+
+<!-- ═══════════ 软件下载 ═══════════ -->
+<main class="page hide" data-page="download">
+  <section style="padding:72px 0 40px">
+    <h6 style="color:var(--color-accent);margin-bottom:14px">DOWNLOAD · 软件下载</h6>
+    <h1 style="font-size:46px;margin-bottom:16px">下载 Qiji 漫剧</h1>
+    <p style="max-width:40em;font-size:16px;color:color-mix(in srgb,var(--color-text) 68%,transparent)">目前提供 Windows 桌面端。macOS 版本正在路上。</p>
+  </section>
+
+  <section class="dl-grid" style="display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,0.75fr);gap:28px;align-items:start">
+    <div class="card elev-md" style="padding:32px;gap:0">
+      <div style="display:flex;align-items:center;gap:18px;margin-bottom:24px">
+        <img data-img="app-icon" alt="Qiji" style="width:64px;height:64px;border-radius:var(--radius-lg)">
+        <div>
+          <div style="font-size:22px;font-weight:500">Qiji 漫剧 for Windows</div>
+          <div id="dlMeta" style="font-size:13px;color:color-mix(in srgb,var(--color-text) 55%,transparent)"></div>
+        </div>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:26px">
+        <a id="dlBtn" class="btn btn-primary" style="font-size:15px;padding:12px 24px">下载安装包 (.exe)</a>
+        <a id="dlBackup" class="btn btn-secondary" style="font-size:15px;padding:12px 24px">备用下载（网盘）</a>
+      </div>
+      <div id="dlNote" class="hide" style="font-size:12px;color:color-mix(in srgb,var(--color-text) 45%,transparent)">下载链接即将开放，敬请期待。</div>
+    </div>
+    <div class="card elev-sm" style="padding:24px;gap:0">
+      <div class="card-kicker">REQUIREMENTS</div>
+      <div class="card-title" style="margin:8px 0 14px">运行环境</div>
+      <table class="table" style="font-size:13px">
+        <tbody>
+          <tr><td class="muted">系统</td><td>Windows 10 / 11 64 位</td></tr>
+          <tr><td class="muted">内存</td><td>建议 16 GB 及以上</td></tr>
+          <tr><td class="muted">显卡</td><td>本地深度图推理建议独显</td></tr>
+          <tr><td class="muted">网络</td><td>生成走云端渠道，需联网</td></tr>
+          <tr><td class="muted">磁盘</td><td>预留 20 GB 以上素材空间</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section style="padding:64px 0 0">
+    <h2 style="font-size:28px;margin-bottom:28px">安装与上手</h2>
+    <div class="grid4">
+      <div class="step first"><div class="no">STEP 01</div><h4>安装</h4><p>下载 .exe 双击安装，默认路径即可。</p></div>
+      <div class="step"><div class="no">STEP 02</div><h4>登录</h4><p>注册账号，新用户赠送体验积分。</p></div>
+      <div class="step"><div class="no">STEP 03</div><h4>导入剧本</h4><p>新建项目，粘贴或导入剧本，跑一次推理。</p></div>
+      <div class="step"><div class="no">STEP 04</div><h4>出片</h4><p>出图出片，进时间轴，导出成片或剪映草稿。</p></div>
+    </div>
+  </section>
+
+  <section style="padding:64px 0 0">
+    <h2 style="font-size:28px;margin-bottom:24px">常见问题</h2>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:22px" class="grid2faq">
+      <div class="card elev-sm"><div class="card-title">要自己准备模型 API 吗？</div><p class="card-body">不用。生成走官方网关聚合的 20+ 渠道，按积分统一计费，模型热更新。</p></div>
+      <div class="card elev-sm"><div class="card-title">生成的素材存在哪里？</div><p class="card-body">工程与素材保存在本地项目目录，可随项目一起打包迁移。</p></div>
+      <div class="card elev-sm"><div class="card-title">能接着用剪映精修吗？</div><p class="card-body">可以。时间轴支持一键导出剪映草稿，轨道与分镜顺序保留。</p></div>
+      <div class="card elev-sm"><div class="card-title">有 macOS 版吗？</div><p class="card-body">暂时没有，Windows 优先。macOS 版本在规划中。</p></div>
+    </div>
+  </section>
+</main>
+
+<!-- ═══════════ 加入我们 ═══════════ -->
+<main class="page hide" data-page="join">
+  <section style="padding:72px 0 44px">
+    <h6 style="color:var(--color-accent);margin-bottom:14px">PARTNER WITH US · 加入我们</h6>
+    <h1 style="font-size:46px;max-width:14em;margin-bottom:16px">一起把漫剧的产能做上去</h1>
+    <p style="max-width:42em;font-size:16px;color:color-mix(in srgb,var(--color-text) 68%,transparent)">渠道代理、内容工作室合作、模型与算力接入——都欢迎聊。</p>
+  </section>
+
+  <section class="grid3" style="gap:22px">
+    <div class="card elev-sm" style="padding:24px"><div class="card-kicker">RESELLER</div><div class="card-title" style="margin:8px 0 6px">渠道代理</div><p class="card-body">区域与垂直渠道代理招募，提供授权、培训与分成政策。</p></div>
+    <div class="card elev-sm" style="padding:24px"><div class="card-kicker">STUDIO</div><div class="card-title" style="margin:8px 0 6px">内容工作室合作</div><p class="card-body">批量产能对接、专属工作流定制与优先技术支持。</p></div>
+    <div class="card elev-sm" style="padding:24px"><div class="card-kicker">MODEL &amp; COMPUTE</div><div class="card-title" style="margin:8px 0 6px">模型与算力接入</div><p class="card-body">图片 / 视频生成渠道接入网关，共同打磨模型效果。</p></div>
+  </section>
+
+  <section style="margin:64px 0 0;padding:44px 40px;border-radius:var(--radius-lg);background:linear-gradient(120deg,var(--color-section) 0%,var(--color-section-glow) 100%)">
+    <div class="join-contact" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:48px;align-items:center">
+      <div>
+        <h2 style="font-size:30px;margin-bottom:10px">联系我们</h2>
+        <p style="margin:0;color:color-mix(in srgb,var(--color-text) 72%,transparent)">工作日 24 小时内回复。合作请注明来意与团队规模。</p>
+      </div>
+      <div id="contactGrid" style="display:grid;grid-template-columns:repeat(2,1fr);gap:18px"></div>
+    </div>
+  </section>
+</main>
+
+<!-- ═══════════ 更新记录 ═══════════ -->
+<main class="page hide" data-page="changelog">
+  <section style="padding:72px 0 44px">
+    <h6 style="color:var(--color-accent);margin-bottom:14px">CHANGELOG · 更新记录</h6>
+    <h1 style="font-size:46px;margin-bottom:16px">每一次更新都写在这里</h1>
+  </section>
+  <section id="releaseList" style="max-width:860px"></section>
+</main>
+
+<footer style="position:relative;z-index:1;border-top:1px solid var(--color-divider)">
+  <div style="max-width:1160px;margin:0 auto;padding:40px 32px;display:flex;align-items:center;gap:24px;flex-wrap:wrap">
+    <img data-img="logo-full" alt="Qiji" style="height:22px;width:auto;opacity:0.85">
+    <span style="font-size:13px;color:color-mix(in srgb,var(--color-text) 45%,transparent)">万物皆为灵感，创作无限奇迹</span>
+    <span id="footRight" style="margin-left:auto;font-size:12px;color:color-mix(in srgb,var(--color-text) 38%,transparent)"></span>
+  </div>
+</footer>
+</div>
+
+<script>
+"use strict";
+/* 服务端在 GET / 时把 data/site.json 的公开配置注入替换掉下面的占位串 */
+var SITE = "__SITE_CONFIG__";
+if (typeof SITE === "string") SITE = {}; // 直开静态文件（未经服务端注入）时兜底
+
+/* 图片槽位 → 内置文件（与服务端 SITE_IMAGE_SLOTS 一致）；管理端替换过的槽位走 OSS 直链 */
+var BUILTIN = {
+  "logo-full": "logo-full.svg", "app-icon": "app-icon.png",
+  "cover-1": "cover-1.webp", "cover-2": "cover-2.webp", "cover-3": "cover-3.webp", "cover-4": "cover-4.webp",
+  "shot-assets": "shot-assets.webp", "shot-canvas": "shot-canvas.webp",
+  "shot-editor-1": "shot-editor-1.webp", "shot-editor-2": "shot-editor-2.webp", "shot-storyboard": "shot-storyboard.webp"
+};
+function imgUrl(slot) {
+  return (SITE.images && SITE.images[slot]) || ("site-assets/" + (BUILTIN[slot] || slot));
+}
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+
+/* ── 图片槽位落位 ── */
+document.querySelectorAll("img[data-img]").forEach(function (el) { el.src = imgUrl(el.dataset.img); });
+(function favicon() {
+  var link = document.createElement("link");
+  link.rel = "icon"; link.href = imgUrl("app-icon");
+  document.head.appendChild(link);
+})();
+
+/* ── 作品墙封面横向无缝滚动（[1,2,3,4,3,2] ×2 循环）── */
+(function covers() {
+  var order = [1, 2, 3, 4, 3, 2], html = "";
+  for (var r = 0; r < 2; r++) {
+    order.forEach(function (i) {
+      html += '<div style="flex:none;width:206px;aspect-ratio:2/3;border-radius:var(--radius-md);overflow:hidden;box-shadow:var(--shadow-md);background:var(--color-surface)">' +
+        '<img src="' + esc(imgUrl("cover-" + i)) + '" alt="漫剧封面" loading="lazy" style="width:100%;height:100%;object-fit:cover;object-position:center 22%"></div>';
+    });
+  }
+  document.getElementById("coverStrip").innerHTML = html;
+})();
+
+/* ── 配置驱动的区块 ── */
+if (SITE.showStats === false) document.getElementById("statsSec").classList.add("hide");
+if (SITE.showChannels === false) document.getElementById("channelsSec").classList.add("hide");
+
+(function download() {
+  var meta = "版本 " + (SITE.version || "1.0.0") + (SITE.sizeNote ? " · " + SITE.sizeNote : "");
+  document.getElementById("dlMeta").textContent = meta;
+  var btn = document.getElementById("dlBtn"), bak = document.getElementById("dlBackup"), note = document.getElementById("dlNote");
+  if (SITE.downloadUrl) { btn.href = SITE.downloadUrl; }
+  else { btn.classList.add("disabled"); btn.addEventListener("click", function (e) { e.preventDefault(); }); note.classList.remove("hide"); }
+  if (SITE.backupUrl) { bak.href = SITE.backupUrl; bak.target = "_blank"; bak.rel = "noopener"; }
+  else { bak.classList.add("hide"); }
+})();
+
+(function contacts() {
+  var c = SITE.contacts || {};
+  var defs = [["商务合作", c.bd], ["技术支持", c.support], ["微信", c.wechat], ["用户交流群", c.qq]];
+  var html = "";
+  defs.forEach(function (d) {
+    if (!d[1]) return;
+    html += '<div><div style="font-size:11px;letter-spacing:0.1em;color:var(--color-accent-200);margin-bottom:6px">' + esc(d[0]) + '</div><div style="font-size:16px;word-break:break-all">' + esc(d[1]) + "</div></div>";
+  });
+  if (!html) html = '<div class="muted" style="font-size:14px">联系方式即将公布，敬请期待。</div>';
+  document.getElementById("contactGrid").innerHTML = html;
+})();
+
+(function releases() {
+  var list = SITE.releases || [];
+  var html = "";
+  list.forEach(function (rel) {
+    var items = (rel.items || []).map(function (it) { return "<li>" + esc(it) + "</li>"; }).join("");
+    html += '<div style="display:grid;grid-template-columns:150px minmax(0,1fr);gap:32px;padding:28px 0;border-top:1px solid var(--color-divider)">' +
+      '<div><div style="font-size:19px;color:var(--color-accent)">' + esc(rel.version) + '</div>' +
+      '<div style="font-size:12px;color:color-mix(in srgb,var(--color-text) 45%,transparent);margin-top:4px">' + esc(rel.date) + "</div></div>" +
+      '<div><h3 style="font-size:20px;margin-bottom:12px">' + esc(rel.title) + '</h3>' +
+      '<ul style="margin:0;padding-left:18px;font-size:14px;line-height:1.85;color:color-mix(in srgb,var(--color-text) 70%,transparent)">' + items + "</ul></div></div>";
+  });
+  if (!html) html = '<div class="muted">暂无更新记录。</div>';
+  document.getElementById("releaseList").innerHTML = html;
+})();
+
+/* ── 公告：顶栏 + 弹层列表 ── */
+(function announcements() {
+  var list = SITE.announcements || [];
+  if (!list.length) return;
+  var bar = document.getElementById("annBar");
+  document.getElementById("annBarText").textContent = list[0].title + (list[0].date ? " · " + list[0].date : "");
+  bar.classList.remove("hide");
+  var html = "";
+  list.forEach(function (a) {
+    html += '<div style="padding:14px 0;border-top:1px solid var(--color-divider)">' +
+      '<div style="display:flex;align-items:baseline;gap:10px"><div style="font-size:15px;font-weight:500">' + esc(a.title) + '</div>' +
+      '<div style="font-size:12px;color:color-mix(in srgb,var(--color-text) 45%,transparent)">' + esc(a.date) + "</div></div>" +
+      (a.body ? '<div style="font-size:13.5px;line-height:1.8;margin-top:6px;color:color-mix(in srgb,var(--color-text) 72%,transparent);white-space:pre-wrap">' + esc(a.body) + "</div>" : "") +
+      "</div>";
+  });
+  document.getElementById("annList").innerHTML = html;
+})();
+function openAnnouncements() { document.getElementById("annDlg").classList.remove("hide"); }
+document.getElementById("annDlg").addEventListener("click", function (e) { if (e.target === this) this.classList.add("hide"); });
+
+/* ── 页脚 ── */
+(function foot() {
+  var y = new Date().getFullYear();
+  var t = "© " + y + " Qiji 漫剧" + (SITE.icp ? " · " + SITE.icp : "");
+  document.getElementById("footRight").textContent = t;
+})();
+
+/* ── hash 路由（#home/#features/#download/#join/#changelog）── */
+var PAGES = ["home", "features", "download", "join", "changelog"];
+function setPage(p) {
+  if (PAGES.indexOf(p) < 0) p = "home";
+  document.querySelectorAll("main.page").forEach(function (m) { m.classList.toggle("hide", m.dataset.page !== p); });
+  document.querySelectorAll("a[data-nav]").forEach(function (a) {
+    a.style.color = a.dataset.nav === p ? "var(--color-accent)" : "color-mix(in srgb, var(--color-text) 78%, transparent)";
+  });
+  window.scrollTo(0, 0);
+}
+window.addEventListener("hashchange", function () { setPage(location.hash.replace("#", "")); });
+setPage(location.hash.replace("#", "") || "home");
+
+/* ── 界面图双击放大 ── */
+document.querySelectorAll(".zoomable").forEach(function (el) {
+  el.addEventListener("dblclick", function () {
+    var img = el.classList.contains("zoomsrc") ? el : el.querySelector("img");
+    if (!img) return;
+    document.getElementById("zoomImg").src = img.src;
+    document.getElementById("zoom").classList.remove("hide");
+  });
+});
+document.getElementById("zoom").addEventListener("click", function () { this.classList.add("hide"); });
+window.addEventListener("keydown", function (e) {
+  if (e.key === "Escape") { document.getElementById("zoom").classList.add("hide"); document.getElementById("annDlg").classList.add("hide"); }
+});
+
+/* ── 开场动画：播完移除 ── */
+setTimeout(function () { var el = document.getElementById("intro"); if (el) el.remove(); }, 2100);
+
+/* ── 星空背景（移植自设计稿：静态深空闪烁 + 漂移星点 + 呼吸星座连线）── */
+(function stars() {
+  var cv = document.getElementById("stars");
+  var ctx = cv.getContext("2d");
+  var density = 110, w = 0, h = 0, pts = [], deep = [], raf = 0, seededW = 0;
+  function seed() {
+    deep = []; pts = [];
+    for (var i = 0; i < density * 6; i++) deep.push({
+      x: Math.random() * w, y: Math.random() * h,
+      r: Math.random() < 0.85 ? Math.random() * 0.6 + 0.25 : Math.random() * 1.1 + 0.7,
+      ph: Math.random() * Math.PI * 2, sp: 900 + Math.random() * 2600, base: 0.12 + Math.random() * 0.5
+    });
+    for (var j = 0; j < density; j++) pts.push({
+      x: Math.random() * w, y: Math.random() * h, r: Math.random() * 1.3 + 0.4,
+      ph: Math.random() * Math.PI * 2, sp: 0.35 + Math.random() * 0.5
+    });
+  }
+  function onResize() {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    w = cv.clientWidth; h = cv.clientHeight;
+    cv.width = w * dpr; cv.height = h * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // 初始布局宽为 0（后台标签/隐藏窗口打开）时首播种是空的——首次拿到真实宽度重新播种
+    if (!pts.length || (seededW === 0 && w > 0)) seed();
+    else pts.concat(deep).forEach(function (p) { p.x = Math.min(p.x, w); p.y = Math.min(p.y, h); });
+    if (w > 0) seededW = w;
+  }
+  onResize();
+  window.addEventListener("resize", onResize);
+  var dir = { x: Math.cos(-0.38), y: Math.sin(-0.38) };
+  function tick(t) {
+    var ms = t || 0;
+    ctx.clearRect(0, 0, w, h);
+    for (var i = 0; i < deep.length; i++) {
+      var s = deep[i];
+      var a = s.base * (0.35 + 0.65 * (0.5 + 0.5 * Math.sin(ms / s.sp + s.ph)));
+      ctx.fillStyle = "rgba(226,228,246," + a.toFixed(3) + ")";
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
+    }
+    for (var k = 0; k < pts.length; k++) {
+      var p = pts[k];
+      p.x += dir.x * p.sp * 0.28; p.y += dir.y * p.sp * 0.28;
+      if (p.x > w + 20) p.x = -20; if (p.x < -20) p.x = w + 20;
+      if (p.y < -20) p.y = h + 20; if (p.y > h + 20) p.y = -20;
+    }
+    for (var m = 0; m < pts.length; m++) {
+      for (var n = m + 1; n < pts.length; n++) {
+        var A = pts[m], B = pts[n];
+        var dx = A.x - B.x, dy = A.y - B.y, d2 = dx * dx + dy * dy;
+        if (d2 > 22000) continue;
+        var near = 1 - Math.sqrt(d2) / 148;
+        var puls = 0.5 + 0.5 * Math.sin(ms / 2600 + A.ph + B.ph);
+        var al = near * puls * 0.3;
+        if (al <= 0.012) continue;
+        ctx.strokeStyle = "rgba(145,132,217," + al.toFixed(3) + ")";
+        ctx.lineWidth = 0.7;
+        ctx.beginPath(); ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y); ctx.stroke();
+      }
+    }
+    for (var q = 0; q < pts.length; q++) {
+      var P = pts[q];
+      var tw = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(ms / 1500 + P.ph));
+      ctx.fillStyle = "rgba(233,233,237," + (tw * 0.62).toFixed(3) + ")";
+      ctx.beginPath(); ctx.arc(P.x, P.y, P.r, 0, Math.PI * 2); ctx.fill();
+    }
+    raf = requestAnimationFrame(tick);
+  }
+  raf = requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>

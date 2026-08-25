@@ -17,6 +17,7 @@ import type { ModelOption } from "./channelAdapter";
 import type { Capability } from "@/contract";
 import { registerAdapter } from "./registry";
 import { nodeTypesForCapability } from "@/nodes/nodeSpecs";
+import { resolveMaterialLocalPathOrThrow, newProbeScope, type ProbeScope } from "@/services/assetRecover";
 import { dreaminaQueryTask, dreaminaSubmitVideo } from "@/services/dreaminaCli";
 import { isDreaminaAuthed } from "@/store/dreaminaStore";
 import { getDreaminaFeature } from "@/store/connectionStore";
@@ -110,14 +111,10 @@ function collectRefs(rawInputs: Record<string, unknown>, limits: DreaminaRefLimi
 	];
 }
 
-/** 把一个素材 url/uri 解析成本地文件路径（三元映射优先，缺则落地一份）；CLI 只收本地路径 */
-async function resolveLocalPath(uri: string, name?: string): Promise<string> {
-	const { useProjectStore } = await import("@/store/projectStore");
-	const blob = useProjectStore.getState().blobByUri(uri);
-	if (blob?.localPath) return blob.localPath;
-	const { ensureLocalOriginal } = await import("@/services/assetPersist");
-	const saved = await ensureLocalOriginal(uri, { name });
-	return saved?.localPath || "";
+/** 把一个素材 url/uri 解析成本地文件路径（CLI 只收本地路径）：每次提交都探活（换链/死链自愈）→
+ *  校验本地文件仍在 → 必要时落地一份。取不到=明确报错整单拒（见 services/assetRecover）。 */
+async function resolveLocalPath(uri: string, name: string | undefined, scope: ProbeScope): Promise<string> {
+	return resolveMaterialLocalPathOrThrow(uri, "即梦", { name, scope });
 }
 
 /** 按渠道清单条目产出一个即梦适配器：model_version 由所选模型固定；
@@ -180,27 +177,21 @@ function makeDreaminaAdapter(choice: (typeof DREAMINA_MODEL_CHOICES)[number]): M
 			}
 		}
 
-		// 素材解析成本地路径（CLI 自动上传本地文件；解析不到的跳过，不拖累整单）
+		// 素材解析成本地路径（CLI 自动上传本地文件）。
+		// ⚠ 取不到本地文件=**明确报错整单拒**（第254轮用户定，勿回退成静默跳过）：
+		// @ImageN 按素材顺序编号，丢一条会让后面全部引用错位（§9A 第118轮）。
 		const paths = { image: [] as string[], video: [] as string[], audio: [] as string[] };
+		const scope = newProbeScope(); // 本次提交内同一素材只探活一次
 		for (const ref of refs) {
-			const p = await resolveLocalPath(ref.url, ref.name);
-			if (!p) {
-				console.warn(`[dreamina] 参考素材无本地文件，跳过：${ref.name || ref.url}`);
-				continue;
-			}
-			paths[ref.type].push(p);
+			paths[ref.type].push(await resolveLocalPath(ref.url, ref.name, scope));
 		}
 		// 入参底线：2.0 家族须至少一图或一视频；2.5 允许纯音频（但仍须至少一条素材）
 		if (is25) {
 			if (!paths.image.length && !paths.video.length && !paths.audio.length) {
-				throw new Error(refs.length
-					? "参考素材均无法取得本地文件，无法提交即梦"
-					: "即梦全能参考（Seedance 2.5）需要至少一条参考素材（图/视频/音频均可）");
+				throw new Error("即梦全能参考（Seedance 2.5）需要至少一条参考素材（图/视频/音频均可）");
 			}
 		} else if (!paths.image.length && !paths.video.length) {
-			throw new Error(refs.length
-				? "参考素材均无法取得本地文件，无法提交即梦"
-				: "即梦全能参考需要至少一张垫图或一段参考视频");
+			throw new Error("即梦全能参考需要至少一张垫图或一段参考视频");
 		}
 
 		const modelVersion = choice.modelVersion;

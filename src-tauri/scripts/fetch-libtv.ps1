@@ -5,7 +5,7 @@
 #   用法：powershell -ExecutionPolicy Bypass -File src-tauri/scripts/fetch-libtv.ps1
 #   换版本：$env:LIBTV_CLI_VERSION='x.y.z' 后重跑（先删旧 exe）
 $ErrorActionPreference = 'Stop'
-$ver  = if ($env:LIBTV_CLI_VERSION) { $env:LIBTV_CLI_VERSION } else { '1.1.1' }
+$ver  = if ($env:LIBTV_CLI_VERSION) { $env:LIBTV_CLI_VERSION } else { '1.1.3' }
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }
 $root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)   # = src-tauri
 $dest = Join-Path $root 'resources\libtv'

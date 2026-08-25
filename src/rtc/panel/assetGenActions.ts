@@ -13,6 +13,7 @@ import type { Purpose } from "@/contract";
 import type { GenSpec } from "@/services/generationQueue";
 import type { AssetCat } from "@/store/projectStore";
 import { resolveSize, clampImageResolution, imageResolutionOptions } from "@/lib/genParams";
+import { assetImageAspectFrom } from "@/lib/templateAspect";
 
 /** 五类资产 → 出图 purpose（与 AssetWorkbench 各页 imagePurpose 一致：群像与角色共用 character 出图用途，前缀 G） */
 export const ASSET_IMAGE_PURPOSE: Record<AssetCat, Purpose> = {
@@ -81,7 +82,13 @@ export async function generateAssetBaseImage(cat: AssetCat, assetId: string): Pr
 	const { useCatalogStore } = await import("@/store/catalogStore");
 	const modelKey = effectiveModelKey("image");
 	const model = useCatalogStore.getState().model(modelKey);
-	const r = buildAssetBaseGenSpec(cat, asset, modelKey, imageResolutionOptions(model));
+	// 第243轮比例决定链（与 AssetWorkbench 初始值同一把尺）：资产拆分模板名内嵌比例 > 项目默认影片比例 > 16:9
+	const aspect = assetImageAspectFrom(
+		useCatalogStore.getState().catalog?.templates,
+		st.mediaSettings?.assetExtractTplId,
+		st.mediaSettings?.imageAspect,
+	);
+	const r = buildAssetBaseGenSpec(cat, asset, modelKey, imageResolutionOptions(model), { aspect });
 	if ("error" in r) { alert(r.error); return false; }
 	const { startGeneration } = await import("@/services/generationQueue");
 	startGeneration(r.spec);

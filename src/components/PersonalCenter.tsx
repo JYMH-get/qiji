@@ -1,15 +1,19 @@
 import { useEffect, useRef, useState } from "react";
-import { X, UserCircle, Coins, Gift, Loader2, CheckCircle, XCircle, RefreshCw, Clapperboard, Film, LogOut, ListOrdered, ChevronDown, ChevronRight, Undo2, Users, BarChart3, KeyRound, Download } from "lucide-react";
+import { X, UserCircle, Coins, Gift, Loader2, CheckCircle, XCircle, RefreshCw, Clapperboard, Film, Server, LogOut, ListOrdered, ChevronDown, ChevronRight, Undo2, Users, BarChart3, KeyRound, Download, Crown, Sparkles } from "lucide-react";
 import { useUiStore } from "@/store/uiStore";
-import { useConnectionStore, useDreaminaFeature, useLibtvFeature } from "@/store/connectionStore";
+import { useComfyuiStore } from "@/store/comfyuiStore";
+import { thirdPartyFeeCredits } from "@/services/thirdPartyFee";
+import { useConnectionStore, useComfyuiFeature, useDreaminaFeature, useLibtvFeature } from "@/store/connectionStore";
 import { useProjectStore } from "@/store/projectStore";
 import { confirmDialog } from "@/lib/confirmDialog";
 import { useLibtvStore } from "@/store/libtvStore";
 import { useDreaminaStore } from "@/store/dreaminaStore";
 import { managedClient } from "@/services/managedClient";
 import { versionLabel } from "@/lib/appVersion";
+import { formatDurationWithQueue } from "@/lib/queueLabel";
 import type { UserStats, UserLogItem, UserLogDetail, TeamDetail, TeamInviteInfo, UserConsumeStats, ConsumeRangeStats, DownloadManifest, DownloadLinkStorage, DownloadMediaKind } from "@/contract";
 import { runBatchDownload, fmtBytes, type BatchDownloadProgress, type BatchDownloadResult } from "@/services/batchDownload";
+import { RechargeCenter, discountLabel } from "@/components/RechargeCenter";
 
 const isTauri = (): boolean =>
 	typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
@@ -186,6 +190,122 @@ function DreaminaSection() {
 	);
 }
 
+/** ComfyUI 直连绑定区块（多端点）：端点列表（测试/启停/删除）+ 新增行。features.comfyui 开时渲染
+ *（不限桌面端——浏览器 dev 需 ComfyUI 带 --enable-cors-header 启动，区块内有提示）。
+ *  可绑定多台：提交时自动探测各台队列负载，派给最闲的一台（平手轮流）。 */
+function ComfyuiSection() {
+	const endpoints = useComfyuiStore((s) => s.endpoints);
+	const probes = useComfyuiStore((s) => s.probes);
+	const testing = useComfyuiStore((s) => s.testing);
+	const [addUrl, setAddUrl] = useState("");
+	const [addName, setAddName] = useState("");
+	const [addMsg, setAddMsg] = useState("");
+
+	const handleAdd = async () => {
+		const r = useComfyuiStore.getState().addEndpoint(addUrl, addName);
+		if (!r.ok) {
+			setAddMsg(r.error || "添加失败");
+			return;
+		}
+		setAddUrl("");
+		setAddName("");
+		setAddMsg("");
+		// 添加即顺手测一把连通性（结果在行内展示）
+		const added = useComfyuiStore.getState().endpoints;
+		const last = added[added.length - 1];
+		if (last) void useComfyuiStore.getState().testEndpoint(last.id);
+	};
+
+	return (
+		<div className="flex flex-col gap-2">
+			<div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+				<Server className="h-3.5 w-3.5 text-primary" /> ComfyUI 直连
+				<span className="text-[9px] font-normal text-muted-foreground">
+					（MiniMax H3 视频生成 · 走你自己的 ComfyUI 实例，可绑定多台自动分流）
+				</span>
+			</div>
+
+			{/* 已绑定端点列表 */}
+			{endpoints.map((ep) => {
+				const probe = probes[ep.id];
+				const busy = !!testing[ep.id];
+				return (
+					<div key={ep.id} className={`flex items-center gap-2 rounded-lg border border-border/40 px-2.5 py-1.5 ${ep.enabled ? "bg-secondary/30" : "bg-secondary/10 opacity-60"}`}>
+						<button
+							onClick={() => useComfyuiStore.getState().updateEndpoint(ep.id, { enabled: !ep.enabled })}
+							title={ep.enabled ? "点击停用（不参与自动分流）" : "点击启用"}
+							className={`h-3 w-3 rounded-full shrink-0 cursor-pointer border ${ep.enabled ? "bg-green-400/80 border-green-400" : "bg-transparent border-muted-foreground/50"}`}
+						/>
+						<div className="flex flex-col min-w-0 flex-1">
+							<span className="text-[11px] text-foreground truncate">{ep.name}</span>
+							<span className="text-[9px] font-mono text-muted-foreground truncate">{ep.url}</span>
+						</div>
+						{probe?.state === "ok" && (
+							<span className="flex items-center gap-1 text-[9px] text-green-400 whitespace-nowrap" title="最近一次测试连通">
+								<CheckCircle className="h-3 w-3" /> 已连通{typeof probe.load === "number" ? ` · 队列 ${probe.load}` : ""}
+							</span>
+						)}
+						{probe?.state === "fail" && (
+							<span className="flex items-center gap-1 text-[9px] text-destructive max-w-[180px] truncate" title={probe.error}>
+								<XCircle className="h-3 w-3 shrink-0" /> {probe.error || "连接失败"}
+							</span>
+						)}
+						<button
+							onClick={() => void useComfyuiStore.getState().testEndpoint(ep.id)}
+							disabled={busy}
+							className="flex items-center gap-1 px-2 py-1 rounded-md bg-secondary text-foreground hover:bg-secondary/70 transition-colors cursor-pointer text-[9px] disabled:opacity-50 whitespace-nowrap"
+						>
+							{busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+							测试
+						</button>
+						<button
+							onClick={() => useComfyuiStore.getState().removeEndpoint(ep.id)}
+							className="px-2 py-1 rounded-md bg-destructive/15 border border-destructive/30 text-destructive hover:bg-destructive/25 transition-colors cursor-pointer text-[9px] whitespace-nowrap"
+						>
+							删除
+						</button>
+					</div>
+				);
+			})}
+
+			{/* 新增端点行 */}
+			<div className="flex items-center gap-2">
+				<input
+					value={addName}
+					onChange={(e) => { setAddName(e.target.value); setAddMsg(""); }}
+					placeholder="名称（选填）"
+					className="w-28 bg-secondary/40 border border-border/40 rounded-lg px-2.5 py-2 text-[11px] text-foreground outline-none focus:border-primary/60"
+				/>
+				<input
+					value={addUrl}
+					onChange={(e) => { setAddUrl(e.target.value); setAddMsg(""); }}
+					onKeyDown={(e) => { if (e.key === "Enter") void handleAdd(); }}
+					placeholder="http://127.0.0.1:8188 或云实例地址"
+					className="flex-1 bg-secondary/40 border border-border/40 rounded-lg px-3 py-2 text-[11px] font-mono text-foreground outline-none focus:border-primary/60"
+				/>
+				<button
+					onClick={() => void handleAdd()}
+					className="px-3 py-2 rounded-lg bg-primary text-primary-foreground font-semibold hover:bg-primary/90 transition-colors cursor-pointer text-[10px] whitespace-nowrap"
+				>
+					添加
+				</button>
+			</div>
+			{addMsg && <span className="text-[10px] text-destructive">{addMsg}</span>}
+
+			<span className="text-[10px] text-muted-foreground">
+				绑定后，视频生成的模型下拉会出现「ComfyUI · MiniMax H3」。生成走你自己的 ComfyUI（需已装载 MiniMax H3
+				工作流所需模型），消耗你自己的算力，Qiji 每次调用收手续费 {thirdPartyFeeCredits()} 积分。
+				绑定多台时，每次生成自动探测各台队列负载并派给最闲的一台（平手轮流）。
+			</span>
+			{!isTauri() && (
+				<span className="text-[10px] text-muted-foreground/70">
+					浏览器开发环境需 ComfyUI 以 --enable-cors-header 启动。
+				</span>
+			)}
+		</div>
+	);
+}
+
 /** 请求记录页（第110轮）：本人任务提交 + 积分扣费/退款一览；详情仅 ①客户端→服务端 ②服务端→客户端 两段。 */
 function LogsSection() {
 	const PAGE = 30;
@@ -291,6 +411,13 @@ function LogsSection() {
 							<span className="text-[11px] text-foreground whitespace-nowrap">{l.purposeLabel || l.purpose || "—"}</span>
 							<span className="text-[10px] text-muted-foreground font-mono truncate">{l.model || ""}</span>
 							<span className="flex-1" />
+							{/* 第251轮耗时：有排队时显示「实际生成（排队）」，无排队=原单值口径 */}
+							<span
+								className="text-[10px] text-muted-foreground font-mono whitespace-nowrap"
+								title={l.queuedMs ? "实际生成秒数（排队秒数）——排队不计入生成时长" : "本次耗时"}
+							>
+								{formatDurationWithQueue(l.durationMs, l.queuedMs)}
+							</span>
 							<span className="text-[10px] font-mono whitespace-nowrap"><CostCell l={l} /></span>
 							<StatusChip s={l.status} />
 						</button>
@@ -1141,6 +1268,7 @@ export function PersonalCenter() {
 	const setCredits = useConnectionStore((s) => s.setCredits);
 	const libtvOn = useLibtvFeature();
 	const dreaminaOn = useDreaminaFeature();
+	const comfyuiOn = useComfyuiFeature();
 
 	const [stats, setStats] = useState<UserStats | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -1200,6 +1328,9 @@ export function PersonalCenter() {
 	};
 
 	const [tab, setTab] = useState<"overview" | "logs" | "team" | "stats" | "downloads">("overview");
+
+	// 充值中心（第246轮：会员套餐 / 充值算力 / 兑换码）
+	const [rechargeOpen, setRechargeOpen] = useState(false);
 
 	const refresh = async () => {
 		setLoading(true);
@@ -1377,15 +1508,50 @@ export function PersonalCenter() {
 								</span>
 							)}
 						</div>
-						<button
-							onClick={refresh}
-							disabled={loading}
-							className="text-muted-foreground hover:text-foreground rounded-lg p-1.5 transition-colors cursor-pointer disabled:opacity-50"
-							title="刷新"
-						>
-							{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-						</button>
+						<div className="flex items-center gap-1.5">
+							<button
+								onClick={() => setRechargeOpen(true)}
+								className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-[11px] font-semibold hover:bg-primary/90 transition-colors cursor-pointer"
+								title="会员套餐 / 充值算力 / 兑换码"
+							>
+								<Coins className="h-3.5 w-3.5" /> 充值中心
+							</button>
+							<button
+								onClick={refresh}
+								disabled={loading}
+								className="text-muted-foreground hover:text-foreground rounded-lg p-1.5 transition-colors cursor-pointer disabled:opacity-50"
+								title="刷新"
+							>
+								{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+							</button>
+						</div>
 					</div>
+
+					{/* 会员状态（第246轮）：生效中显示到期与折扣，未开通显示引导横幅 */}
+					{stats?.membership ? (
+						<div className="flex items-center gap-2 bg-primary/10 border border-primary/30 rounded-lg px-4 py-2.5">
+							<Crown className="h-3.5 w-3.5 text-primary shrink-0" />
+							<span className="text-[11px] text-foreground">
+								<b>{stats.membership.planName}</b> 生效中 · 至 <span className="font-mono">{stats.membership.expiresAt.slice(0, 10)}</span>
+								{stats.membership.discountPercent < 100 && <> · 生成计费 <b>{discountLabel(stats.membership.discountPercent)}</b></>}
+							</span>
+							<button
+								onClick={() => setRechargeOpen(true)}
+								className="ml-auto shrink-0 px-2 py-1 rounded-md bg-secondary/50 border border-border/40 text-[10px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+							>
+								续费
+							</button>
+						</div>
+					) : (
+						<button
+							onClick={() => setRechargeOpen(true)}
+							className="flex items-center gap-2 bg-secondary/30 border border-border/30 rounded-lg px-4 py-2.5 hover:border-primary/40 transition-colors cursor-pointer text-left"
+						>
+							<Sparkles className="h-3.5 w-3.5 text-primary shrink-0" />
+							<span className="text-[11px] text-muted-foreground">开通会员 · 享生成折扣与到账算力</span>
+							<span className="ml-auto text-[10px] text-primary shrink-0">查看套餐 →</span>
+						</button>
+					)}
 
 					{statsErr && <div className="text-[10px] text-destructive">{statsErr}</div>}
 
@@ -1582,6 +1748,9 @@ export function PersonalCenter() {
 
 					{/* 即梦授权（桌面端 + 管理端开放该入口时） */}
 					{dreaminaOn && isTauri() && <DreaminaSection />}
+
+					{/* ComfyUI 直连（管理端开放该入口时；不限桌面端——浏览器 dev 需 ComfyUI 开 CORS，区块内有提示） */}
+					{comfyuiOn && <ComfyuiSection />}
 				</div>
 				)}
 
@@ -1606,6 +1775,9 @@ export function PersonalCenter() {
 					</button>
 				</div>
 			</div>
+
+			{/* 充值中心（第246轮）：会员套餐 / 充值算力 / 兑换码 */}
+			<RechargeCenter open={rechargeOpen} onClose={() => setRechargeOpen(false)} onChanged={() => void refresh()} />
 		</div>
 	);
 }

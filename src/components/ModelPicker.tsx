@@ -14,10 +14,12 @@ import { useCatalogStore } from "@/store/catalogStore";
 import { useProjectStore } from "@/store/projectStore";
 import { LIBTV_MODEL_CHOICES } from "@/services/adapters/libtvAdapter";
 import { DREAMINA_MODEL_CHOICES } from "@/services/adapters/dreaminaAdapter";
+import { COMFYUI_MODEL_CHOICES } from "@/services/adapters/comfyuiAdapter";
 import { modelChannels, buildModelSourceOptions, sourceValueOf, modelForSource, modelVariantsOf, modelFamilies, familyOf, modelForFamily, channelOf, type ModelOpt } from "@/services/adapters/localChannels";
-import { useConnectionStore, useDreaminaFeature, useLibtvFeature } from "@/store/connectionStore";
+import { useConnectionStore, useComfyuiFeature, useDreaminaFeature, useLibtvFeature } from "@/store/connectionStore";
 import { useLibtvStore } from "@/store/libtvStore";
 import { useDreaminaStore } from "@/store/dreaminaStore";
+import { useComfyuiStore, isComfyuiBound } from "@/store/comfyuiStore";
 
 /** 非 hook：某能力第一个可用模型（catalog 序 × 模式门禁；catalog 无该能力模型时兜底已授权的本地 CLI 渠道） */
 function firstModelKey(cap: Capability): string {
@@ -28,6 +30,7 @@ function firstModelKey(cap: Capability): string {
 	if (cap === "video") {
 		if (feats?.libtv !== false && useLibtvStore.getState().authed) return LIBTV_MODEL_CHOICES[0].id;
 		if (feats?.dreamina !== false && useDreaminaStore.getState().authed) return DREAMINA_MODEL_CHOICES[0].id;
+		if (feats?.comfyui !== false && isComfyuiBound()) return COMFYUI_MODEL_CHOICES[0].id;
 	}
 	return "";
 }
@@ -41,6 +44,7 @@ function keyAvailable(cap: Capability, key?: string): boolean {
 	if (cap === "video") {
 		if (LIBTV_MODEL_CHOICES.some((c) => c.id === key)) return feats?.libtv !== false && useLibtvStore.getState().authed;
 		if (DREAMINA_MODEL_CHOICES.some((c) => c.id === key)) return feats?.dreamina !== false && useDreaminaStore.getState().authed;
+		if (COMFYUI_MODEL_CHOICES.some((c) => c.id === key)) return feats?.comfyui !== false && isComfyuiBound();
 	}
 	return false;
 }
@@ -77,6 +81,8 @@ export function useCapModelOptions(cap: Capability): ModelOpt[] {
 	const libtvAuthed = useLibtvStore((s) => s.authed);
 	const dreaminaOn = useDreaminaFeature();
 	const dreaminaAuthed = useDreaminaStore((s) => s.authed);
+	const comfyuiOn = useComfyuiFeature();
+	const comfyuiBound = useComfyuiStore((s) => s.endpoints.some((e) => e.enabled && !!e.url));
 	const modeName = (id?: string) => (id ? catalogModes?.find((m) => m.id === id)?.name || id : undefined);
 	const famName = (id?: string) => (id ? catalogFams?.find((f) => f.id === id)?.name || id : undefined);
 	const opts: ModelOpt[] = (models ?? [])
@@ -91,6 +97,10 @@ export function useCapModelOptions(cap: Capability): ModelOpt[] {
 	}
 	if (cap === "video" && dreaminaOn && dreaminaAuthed) {
 		opts.push(...DREAMINA_MODEL_CHOICES.map((c) => ({ id: c.id, label: c.label, familyId: SEEDANCE_FAMILY_ID, familyName: seedanceName })));
+	}
+	// ComfyUI 直连（已绑定地址 + 管理端未关入口）：单款 MiniMax H3，家族按款自带 fam-minimax
+	if (cap === "video" && comfyuiOn && comfyuiBound) {
+		opts.push(...COMFYUI_MODEL_CHOICES.map((c) => ({ id: c.id, label: c.label, familyId: c.familyId, familyName: famName(c.familyId) || c.familyName })));
 	}
 	return opts;
 }
@@ -107,11 +117,22 @@ interface ModelPickerProps {
 	style?: React.CSSProperties;
 	/** 不渲染「请选择模型…」占位项（调用方保证有选中值，如处理弹窗的自动选中） */
 	noPlaceholder?: boolean;
+	/** 受控模式（第243轮，新建项目页用）：传 onChange 即启用——选择只回调、不写 projectStore
+	 *  （新建页此刻项目尚未创建，先收集选择、创建时统一写入）。value 为当前受控值（""=自动第一个）。 */
+	value?: string;
+	onChange?: (id: string) => void;
 }
 
-export default function ModelPicker({ cap, label = "模型", style, noPlaceholder }: ModelPickerProps) {
-	const override = useProjectStore((s) => s.projectModelConfig?.[cap]);
+export default function ModelPicker({ cap, label = "模型", style, noPlaceholder, value: valueProp, onChange }: ModelPickerProps) {
+	const controlled = onChange !== undefined;
+	const storeOverride = useProjectStore((s) => s.projectModelConfig?.[cap]);
 	const setProjectModelConfig = useProjectStore((s) => s.setProjectModelConfig);
+	const override = controlled ? valueProp : storeOverride;
+	// 选择提交单点：受控=回调父组件；非受控=写项目级 projectModelConfig（原行为）
+	const commit = (id: string) => {
+		if (controlled) onChange!(id);
+		else setProjectModelConfig({ [cap]: id });
+	};
 
 	// 该能力可选模型（统一数据源：catalog 全量 + LibTV/即梦注入）
 	const opts = useCapModelOptions(cap);
@@ -132,18 +153,21 @@ export default function ModelPicker({ cap, label = "模型", style, noPlaceholde
 	const channels = useMemo(() => modelChannels(opts, false), [opts]);
 	const srcOpts = buildModelSourceOptions(opts, channels);
 	const variants = modelVariantsOf(value, channels);
-	const selSt: React.CSSProperties = { flex: 1, minWidth: 0, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, color: "#fff", padding: "6px 8px", fontSize: 12, outline: "none", cursor: "pointer" };
+	// ⚠ 配色走 .qiji-field-select/.qiji-field-label 三层 CSS（styles.css 第245轮补充：深色默认/浅色页面/
+	// 深色弹窗孤岛），勿把 color/background/border 写回内联——内联会压过浅色主题规则（白字贴白底）。
+	const selSt: React.CSSProperties = { flex: 1, minWidth: 0, borderRadius: 6, padding: "6px 8px", fontSize: 12, outline: "none", cursor: "pointer" };
 	const optSt: React.CSSProperties = { background: "#1f1f2e" };
 
 	if (fold) {
 		return (
-			<label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "rgba(255,255,255,0.55)", ...style }}>
+			<label className="qiji-field-label" style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, ...style }}>
 				{label}
 				<div style={{ display: "flex", gap: 6, flex: 1, minWidth: 0 }}>
 					<select
 						title="模型家族（模型种类）"
 						value={curFam ? `f:${curFam.familyId}` : ""}
-						onChange={(e) => { if (e.target.value) setProjectModelConfig({ [cap]: modelForFamily(e.target.value.slice(2), value, families) }); }}
+						onChange={(e) => { if (e.target.value) commit(modelForFamily(e.target.value.slice(2), value, families)); }}
+						className="qiji-field-select"
 						style={selSt}
 					>
 						{(!curFam || (!noPlaceholder && !value)) && (
@@ -159,7 +183,8 @@ export default function ModelPicker({ cap, label = "模型", style, noPlaceholde
 						<select
 							title="渠道/线路"
 							value={curCh ? sourceValueOf(value, famChannels) : ""}
-							onChange={(e) => setProjectModelConfig({ [cap]: modelForSource(e.target.value, value, famChannels) })}
+							onChange={(e) => commit(modelForSource(e.target.value, value, famChannels))}
+							className="qiji-field-select"
 							style={selSt}
 						>
 							{famChannels.map((ch) => (
@@ -171,7 +196,8 @@ export default function ModelPicker({ cap, label = "模型", style, noPlaceholde
 						<select
 							title="模型（本线路款式）"
 							value={value}
-							onChange={(e) => setProjectModelConfig({ [cap]: e.target.value })}
+							onChange={(e) => commit(e.target.value)}
+							className="qiji-field-select"
 							style={selSt}
 						>
 							{curCh.choices.map((c) => (
@@ -185,13 +211,14 @@ export default function ModelPicker({ cap, label = "模型", style, noPlaceholde
 	}
 
 	return (
-		<label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "rgba(255,255,255,0.55)", ...style }}>
+		<label className="qiji-field-label" style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, ...style }}>
 			{label}
 			<div style={{ display: "flex", gap: 6, flex: 1, minWidth: 0 }}>
 				<select
 					title="模型源"
 					value={sourceValueOf(value, channels)}
-					onChange={(e) => setProjectModelConfig({ [cap]: modelForSource(e.target.value, value, channels) })}
+					onChange={(e) => commit(modelForSource(e.target.value, value, channels))}
+					className="qiji-field-select"
 					style={selSt}
 				>
 					{(!noPlaceholder || !value) && (
@@ -207,7 +234,8 @@ export default function ModelPicker({ cap, label = "模型", style, noPlaceholde
 					<select
 						title="模型（本源款式）"
 						value={value}
-						onChange={(e) => setProjectModelConfig({ [cap]: e.target.value })}
+						onChange={(e) => commit(e.target.value)}
+						className="qiji-field-select"
 						style={selSt}
 					>
 						{variants.map((v) => (

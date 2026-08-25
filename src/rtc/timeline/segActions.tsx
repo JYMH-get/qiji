@@ -39,7 +39,7 @@ import VideoProcessModal, {
 import { startDerivedGeneration } from "@/services/generationQueue";
 import { ensurePublicUrl } from "@/lib/publicUrl";
 import { uploadMediaToCanvasAsset } from "@/canvas/nodeUpload";
-import { genShotVideo } from "@/rtc/panel/shotGenActions";
+import { genShotStoryboard, genShotVideo } from "@/rtc/panel/shotGenActions";
 // 三条生成链（分镜/派生/自由占位）共用的落笔层：台账对账 + 占位→media 字段变换 + 失败标记
 import { armPendingWatch } from "@/rtc/panel/placeholderSwap";
 import { markFailed } from "@/rtc/panel/rtcGenSink";
@@ -126,6 +126,65 @@ function spawnResultPlaceholder(
 	});
 	// commit 可能 no-op（源片段刚被删）→ 确认占位真落了才回报 id
 	return liveSeg(newId) ? newId : null;
+}
+
+/* ────────────────────────── 重新生成（右键菜单 与 中栏 AI 工作台 共用） ────────────────────────── */
+
+/**
+ * 分镜结果的「重新生成」——**唯一实现**（右键菜单 `useSegActions.regenerate` 与
+ * 中栏 AI 工作台的生成按钮共用，第251轮需求⑦：成片片段也能在工作台里重跑）。
+ *
+ * 落点规则（第237轮「轨道即结果存放位置」的兑现，勿回退）：
+ *   - 片段仍是**占位** → 原地重跑（它本就是这一版的坑位，不新增片段）；
+ *   - 片段已是**成片 media** → 在上方轨道同 target 窗口新建结果占位，新结果落进那个占位，
+ *     **原结果原位保留**（上下层即版本堆叠）。
+ * 提交没发出（缺提示词/首尾帧素材不足等，gen* 内部已 alert 说明）→ 撤掉刚建的空占位不留垃圾。
+ * 返回是否真的提交出去了。
+ */
+export async function regenerateShotResult(segId: string, field: "video" | "storyboard" = "video"): Promise<boolean> {
+	const live = liveSeg(segId);
+	if (!live?.seg.shotRef) {
+		alert("该片段没有关联分镜，无法重新生成。");
+		return false;
+	}
+	const { episodeId, shotId } = live.seg.shotRef;
+	const shot = useProjectStore
+		.getState()
+		.episodes.find((e) => e.id === episodeId)
+		?.shots.find((s) => s.id === shotId);
+	if (!shot) {
+		alert("该片段关联的分镜已被删除，无法重新生成。");
+		return false;
+	}
+	// ⚠ 落笔统一走 panel 层的 rtcGenSink：占位变 media 时 status/progress/taskRef/error 一律清空
+	//   （不清的话替换后的成片会永远显示「生成中」）。
+	const targetSegId =
+		live.seg.kind === "placeholder" ? segId : spawnResultPlaceholder(segId, "shot", { status: "running" });
+	if (!targetSegId) {
+		alert("该片段已被删除，重新生成已取消。");
+		return false;
+	}
+	// 走库内唯一路径：内部 startShotGeneration + armPlaceholderSwap（成功即把该占位就地变成成片）
+	const ok =
+		field === "storyboard"
+			? await genShotStoryboard(episodeId, shotId, { swapSegId: targetSegId })
+			: await genShotVideo(episodeId, shotId, { swapSegId: targetSegId });
+	if (!ok && targetSegId !== segId) dropSegment(targetSegId);
+	return ok;
+}
+
+/** 删掉一个刚建出来的片段（提交失败的空占位回收；片段已不在=no-op） */
+function dropSegment(segId: string): void {
+	useRtcStore.getState().commit((doc) => {
+		const hit = findSeg(doc, segId);
+		if (!hit) return doc;
+		return {
+			...doc,
+			tracks: doc.tracks.map((t) =>
+				t.id === hit.track.id ? { ...t, segments: t.segments.filter((s) => s.id !== segId) } : t,
+			),
+		};
+	});
 }
 
 /* ────────────────────────── 超分 / 去字幕：提交 ────────────────────────── */
@@ -496,50 +555,9 @@ export function useSegActions(): {
 		await runSeparateAudioGuarded(segId, setBusy);
 	}, []);
 
-	/**
-	 * 重新生成：
-	 *  - 片段仍是占位（这一版的坑位还空着）→ 原地重跑，不新增片段；
-	 *  - 片段已是成片 media → 上方轨道新建结果占位，生成完成后填进那个占位，**原结果原位保留**。
-	 */
+	/** 重新生成：实现见模块级 {@link regenerateShotResult}（与中栏 AI 工作台的生成按钮共用一份） */
 	const regenerate = useCallback(async (segId: string) => {
-		const live = liveSeg(segId);
-		if (!live?.seg.shotRef) {
-			alert("该片段没有关联分镜，无法重新生成。");
-			return;
-		}
-		const { episodeId, shotId } = live.seg.shotRef;
-		const shot = useProjectStore
-			.getState()
-			.episodes.find((e) => e.id === episodeId)
-			?.shots.find((s) => s.id === shotId);
-		if (!shot) {
-			alert("该片段关联的分镜已被删除，无法重新生成。");
-			return;
-		}
-		// ⚠ 占位=原地重跑；成片=上方新占位（新结果落新占位，原结果不动）。
-		//    落笔统一走 panel 层的 rtcGenSink：占位变 media 时 status/progress/taskRef/error 一律清空
-		//    （不清的话替换后的成片会永远显示「生成中」）。
-		const targetSegId =
-			live.seg.kind === "placeholder" ? segId : spawnResultPlaceholder(segId, "shot", { status: "running" });
-		if (!targetSegId) {
-			alert("该片段已被删除，重新生成已取消。");
-			return;
-		}
-		// 走库内唯一路径：内部 startShotGeneration + armPlaceholderSwap（成功即把该占位就地变成成片）
-		const ok = await genShotVideo(episodeId, shotId, { swapSegId: targetSegId });
-		// 提交没发出（缺提示词/首尾帧素材不足等，genShotVideo 已 alert 说明）→ 撤掉刚建的空占位，不留垃圾
-		if (!ok && targetSegId !== segId) {
-			useRtcStore.getState().commit((doc) => {
-				const hit = findSeg(doc, targetSegId);
-				if (!hit) return doc;
-				return {
-					...doc,
-					tracks: doc.tracks.map((t) =>
-						t.id === hit.track.id ? { ...t, segments: t.segments.filter((s) => s.id !== targetSegId) } : t,
-					),
-				};
-			});
-		}
+		await regenerateShotResult(segId, "video");
 	}, []);
 
 	const build = useCallback(

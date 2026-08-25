@@ -20,6 +20,8 @@ import { useProjectStore } from "@/store/projectStore";
 import type { StoryboardShot, InferTask } from "@/services/projectFile";
 import { runPurpose } from "./purposeRunner";
 import { trackTask } from "./taskCenter";
+// 在途进度（会话态，⚠ 不落 InferTask——瞬时信息勿随项目文件落盘）；与出图/视频共用同一张表，key=inferTask.id
+import { setJobProgress, clearJobProgress } from "./generationQueue";
 import { parseInferCards, parseInferCardsStream } from "@/lib/smartInferPrompts";
 import { stripBlankLines } from "@/lib/storyboardParse";
 import { reindexShots } from "@/lib/shotReindex";
@@ -210,11 +212,13 @@ export function startInfer(spec: StartInferSpec): string {
 			useProjectStore.getState().updateInferTask(id, { taskId, adapterKey });
 			void useProjectStore.getState().save(true);
 		},
-		onProgress: (_p, _s, partial) => {
+		onProgress: (p, _s, partial, extra) => {
+			setJobProgress(id, p, extra);
 			if (typeof partial === "string" && partial.length > 40) applyInferText(target, partial, false, true);
 		},
 	})
 		.then((r) => {
+			clearJobProgress(id);
 			if (!useProjectStore.getState().inferTasks.find((t) => t.id === id)) return; // 已被清除（切项目/重起新任务）→ 丢弃
 			if (r.status === "success") {
 				applyInferText(target, r.resultUri || "", false, false);
@@ -235,6 +239,7 @@ export function startInfer(spec: StartInferSpec): string {
 			}
 		})
 		.catch((err) => {
+			clearJobProgress(id);
 			useProjectStore.getState().updateInferTask(id, { status: "failed", error: err instanceof Error ? err.message : "推理失败" });
 			void useProjectStore.getState().save(true);
 		});
@@ -255,14 +260,18 @@ export function resumeInferTasks(): void {
 			trackTask({
 				taskId: t.taskId,
 				adapterKey: t.adapterKey,
-				onUpdate: (_p, status, resultUri, error, _assetId, partial) => {
+				onUpdate: (p, status, resultUri, error, _assetId, partial, _rawLink, extra) => {
+					// 重挂轮询同样喂进度/排队位次（重启后接回的推理可能仍在服务端队列里）
+					if (status === "queued" || status === "running") setJobProgress(t.id, p, extra);
 					if (typeof partial === "string" && partial.length > 40) applyInferText(target, partial, true, true);
 					if (status === "success") {
+						clearJobProgress(t.id);
 						applyInferText(target, resultUri || "", true, false);
 						finalizeInfer(target);
 						useProjectStore.getState().removeInferTask(t.id);
 						void useProjectStore.getState().save(true);
 					} else if (status === "failed" || status === "lost") {
+						clearJobProgress(t.id);
 						useProjectStore.getState().updateInferTask(t.id, { status: "failed", error: error || "推理失败：服务端未找到原任务，请重试。" });
 						void useProjectStore.getState().save(true);
 					}

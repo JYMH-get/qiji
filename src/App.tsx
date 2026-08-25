@@ -11,6 +11,8 @@ import { dispatchCommand } from "@/command/dispatch";
 import { registerCanvasHandlers } from "@/command/registerCanvasHandlers";
 import { SettingsModal } from "@/canvas/SettingsModal";
 import { PersonalCenter } from "@/components/PersonalCenter";
+import { ToolboxModal } from "@/components/ToolboxModal";
+import { useToolboxStore } from "@/store/toolboxStore";
 import { RouterView } from "@/router/index";
 import { TitleBar } from "@/canvas/TitleBar";
 import { BrowserRouter as Router, useLocation, useNavigate } from "react-router";
@@ -98,6 +100,24 @@ function RouteSnapshotTracker() {
 	return null;
 }
 
+/**
+ * 第245轮补充：浅色主题只覆盖 大厅（/）与 新建项目（/frame164）两页——项目内工作区
+ * （剧本/资产/视频/画布/实时剪辑）的 UI 历轮全按深色设计开发，浅色主题下大面积白字贴白底不可读
+ * （用户实报）。进入项目路由一律按深色渲染（body.dark），回到大厅/新建页还原用户所选主题。
+ * ⚠ 本组件是 body.dark 的最终权威（App init/主题订阅/两处 toggleTheme 的直改会被本效果按
+ * 「主题 × 路由」纠正）——项目内页面勿再做逐页浅色适配，浅色支持只在这两页与深色弹窗孤岛（styles.css）。
+ */
+const LIGHT_THEME_ROUTES = new Set(["/", "/frame164"]);
+function ThemeBodySync() {
+	const { pathname } = useLocation();
+	const theme = useSettingsStore((s) => s.theme);
+	useEffect(() => {
+		const dark = theme === "dark" || !LIGHT_THEME_ROUTES.has(pathname);
+		document.body.classList.toggle("dark", dark);
+	}, [pathname, theme]);
+	return null;
+}
+
 // 资产（表格）模式的全部路由（大厅 / 与新建 /frame164 不算模式页，两种开关下都可用）
 const ASSET_MODE_ROUTES = new Set([
 	"/frame1693", "/frame16285", "/frame-group", "/frame16550", "/frame16780", "/frame161000", "/frame161195",
@@ -179,6 +199,11 @@ export default function App() {
 			const { registerDreaminaAdapter } = await import("@/services/adapters/dreaminaAdapter");
 			registerDreaminaAdapter();
 			void (await import("@/store/dreaminaStore")).useDreaminaStore.getState().refresh();
+		}
+		// ComfyUI 直连本地适配器：同上——注册须在项目加载前（绑定状态从 localStorage 同步读出，无需探测）
+		{
+			const { registerComfyuiAdapter } = await import("@/services/adapters/comfyuiAdapter");
+			registerComfyuiAdapter();
 		}
 		// 管理端连接配置变更后，自动重新拉取 catalog
 		const unsubConnection = useConnectionStore.subscribe(
@@ -363,6 +388,7 @@ export default function App() {
 
 	const settingsOpen = useUiStore((s) => s.settingsOpen);
 	const personalCenterOpen = useUiStore((s) => s.personalCenterOpen);
+	const toolboxOpen = useToolboxStore((s) => s.open);
 
 	if (checking) {
 		return (
@@ -390,6 +416,7 @@ export default function App() {
 				<TitleBar />
 				<RouterView />
 				<RouteSnapshotTracker />
+				<ThemeBodySync />
 				<ModeGuard />
 				<FloatingAssistants />
 				<Lightbox />
@@ -404,6 +431,7 @@ export default function App() {
 				<TaskRecoveryNotice />
 				{settingsOpen && <SettingsModal />}
 				{personalCenterOpen && <PersonalCenter />}
+				{toolboxOpen && <ToolboxModal />}
 			</div>
 		</Router>
 	);

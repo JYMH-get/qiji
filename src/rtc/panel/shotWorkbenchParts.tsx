@@ -13,13 +13,14 @@
  * 红线（沿用勿回退）：客户端只插胶囊标记（【预设:id】/@ImageN），展开收口在提交（shotGenActions
  * 的 resolvePresets / 上游 @tag 注入）；放大弹窗「匹配资产」永远委托宿主（第108轮）。
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useProjectStore } from "@/store/projectStore";
-import { recallPendingGeneration } from "@/services/generationQueue";
+import { recallPendingGeneration, subscribeJobProgress, jobProgressVersion, getJobProgress } from "@/services/generationQueue";
 import { PromptExpandButton } from "@/components/PromptExpandButton";
 import PromptMentionEditor, { type PromptMentionHandle } from "@/components/PromptMentionEditor";
 import { AssetImportDropdown } from "@/components/AssetImportDropdown";
 import { openLightbox } from "@/store/lightboxStore";
+import { progressLabel } from "@/lib/queueLabel";
 import type { PresetScheme } from "@/lib/presetSchemes";
 import { materialTags, mediaOf, BADGE_BG } from "@/lib/shotMaterials";
 import { importAssetToShot, addLocalShotMaterials } from "@/lib/shotMaterialOps";
@@ -40,9 +41,22 @@ export function useShotInferring(shotId: string): boolean {
 	return useProjectStore((s) => s.inferTasks.some((t) => t.shotId === shotId && t.mode === "single" && t.status === "running"));
 }
 
+/**
+ * 在途台账条目的状态文案（第251轮需求④）：「排队中 · 第 3 位」/「生成中 42%」。
+ * ⚠ 进度与排队位次是**会话态**，不在 PendingGen 上（那是随项目文件落盘的，位次每拍都变、
+ *   写进去等于每帧惊动落盘链）——一律经 generationQueue 的 `getJobProgress(id)` 取，
+ *   与表格模式 jobChips 同一把尺（消费方需 useSyncExternalStore 订阅 jobProgressVersion）。
+ */
+function pendingLabel(p: PendingGen): string {
+	const jp = getJobProgress(p.id);
+	return progressLabel(jp?.progress ?? null, jp?.extra);
+}
+
 /** 在途任务状态 chips：生成中转圈 / 服务端异常可重连 / 失败可移除（与 Frame161195 jobChips 同语义） */
 export function JobChips({ shotId, field }: { shotId: string; field: "storyboard" | "video" }) {
 	const jobs = useShotJobs(shotId, field);
+	// 进度/排队位次是会话态（generationQueue 的 Map，不落盘）：订阅版本号触发重渲染，值走 getJobProgress
+	useSyncExternalStore(subscribeJobProgress, jobProgressVersion, jobProgressVersion);
 	if (jobs.length === 0) return null;
 	return (
 		<div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
@@ -50,7 +64,7 @@ export function JobChips({ shotId, field }: { shotId: string; field: "storyboard
 				p.status === "running" ? (
 					<span key={p.id} title="生成中（切页/重启会自动找回，完成后加入历史）"
 						style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, padding: "2px 8px", borderRadius: 4, border: "1px solid rgba(139,92,246,0.5)", background: "rgba(139,92,246,0.15)", color: "#c4b5fd" }}>
-						<span className="sb-spin" style={{ display: "inline-block" }}>↻</span>生成中
+						<span className="sb-spin" style={{ display: "inline-block" }}>↻</span>{pendingLabel(p)}
 					</span>
 				) : p.recoverable ? (
 					<button key={p.id} title={`${p.error || "服务端异常"}（点击重连原任务找回结果，不重新生成不再扣费）`} onClick={() => recallPendingGeneration(p.id)}

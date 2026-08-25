@@ -60,7 +60,7 @@ describe("buildAssetBaseGenSpec", () => {
 	it("分辨率档按模型开放集收敛：默认 2k 不在开放集（仅 1k）→ 归一第一档 1k", () => {
 		const r = buildAssetBaseGenSpec("organisms", { id: "m1", name: "灵狐", prompt: "九尾灵狐" }, "m", [{ v: "1k" }]);
 		if (!("spec" in r)) throw new Error("expected spec");
-		expect(r.spec.params?.size).toBe("1024x576"); // 16:9 × 1k
+		expect(r.spec.params?.size).toBe("1280x720"); // 16:9 × 1k（第251轮三份 size 表统一后的规范值）
 		expect(r.spec.params?.idPrefix).toBe("M");
 	});
 

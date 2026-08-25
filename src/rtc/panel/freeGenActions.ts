@@ -21,15 +21,14 @@
  *   垫素材一条都不许静默丢——取不到公网直链就明确报错且**请求不发出**（@ 编号错位红线）。
  */
 import type { Purpose } from "@/contract";
-import { useCatalogStore } from "@/store/catalogStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useRtcStore } from "@/store/rtcStore";
 import { effectiveModelKey } from "@/components/ModelPicker";
-import { imageResolutionOptions } from "@/lib/genParams";
 import { ensurePublicUrl } from "@/lib/publicUrl";
 import { resolvePresets } from "@/lib/presetSchemes";
-import { videoReqOptions } from "@/lib/videoMethods";
+import { imageResolutionOptionsForKey, videoReqOptionsForKey } from "@/lib/modelOptions";
 import { runPurpose } from "@/services/purposeRunner";
+import type { TaskExtra } from "@/services/adapters/types";
 import type { RtcSegment } from "@/types/rtc";
 import {
 	AUDIO_GEN_UNSUPPORTED,
@@ -124,12 +123,12 @@ export async function startFreeGen(segId: string): Promise<FreeGenResult> {
 		refs.push({ url: u, name: r.name, media: r.media });
 	}
 
-	const model = useCatalogStore.getState().model(modelKey);
 	const ms = useProjectStore.getState().mediaSettings;
+	// 档位一把尺（modelOptions）：catalog 优先、本地渠道（ComfyUI/LibTV/即梦）回退适配器 paramsSchema
 	const params =
 		kind === "video"
-			? buildFreeVideoParams(seg.targetDurationUs, ms, videoReqOptions(model))
-			: buildFreeImageParams(ms, imageResolutionOptions(model));
+			? buildFreeVideoParams(seg.targetDurationUs, ms, videoReqOptionsForKey(modelKey))
+			: buildFreeImageParams(ms, imageResolutionOptionsForKey(modelKey));
 	const input = buildFreeInput(refs);
 	const label = seg.name || (kind === "video" ? "视频占位" : "图片占位");
 	const owner = currentOwner();
@@ -164,8 +163,10 @@ async function runOne(args: {
 			// 必须扛得住 Ctrl+Z 与关软件；片段随 rtcDoc 落项目文件）
 			onTaskId: (taskId, adapterKey) => armRunning(segId, packTaskRef(adapterKey, taskId), owner),
 			// 进度帧：静默写（不进撤销栈）+ 节流（见 rtcGenSink.mirrorProgress）
-			onProgress: (progress, status) => {
-				if (status === "running" || status === "queued") mirrorProgress(segId, progress, owner);
+			// 第251轮：排队位次/阶段文案（TaskExtra）一并镜像进片段——时间轴块与工作台
+			// 都经 lib/queueLabel.progressLabel 显示「排队中 · 第 3 位」而不是干巴巴的 0%。
+			onProgress: (progress, status, _partialText, extra?: TaskExtra) => {
+				if (status === "running" || status === "queued") mirrorProgress(segId, progress, owner, extra);
 			},
 		});
 		if (!liveSegment(segId)) return; // 片段已被用户删掉 → 结果无处可落（服务端仍有台账，可到请求记录查看）

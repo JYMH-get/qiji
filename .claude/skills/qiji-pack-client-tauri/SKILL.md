@@ -98,7 +98,7 @@ description: 打包 Qiji 桌面客户端（Tauri 2）并核验产物。触发词
 1. ⚠ **`additionalBrowserArgs` 会整体替换 wry 默认参数**——加 `--enable-features=WebGPU` 时必须把 `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required` 一起带上。当前正确值见 `src-tauri/tauri.conf.json`（app.windows[0].additionalBrowserArgs），三段参数齐全才是对的。
 2. ⚠ **CSP `script-src` 必须含 `blob:`**（否则打包版 ONNX Runtime 多线程路径全挂——转深度报「no available backend found」，且 dev 浏览器复现不出来）。当前 `tauri.conf.json` security.csp 的 script-src 已含 `'unsafe-inline' 'unsafe-eval' blob:`，勿删任一。
 3. ⚠ **仓库根不能残留 `vite.config.js`**——vite 解析 `.js` 优先于 `.ts`，会静默遮蔽 `vite.config.ts` 的所有配置改动（第144轮事故：define/插件改动全部不生效）。tsc 误产出该文件时立即删除。
-4. ⚠ **不要改 `productName`（Qiji）/ `identifier`（com.qiji.canvas）**——改 identifier = 换 appData 目录 = 用户数据全丢。品牌改名只动窗口标题 `app.windows[0].title`（现为「灵创工场」）与前端资产，技术标识（含 CSS 类名 `Qiji-*`、localStorage 键）一律不动。
+4. ⚠ **不要改 `productName`（Qiji）/ `identifier`（com.qiji.canvas）**——改 identifier = 换 appData 目录 = 用户数据全丢。品牌改名只动窗口标题 `app.windows[0].title`（现为「Qiji」，第 241 轮改回）与前端资产，技术标识（含 CSS 类名 `Qiji-*`、localStorage 键）一律不动。
 
 ## 相关文件
 

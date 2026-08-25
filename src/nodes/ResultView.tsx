@@ -13,6 +13,7 @@ import { openLightbox } from "@/store/lightboxStore";
 import { dispatchCommand } from "@/command/dispatch";
 import { saveRemoteAsset } from "@/services/assetPersist";
 import { isWebviewLocalUri } from "@/lib/publicUrl";
+import { progressLabel } from "@/lib/queueLabel";
 import { getPlugin } from "./pluginRegistry";
 import type { ResultKind } from "@/types";
 
@@ -195,6 +196,10 @@ export function ResultView({
 	const status = useCanvasStore((s) => s.runtime[nodeId]?.status ?? "idle");
 	const progress = useCanvasStore((s) => s.runtime[nodeId]?.progress ?? 0);
 	const errorMsg = useCanvasStore((s) => s.runtime[nodeId]?.error ?? null);
+	// 第251轮排队提示：三个单值选择器（仅该值变化才重渲染，合 §9 画布渲染性能规则）
+	const queuePosition = useCanvasStore((s) => s.runtime[nodeId]?.queuePosition);
+	const queueTotal = useCanvasStore((s) => s.runtime[nodeId]?.queueTotal);
+	const stageText = useCanvasStore((s) => s.runtime[nodeId]?.stageText);
 	const edges = useCanvasStore((s) => s.edges);
 	// 双快原则·预览本地（第146轮，勿回退）：显示按资产 id **现查三元映射的活本地副本**优先——
 	// 库记录/节点里存的 uri 是写入时快照（可能是死 blob:/失效直链），映射由 上传/自愈/重传 随时升级，
@@ -289,7 +294,13 @@ export function ResultView({
 			<div className="Qiji-result flex flex-col items-center justify-center gap-2.5">
 				<div className="Qiji-pulsebars" aria-hidden><span /><span /><span /><span /><span /></div>
 				<span className="text-[10px] text-muted-foreground tracking-widest font-medium select-none">
-					{status === "uploading" ? "上传中…" : status === "queued" ? "排队中…" : status === "scheduled" ? "已排期" : `生成中 ${progress}%`}
+					{status === "uploading"
+					? "上传中…"
+					: status === "scheduled"
+						? "已排期"
+						: status === "queued" && queuePosition == null
+							? "排队中…"
+							: progressLabel(progress, { queuePosition, queueTotal, stageText })}
 				</span>
 			</div>
 		);

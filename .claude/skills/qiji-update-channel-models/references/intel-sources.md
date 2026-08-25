@@ -32,6 +32,27 @@
 - **更新史**：第230轮接入 12 款；此后未更新。
 - **要点**：①KIND 键与站点名**逐字一致**（`[zz]` 方括号、`[zz] gemini-3.1-flash-lite-image` 的 `[zz]` 后有一个空格）；②更新=重拉 llms.txt 对照 KIND 与 sky() 种子；③折算尺≈元/次×100；④主线异常备用入口 api2.808relay.com 参数全同；⑤MJ 一次返四图但管线只落 data[0]（已知边界）。
 
+### BYS（Boyesir AI，www.boyesir.icu）— 模式 bys · ch-bys · bys.ts（第252轮）
+
+- **情报源（两条，缺一不可）**：①`curl -s -H "Authorization: Bearer $KEY" https://www.boyesir.icu/v1/models`（**需渠道密钥** sk-，New API 系网关；2026-08-21 实测 200/69 款）——**只给 id，零能力零价格元数据**；②价格与时长表在官方文档页 `https://www.boyesir.icu/docs` 的 HTML 里（免鉴权、静态页，`curl`/node fetch 可直取；⚠ 站点 TLS 对 Windows schannel 握手失败——**用 node fetch 或 WSL curl，别用 Git Bash 的 curl**）。表格首列=模型 ID，`<span class="tag">` 是「新/火山官方/特价/不卡人脸」标签**不属于 ID**，解析时须剥离。
+- **丰富度**：清单（端点）+ 元价与时长范围（文档页）；⚠ 参考图上限、比例档、状态词枚举**全无**——图上限按底模惯例设在 bys.ts `CAPS` 表。
+- **⚠ 两处清单必须交叉核对**（第252轮实锤：文档 67 / 线上 69）：文档有而线上无 3 款（`kling-o3`/`sd2-mini`/`seedance2.0-svip-900-720p`，已下架**别接**）；线上有而文档无 5 款（`Q9-SD2.0-930`/`dvc-seedance-2.5-480p`/`lec-seedance-2-0-full-933-480p`/`seedance2.0-fast-480p`/`seedance2.0-standard-720p`，**无价格情报**，要接须先问站方或小额真单摸底）。
+- **种子工厂**：`bysSec()`（按秒，routes 按 resolution 换价——仅 `bys900-sd2.0-hd` 那款换上游真名）+ `bysOnce()`（按次，固定 cost 不设 costField）。
+- **更新史**：第252轮接入 15 款（线上 69 里精选，用户定「精选 12–15 款」）。
+- **要点**：①**只有 `images` 参考图**——无参考视频/音频、无首尾帧、无 @tag 引用语法 → 带视频/音频素材前置拒单、所有模型不声明 methods；②上游名逐字照抄（`seedance2.5-10图` 带中文、`minimax-h3 768p` 带空格）；③`resolution` 一律照发（本家多数模型分辨率是可选参数而非编在名里，与 congge 相反）；④折算尺=**元价 × 100**（用户定，全部占位价，上线前管理端定真价）；⑤按次款价格与时长无关 → 长镜头更划算（`seedance2.0` 满血线 5.5 元/次可跑 29 秒）；⑥成片保留 **48 小时**、任务记录仅 **2 小时**（超时轮询会 404 → 终态失败退款）；⑦上游自带「预扣 + 失败自动全额退回」。
+
+### QiQi（pidoi.com）— 模式 qiqi · ch-qiqi · qiqi.ts（第255轮）
+
+- **情报源**：①`curl -s -H "Authorization: Bearer $KEY" https://pidoi.com/v1/models`（**需渠道密钥** sk-；New API 系网关（错误体 `new_api_error`），2026-08-22 无 Key 实测回 401=端点在）——**只给 id，零能力零价格元数据**；②价格在 `https://pidoi.com/api/pricing`（=站内「模型广场」数据源，**需登录态** access token/Cookie，无 Key 实测 401；官方文档只说「具体价格以模型广场实时展示为准」）。
+- **丰富度**：清单（端点）+ 能力/限制（官方文档《Seedance 视频生成 API 调用文档》：9 图 + 3 音频 + 3 视频、seconds 4–15、6 档 ratio、状态词枚举齐全）；⚠ **价格无免鉴权来源**——改价/加款前须登录站点看模型广场，或小额真单对账。
+- **种子工厂**：`qiqi()`（按秒；`QIQI_PARAMS` 三参数 duration/aspect_ratio/generate_audio 用于 content 形态、`QIQI_933_PARAMS` 两参数（duration 仅 15 档）用于 flat 形态）。
+- **⚠ 同站两套请求形态**（翻译器 `shapeOf(upstreamModel)` 分派，显式表 + 未知名按 `/sora|933/` 兜底走 flat）：
+  - **content**（`seedace-2.0-720p`，《Seedance 视频生成 API 调用文档》）：content[] 多模态数组、支持首尾帧（role first_frame/last_frame）、**不传 resolution**、seconds 4–15、**音视频参考必须带至少 1 图**（硬约束）。
+  - **flat**（`sora-v3-933-pro`，《视频生成接口说明·933真人视频》2026-07-26）：扁平 `image_url`+`reference_image_urls`/`reference_videos`/`audio_urls`（**只发主字段，别名 reference_images/reference_video/audio_url 不用**）、**resolution 必填 720p**、seconds 仅 15、**不支持尾帧图**、**单次素材总数 ≤12**（跨类闸）、音频带图只是「建议」不拦。
+  ⚠ 两份文档在 **resolution / 素材字段族 / 尾帧** 三处正面冲突，形态错配即被上游 400 拒单；接新款前先确认它属哪套形态。
+- **更新史**：第255轮接入 2 款（`seedace-2.0-720p` + `sora-v3-933-pro`；两份文档各自都写「当前仅支持」自家那款，需拉 /v1/models 核实是否都在线）。
+- **要点**：①⚠ 上游名逐字 **`seedace-2.0-720p`**（文档全篇少一个 n，**不是** seedance——勿"顺手纠正"）；②**分辨率恒 720p，两款都不设 resolution 参数**——content 形态**一律不发**（文档 §2/§17.4：编在模型名后缀里，传了会与模型档位冲突）、flat 形态**必发 720p**（文档 §7 列为必填）；上新档=管理端新建模型，**别给现有款加 resolution 参数**；③素材引用是**小写** `@image1/@audio1/@video1`，三类分别编号（翻译器 `qiqiLowerTags` 转写）；④**用音频/视频参考时必须至少 1 张图**（文档 §5.4/§17.2，纯音频/纯视频会失败）→ 已前置拒单；⑤`seconds` 是**字符串**（客户端参数键仍 duration，翻译器换算）；⑥首尾帧走 content 的 `role: first_frame/last_frame`，且计入 9 张图总数；⑦顶层 `prompt` 与 `content[0].text` 必须同文（文档 §17.1 明列的常见错误）；⑧成片 `video_url` 本站托管「可能具有有效期」，另有标准内容端点 `/v1/videos/{id}/content`（需 Bearer）作兜底。
+
 ### 星辰（AIStartLab）— 模式 xingchen · ch-aistars · aistars.ts
 
 - **情报源**：`curl -s -H "Authorization: Bearer $KEY" https://api.video.aistarslab.com/openapi/generation/config`（**需渠道密钥** sk_；渠道 baseUrl 已含 /openapi）。另有官方测试线 `channel=test / model=test-video|test-image` 零扣费可全链路联调。
@@ -82,10 +103,11 @@
 - 无清单端点；接入以来稳定 2 款（seedance-2.0/-fast，routes 重定向 JA-sd2-* 真名）。渠道 baseUrl 以**管理端当前配置为准**（种子与生产已不同）。
 - ⚠ **jianmeng.ts 是全体视频翻译器的共享基座**（VideoSubmit/VideoPoll/resolveNamed/injectReferenceTags 十几家 import）——更新该渠道时勿顺手改共享导出。上游成片仅 6h 有效（转存 OSS 兜底）。
 
-### 简梦P（Base 由管理端配）— 模式 jmp · ch-jianmengp · jianmengp.ts
+### 简梦P（api.pixellelabs.com）— 模式 jmp · ch-jianmengp · jianmengp.ts
 
-- 靠用户文档（第159轮版名 pixelhub_video.md，含 Supported Models 清单 + Model Capability Matrix）；⚠ 文档连 Base URL 都不给。
-- 更新定式=第159轮「文档里没有了就删掉」：新增补种（+gemini-omni-flash）、下架墓碑（jmpTrimVersion 删 veo31/veo31-ref）。CAPS 表两种下架待遇：veo31 留守卫（管理端可重建）、veo31-ref 连条目删。工厂 `jmp()`。
+- 靠用户文档（第159轮版名 pixelhub_video.md；第242轮 2026-08 版「视频生成接口说明」起 Base URL 明给 `https://api.pixellelabs.com`）；无自助模型目录端点。
+- 更新定式=第159轮「文档里没有了就删掉」：新增补种、下架墓碑（jmpTrimVersion 删 veo31/veo31-ref；**jmpH3Version 第242轮收敛**——新文档只写 `H3video-2k`（MiniMax H3，2K/15s 固定、图9视3音3 合计≤12、无尾帧），v1 删 Sora 系 4 款；**gemini-omni-flash/veo31-fast 用户令恢复保留**，v2 对已跑首版 v1 的库补回）。工厂 `jmp(id, params, perUnit, cost, matLimits, familyId?)`。
+- ⚠ 第242轮起翻译器按 `CAPS.shape` 双形态：**h3**（H3video-2k 与未知名）=新文档字段族（reference_image_urls/reference_videos/audio_urls + seconds 字符串 + resolution 必发 + 小写 @imageN 转写）；**legacy**（恢复两款）=第159轮旧字段族原样（image_urls/duration 数字/大写 @ImageN）。成片下载端点须带 Bearer→resultHeaders 仅本站域。上游若再扩模型先核对字段族归哪一形态。
 
 ### 简梦M（MuseAI museai.vip）— 模式 jmm · ch-musem · musem.ts
 
@@ -143,3 +165,9 @@
 - **模型清单本质=用户在 autodl 控制台开了哪些工作流**，无平台级清单端点：workflow_id 与入参在控制台「工作流」页自查（右侧抽屉看入参）；官方 docs/comfyui_api 公开。工厂 `adl()`。
 - ⚠ **workflow_id 即上游模型名**（一个工作流=一个模型）——「加新模型」=控制台拿 workflow_id → 管理端建模型填入即接，零代码；占位符「请填写workflow_id」/回退 `^adl-` 形态前置报错不扣费。
 - 鉴权 `Authorization: <Token>` **原样不带 Bearer**；duration/resolution（中文档位串如「768p竖」）缺省不发、显式原样透传；未公布失败状态词（防御式状态族）；ComfyUI 可能按 GPU 时长计费与秒数非线性——**先小额真单对账再定真价**；errorScrub「域名隐藏在模式名保护之前」的顺序为 autodl 而定（第234轮）勿回退。
+
+### 奇迹云（自建 autodl 实例池 · ComfyUI 直驱）— 模式 qijicloud · ch-qijicloud · qijicloud.ts（第249轮）
+
+- **无外部上游、无清单端点**：「模型」=我方自己维护的 ComfyUI 工作流骨架（`translators/comfyGraph.ts` 内嵌常量；原件存档 `资料/奇迹云H3工作流-jianyi933.json`）。用户在自家实例的 ComfyUI 重导出工作流（API 格式）→ 更新骨架常量即「更新模型」——节点 id 会漂，构建器按 class_type 定位，替换骨架后须重跑纯函数冒烟。
+- 模型「上游模型名」=骨架名（jianyi933），管理端**勿改**；接第二条工作流=comfyGraph 加新骨架分支 + 管理端建新模型填新骨架名。
+- 实例池：注册/分组/并发/开关机在管理端「云实例」页；开发者Token 在渠道 ch-qijicloud（⚠ 与 autodl 模式的 ComfyUI 令牌是**两把不同 token**）。分辨率档→megapixels 映射与比例枚举串（ComfyUI 下拉逐字）都在 comfyGraph.ts，上游（=工作流）改档同步改映射。

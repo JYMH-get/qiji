@@ -24,13 +24,15 @@ export default function TemplatePicker({ purpose, value, onChange, label = "提�
 	const def = useMemo(() => opts.find((t) => t.isDefault) ?? opts[0], [opts]);
 	const displayValue = value || def?.id || "";
 
+	// ⚠ 配色走 .qiji-field-label/.qiji-field-select 三层 CSS（styles.css 第245轮补充），勿写回内联颜色
 	return (
-		<label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, color: "rgba(255,255,255,0.55)", ...style }}>
+		<label className="qiji-field-label" style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, ...style }}>
 			{label}
 			<select
 				value={displayValue}
 				onChange={(e) => onChange(e.target.value)}
-				style={{ flex: 1, minWidth: 0, background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, color: "#fff", padding: "6px 8px", fontSize: 12, outline: "none", cursor: "pointer" }}
+				className="qiji-field-select"
+				style={{ flex: 1, minWidth: 0, borderRadius: 6, padding: "6px 8px", fontSize: 12, outline: "none", cursor: "pointer" }}
 			>
 				{opts.length === 0 && <option value="" style={{ background: "#1f1f2e" }}>（无可用模板）</option>}
 				{opts.map((t) => (

@@ -11,9 +11,12 @@ import type { FastifyInstance } from "fastify";
 import { requireAdmin } from "../auth.ts";
 import {
 	listUsers, getUser, createUser, updateUser, deleteUser, genAccessKey, dailySpentToday, userStats, usersByAgent,
-	setUserPassword,
+	setUserPassword, activeMembershipOf, applyMembershipGrant, revokeMembership, grantCredits,
 	type User,
 } from "../store/users.ts";
+import {
+	getMembershipPlan, setMembershipPlan, listMembershipCards, createMembershipCards, deleteMembershipCard,
+} from "../store/membership.ts";
 import {
 	listAgents, getAgent, createAgent, updateAgent, deleteAgent, changeAgentCredits, publicAgent,
 	createAgentSession, regenerateAgentNodeKey,
@@ -70,12 +73,17 @@ import {
 } from "../store/settings.ts";
 import { isSmtpConfigured, sendMail } from "../services/mailer.ts";
 import { isSmsConfigured } from "../services/smsAliyun.ts";
-import { isOssConfigured, ossSelfTest } from "../store/oss.ts";
+import { isOssConfigured, ossSelfTest, ossPut, ossPresignPut, ossPublicUrl } from "../store/oss.ts";
+import { getSiteConfig, updateSiteConfig, setSiteImage, SITE_IMAGE_SLOTS } from "../store/site.ts";
 import { favoriteOwnersOverview, favoritedAssetCount, grantedBytes, addFavorite, removeFavorite } from "../store/favorites.ts";
 import { listStorageCodes, createStorageCodes, deleteStorageCode } from "../store/storageCodes.ts";
 import { sweepPreview, setRetentionDays } from "../store/retention.ts";
 import { cleanupOverview, setCleanupConfig, runCleanupOnce } from "../store/cleanup.ts";
 import { listCreditOps } from "../store/credits.ts";
+import {
+	poolOverview, updatePoolSettings, addPoolInstance, updatePoolInstance, removePoolInstance,
+	powerOnInstance, powerOffInstance, listRecentJobs,
+} from "../store/qijicloudPool.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ADMIN_HTML = join(here, "..", "admin", "index.html");
@@ -95,7 +103,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 		// P3 relay：源站专属管理端点一律 403（模型/渠道/模板/预设/渠道商/OSS/存储/配额/保留策略——
 		// 这些实体都在源站；节点只管本地 用户/团队/兑换码/统计/日志/注册设置）
 		if (isRelay()) {
-			const SOURCE_ONLY = /^\/admin-api\/(channels|models|modes|families|protocols|templates|presets|agents|agent-groups|platform-group|settings\/oss|storage|retention|cleanup|quota)/;
+			const SOURCE_ONLY = /^\/admin-api\/(channels|models|modes|families|protocols|templates|presets|agents|agent-groups|platform-group|settings\/oss|storage|retention|cleanup|quota|site|membership|qijicloud)/;
 			api.addHook("preHandler", async (req, reply) => {
 				if (SOURCE_ONLY.test(req.url)) {
 					return reply.code(403).send({ error: { message: "渠道节点不提供该管理功能（源站专属）" } });
@@ -140,9 +148,9 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 					case "enable": if (updateUser(id, { enabled: true })) affected++; break;
 					case "disable": if (updateUser(id, { enabled: false })) affected++; break;
 					case "delete": if (deleteUser(id)) affected++; break;
-					case "setFeature": { // 批量开关固定模式（assetMode/canvasMode/editorMode/libtv/dreamina）
+					case "setFeature": { // 批量开关固定模式（assetMode/canvasMode/editorMode/libtv/dreamina/comfyui）
 						if (!b.feature) break;
-						const f: Record<string, unknown> = { assetMode: true, canvasMode: true, editorMode: true, libtv: true, dreamina: true, ...(u.features ?? {}) };
+						const f: Record<string, unknown> = { assetMode: true, canvasMode: true, editorMode: true, libtv: true, dreamina: true, comfyui: true, ...(u.features ?? {}) };
 						f[b.feature] = b.value !== false;
 						if (f.assetMode === false && f.canvasMode === false && f.editorMode === false) break; // 资产+画布+实时剪辑不能全关
 						if (updateUser(id, { features: f as User["features"] })) affected++;
@@ -963,11 +971,60 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			const { to } = (req.body ?? {}) as { to?: string };
 			if (!to || !to.includes("@")) return reply.code(400).send({ error: { message: "请填写收件邮箱" } });
 			try {
-				await sendMail(to, "【灵创工场】SMTP 配置测试", "这是一封测试邮件——收到即说明 SMTP 配置正确，注册验证码通道可用。");
+				await sendMail(to, "【Qiji】SMTP 配置测试", "这是一封测试邮件——收到即说明 SMTP 配置正确，注册验证码通道可用。");
 				return { ok: true };
 			} catch (err) {
 				return reply.code(502).send({ error: { message: `发送失败：${(err as Error).message}` } });
 			}
+		});
+
+		// ── 网页管理（第244轮：官网主站 GET / 的内容管理）──
+		api.get("/admin-api/site", async () => ({
+			config: getSiteConfig(),
+			ossConfigured: isOssConfigured(),
+			imageSlots: Object.entries(SITE_IMAGE_SLOTS).map(([slot, s]) => ({ slot, label: s.label, builtin: `/site-assets/${s.file}` })),
+		}));
+		api.put("/admin-api/site", async (req) => ({ ok: true, config: updateSiteConfig((req.body ?? {}) as Record<string, unknown>) }));
+		// 图片槽位替换：multipart 原图 → OSS `site/img/`（原图原样保存，不压缩不改格式；旧版本对象保留）。
+		// ⚠ site/ 前缀刻意**不入资产台账**——官网素材没有用户归属/保留策略语义，也绝不能被清理任务扫到。
+		api.post("/admin-api/site/image", async (req, reply) => {
+			const slot = String((req.query as Record<string, string | undefined>).slot || "");
+			if (!SITE_IMAGE_SLOTS[slot]) return reply.code(400).send({ error: { message: "未知图片槽位" } });
+			if (!isOssConfigured()) return reply.code(400).send({ error: { message: "未配置 OSS——请先到「存储」页配置对象存储" } });
+			const file = await req.file();
+			if (!file) return reply.code(400).send({ error: { message: "缺少文件" } });
+			const buf = await file.toBuffer();
+			const mime = file.mimetype || "application/octet-stream";
+			const extMap: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/svg+xml": "svg", "image/gif": "gif" };
+			const ext = extMap[mime];
+			if (!ext) return reply.code(400).send({ error: { message: `不支持的图片类型：${mime}（支持 png/jpg/webp/svg/gif）` } });
+			try {
+				const url = await ossPut(`site/img/${slot}-${Date.now()}.${ext}`, buf, mime);
+				const config = setSiteImage(slot, url);
+				return { ok: true, url, config };
+			} catch (err) {
+				return reply.code(502).send({ error: { message: `上传 OSS 失败：${(err as Error).message}` } });
+			}
+		});
+		// 恢复某槽位为内置图（OSS 上的原图保留不删）
+		api.delete("/admin-api/site/image", async (req, reply) => {
+			const slot = String((req.query as Record<string, string | undefined>).slot || "");
+			if (!SITE_IMAGE_SLOTS[slot]) return reply.code(400).send({ error: { message: "未知图片槽位" } });
+			return { ok: true, config: setSiteImage(slot, null) };
+		});
+		// 安装包直传签发：几百 MB 的安装包由管理端页面凭预签名 URL **直传 OSS**（绕开服务器 50MB multipart 上限
+		// 与跨境中转）；传完页面再 PUT /admin-api/site 回填 downloadUrl。预签 2 小时：慢上行传大包也够。
+		api.post("/admin-api/site/installer/presign", async (req, reply) => {
+			const b = (req.body ?? {}) as { filename?: string };
+			const raw = String(b.filename || "");
+			if (!/\.(exe|msi|zip|7z|dmg)$/i.test(raw)) return reply.code(400).send({ error: { message: "文件名须以 .exe/.msi/.zip/.7z/.dmg 结尾" } });
+			if (!isOssConfigured()) return reply.code(400).send({ error: { message: "未配置 OSS——请先到「存储」页配置对象存储" } });
+			// 对象键仅 ASCII（§9）：中文等字符替换为 -；保留扩展名
+			const safe = raw.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-.]+/, "") || "installer.exe";
+			const key = `site/pkg/${Date.now()}-${safe}`;
+			const contentType = "application/octet-stream";
+			const putUrl = await ossPresignPut(key, contentType, 7200);
+			return { ok: true, putUrl, publicUrl: ossPublicUrl(key), key, contentType };
 		});
 
 		// ── 积分流水（第183轮结算闸门附带产物）──
@@ -1038,6 +1095,55 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			return { ok: true };
 		});
 
+		// ── 会员（第246轮）：单档方案管理 + 会员卡签发（仅源站，免费——与发激活码/扩容卡同语义）──
+		api.get("/admin-api/membership", async () => {
+			const users = listUsers();
+			const members = users
+				.map((u) => ({ u, m: activeMembershipOf(u) }))
+				.filter((x) => x.m)
+				.map((x) => ({
+					id: x.u.id, name: x.u.name, account: x.u.account, credits: x.u.credits,
+					planName: x.m!.planName, expiresAt: x.m!.expiresAt, discountPercent: x.m!.discountPercent,
+				}))
+				.sort((a, b) => a.expiresAt.localeCompare(b.expiresAt));
+			const cards = listMembershipCards();
+			return {
+				plan: getMembershipPlan(),
+				stats: { members: members.length, cardsTotal: cards.length, cardsUsed: cards.filter((c) => c.usedBy).length },
+				members,
+				cards: cards.slice(0, 300),
+			};
+		});
+		api.put("/admin-api/membership/plan", async (req) => {
+			const b = (req.body ?? {}) as Record<string, unknown>;
+			return { ok: true, plan: setMembershipPlan(b) };
+		});
+		api.post("/admin-api/membership/cards", async (req) => {
+			const b = (req.body ?? {}) as { count?: number; note?: string };
+			return { items: createMembershipCards(Number(b.count) || 1, b.note) };
+		});
+		api.delete("/admin-api/membership/cards/:code", async (req, reply) => {
+			const r = deleteMembershipCard((req.params as { code: string }).code);
+			if (!r.ok) return reply.code(400).send({ error: { message: r.error } });
+			return { ok: true };
+		});
+		// 手动开通/续费（按当前方案规格，含到账算力）——运营兜底，不经卡
+		api.post("/admin-api/membership/grant", async (req, reply) => {
+			const { userId } = (req.body ?? {}) as { userId?: string };
+			const u = userId ? getUser(userId) : undefined;
+			if (!u) return reply.code(404).send({ error: { message: "用户不存在" } });
+			const p = getMembershipPlan();
+			const m = applyMembershipGrant(u.id, { planName: p.name, days: p.days, discountPercent: p.discountPercent });
+			if (p.credits > 0) grantCredits(u.id, p.credits);
+			return { ok: true, membership: m, added: p.credits };
+		});
+		// 取消会员（已到账算力不回收）
+		api.delete("/admin-api/membership/members/:userId", async (req, reply) => {
+			const ok = revokeMembership((req.params as { userId: string }).userId);
+			if (!ok) return reply.code(404).send({ error: { message: "用户不存在或非会员" } });
+			return { ok: true };
+		});
+
 		// ── 保留策略与清理预览 ──
 		api.get("/admin-api/retention", async () => sweepPreview());
 		api.put("/admin-api/retention", async (req) => {
@@ -1067,6 +1173,41 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 				id: p.id, bucket: p.bucket, layout: p.layout, writable: p.writable, active: p.active, publicBase: p.publicBase,
 			}));
 			return { ...stats, profiles, ossConfigured: isOssConfigured() };
+		});
+
+		// ── 奇迹云（云实例池）：自建 autodl 实例跑 ComfyUI ──
+		// 注册实例 / 看状态 / 手动开关机 / 调伸缩参数 / 看队列积压；开发者 Token 在渠道 ch-qijicloud 的 apiKey 里配。
+		// relay 节点由上方 SOURCE_ONLY 正则统一 403（源站专属）。
+		api.get("/admin-api/qijicloud", async () => ({ ...poolOverview(), recentJobs: listRecentJobs(50) }));
+		api.put("/admin-api/qijicloud/settings", async (req) => {
+			const b = (req.body ?? {}) as Record<string, unknown>;
+			return { ok: true, settings: updatePoolSettings(b as any) };
+		});
+		api.post("/admin-api/qijicloud/instances", async (req, reply) => {
+			const r = addPoolInstance((req.body ?? {}) as any);
+			if (!r.ok) return reply.code(400).send({ error: { message: r.error } });
+			return { ok: true, instance: r.instance };
+		});
+		api.put("/admin-api/qijicloud/instances/:uuid", async (req, reply) => {
+			const r = updatePoolInstance((req.params as { uuid: string }).uuid, (req.body ?? {}) as any);
+			if (!r.ok) return reply.code(400).send({ error: { message: r.error } });
+			return { ok: true, instance: r.instance };
+		});
+		api.delete("/admin-api/qijicloud/instances/:uuid", async (req, reply) => {
+			const r = removePoolInstance((req.params as { uuid: string }).uuid);
+			if (!r.ok) return reply.code(400).send({ error: { message: r.error } });
+			return { ok: true };
+		});
+		// 手动开关机：body { action: "on"|"off", force? }——在飞任务未清时关机须 force（前端二次确认）
+		api.post("/admin-api/qijicloud/instances/:uuid/power", async (req, reply) => {
+			const uuid = (req.params as { uuid: string }).uuid;
+			const b = (req.body ?? {}) as { action?: string; force?: boolean };
+			if (b.action !== "on" && b.action !== "off") {
+				return reply.code(400).send({ error: { message: "action 须为 on 或 off" } });
+			}
+			const r = b.action === "on" ? await powerOnInstance(uuid) : await powerOffInstance(uuid, { force: !!b.force });
+			if (!r.ok) return reply.code(400).send({ error: { message: r.error } });
+			return { ok: true };
 		});
 	});
 }

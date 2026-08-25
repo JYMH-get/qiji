@@ -45,6 +45,14 @@ export interface TaskRecord {
 	partialText?: string;
 	/** 流式进度（0-95，随 token 流入推进） */
 	partialProgress?: number;
+	/** 排队位次（1 基）+ 同队总数（第251轮，仅服务端自有队列=奇迹云实例池）。
+	 *  ⚠ 瞬时态**不落盘**（persist 里与 partialText/partialProgress 一并剔除）。 */
+	queuePosition?: number;
+	queueTotal?: number;
+	/** 服务端阶段文案（通用通道）：同为瞬时态不落盘 */
+	stageText?: string;
+	/** 排队毫秒（第251轮）：派单那刻定格，**要落盘**——终态收尾写进请求记录（「实际生成（排队）」） */
+	queuedMs?: number;
 	/** 计费信息：异步任务受理时预扣的积分；后台失败时据此退款（一次性，refunded 防重复退）。
 	 *  agents：归属链各级渠道商的结算侧扣款（第124轮层级，直属商→上级商，失败逐级退回积分池）；
 	 *  agentId/agentCost：第124轮前的单商旧字段，仅为读回存量落盘任务保留（退款兼容两种形态）；
@@ -85,7 +93,9 @@ function persist(): void {
 	// 裁剪（内存 Map 操作）同步完成；stringify + 写盘防抖异步化，不阻塞 event loop。
 	// serialize 在落盘时才跑，读取当时最新的内存状态。
 	scheduleSave(FILE, () => {
-		const rows = [...tasks.values()].map(({ partialText, partialProgress, ...rest }) => rest);
+		// ⚠ 瞬时态一律不落盘：partialText/partialProgress（流式）+ queuePosition/queueTotal/stageText
+		//   （排队位次每拍都变，落了只会污染 tasks.json）。queuedMs 是要留的——终态记录取它。
+		const rows = [...tasks.values()].map(({ partialText, partialProgress, queuePosition, queueTotal, stageText, ...rest }) => rest);
 		return JSON.stringify({ seq: _seq, tasks: rows });
 	});
 }
@@ -237,10 +247,24 @@ export function appendTaskText(taskId: string, fullText: string, progress?: numb
 	rec.partialProgress = progress ?? Math.min(95, (rec.partialProgress ?? 10) + 1);
 }
 
-/** 仅更新进度（异步视频轮询用）：终态前显示推进 */
-export function setTaskProgress(taskId: string, progress: number): void {
+/**
+ * 仅更新进度（异步视频轮询用）：终态前显示推进。
+ * 第251轮：可选第三参带排队情报/阶段文案/排队毫秒（其余 23 个视频驱动不传，签名前两参未动=零改动）。
+ * ⚠ 位次字段一律「有则写、无则清」——任务从排队进入生成后必须把上一拍的位次抹掉，否则客户端一直显示排队。
+ */
+export function setTaskProgress(
+	taskId: string,
+	progress: number,
+	extra?: { queuePosition?: number; queueTotal?: number; stageText?: string; queuedMs?: number },
+): void {
 	const rec = tasks.get(taskId);
-	if (rec) rec.partialProgress = Math.max(0, Math.min(95, progress));
+	if (!rec) return;
+	rec.partialProgress = Math.max(0, Math.min(95, progress));
+	rec.queuePosition = extra?.queuePosition;
+	rec.queueTotal = extra?.queueTotal;
+	rec.stageText = extra?.stageText;
+	// queuedMs 一旦定格就不再变（后续拍次没带也别抹掉）
+	if (extra?.queuedMs !== undefined) rec.queuedMs = extra.queuedMs;
 }
 
 export function completeTask(taskId: string, result: TaskState["result"]): void {
@@ -305,6 +329,8 @@ export function getTaskState(taskId: string): TaskState | undefined {
 	}
 
 	// 真实异步任务：终态前恒为 running，等后台回填（流式文本回传部分正文+进度）
+	// ⚠ 排队中也维持 status="running"（不改成 "queued"）：客户端按 queuePosition 有无切文案，
+	//   动 status 会牵动一堆在途/终态判定，风险不对等（第251轮定稿）。
 	if (rec.awaitingReal) {
 		return {
 			taskId: rec.taskId,
@@ -313,6 +339,9 @@ export function getTaskState(taskId: string): TaskState | undefined {
 			progress: rec.partialProgress ?? 50,
 			submittedAt: new Date(rec.submittedAt).toISOString(),
 			result: rec.partialText ? { text: rec.partialText } : undefined,
+			queuePosition: rec.queuePosition,
+			queueTotal: rec.queueTotal,
+			stageText: rec.stageText,
 		};
 	}
 

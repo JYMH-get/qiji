@@ -210,7 +210,7 @@ describe("rtcGenCore · 自由占位生成参数", () => {
 
 	it("图片参数 = {size, quality}，分辨率按模型开放档收敛", () => {
 		expect(buildFreeImageParams({ imageAspect: "9:16", imageResolution: "1k", imageQuality: "medium" }, [{ v: "1k" }, { v: "2k" }])).toEqual({
-			size: "576x1024",
+			size: "720x1280", // 9:16 × 1k（第251轮三份 size 表统一后的规范值）
 			quality: "medium",
 		});
 		// 档不在开放集 → 回落第一档

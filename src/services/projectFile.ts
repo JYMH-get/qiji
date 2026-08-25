@@ -158,6 +158,16 @@ export interface AssetBlob {
   srcUri?: string;
   /** 文件内容 sha256（十六进制）——本地上传去重：相同内容复用同一资产，不重复上传/落盘 */
   sha256?: string;
+  /**
+   * ⚠ 历史 url 别名表（第254轮，勿删）：url 换过之后的**旧链接**。
+   *
+   * 节点素材 / genMeta / assetRefImages 里散落的是写入当时的 url 字符串，而 url 会变
+   * （旧 OSS 桥接恢复、别人先恢复过、reput 落到新键）。registerAssetBlob 换 url 时把旧值
+   * 归档到这里、blobByUri 一并匹配——否则旧 uri 一换链就再也反查不回本 blob，
+   * 自愈（healPublicUrlIfDead）永远命中不了，提交仍然发旧死链（用户实报）。
+   * 上限 8 条，不含当前 url。
+   */
+  pastUrls?: string[];
 }
 
 /** 分镜的垫素材（来自资产库或本地上传） */
@@ -250,6 +260,10 @@ export interface StoryboardShot {
 
 /** 视频/分镜界面的「视频设置」——逐项目持久化（重启不回默认） */
 export interface MediaSettings {
+  /** 剧集拆分方式（第243轮，新建项目可预设）：快拆 __quick_* id（见 lib/splitChoices）或 catalog「剧集」类模板 id；空=默认 快速·n-n */
+  episodeTplId?: string;
+  /** 资产拆分模板 id（script.analyze，第243轮起持久化；空=catalog 默认款 isDefault） */
+  assetExtractTplId?: string;
   /** 拆分 */
   splitTplId?: string;
   /** 智能推理提示词模板 id（多卡，storyboard.toVideoPrompt；空=多分镜默认模板） */

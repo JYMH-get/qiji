@@ -23,6 +23,7 @@ import { runPurpose } from "./purposeRunner";
 import { trackTask } from "./taskCenter";
 import { saveRemoteAsset, uploadBlobToOss } from "./assetPersist";
 import { managedClient } from "./managedClient";
+import type { TaskExtra } from "./adapters/types";
 import { extractPromptText, buildLegend, withLegend } from "@/lib/shotMaterials";
 import { resolvePresets } from "@/lib/presetSchemes";
 
@@ -64,6 +65,57 @@ export interface ShotGenSpec {
 
 let _seq = 0;
 const uid = () => `gen-${Date.now()}-${++_seq}`;
+
+// ── 在途进度（会话态）─────────────────────────────────────────────────────────
+/**
+ * ⚠ **绝不写进 PendingGen / InferTask**：那两个结构随项目文件落盘，而排队位次/百分比是瞬时信息
+ * （落盘=项目文件里永远躺着一句「排队第 3 位」，重开还当真）。故单独放模块级 Map，重启即空。
+ * 消费方（表格模式 jobChips / 推理按钮）用 useSyncExternalStore 订阅版本号后读 getJobProgress。
+ * key = pendingGen.id（出图/视频）或 inferTask.id（推理/拆分）。
+ */
+export interface JobProgress {
+	progress: number;
+	/** 排队/阶段情报（服务端自有队列才有）——类型复用 adapters/types.TaskExtra，勿另立一份 */
+	extra?: TaskExtra;
+}
+
+const jobProgress = new Map<string, JobProgress>();
+const jobProgressListeners = new Set<() => void>();
+let jobProgressVer = 0;
+
+const sameExtra = (a?: TaskExtra, b?: TaskExtra): boolean =>
+	(a?.queuePosition ?? -1) === (b?.queuePosition ?? -1)
+	&& (a?.queueTotal ?? -1) === (b?.queueTotal ?? -1)
+	&& (a?.stageText ?? "") === (b?.stageText ?? "");
+
+function bumpJobProgress(): void {
+	jobProgressVer++;
+	for (const fn of jobProgressListeners) fn();
+}
+
+/** 订阅在途进度变化（配 useSyncExternalStore：快照=版本号，取值走 getJobProgress） */
+export function subscribeJobProgress(fn: () => void): () => void {
+	jobProgressListeners.add(fn);
+	return () => { jobProgressListeners.delete(fn); };
+}
+export function jobProgressVersion(): number {
+	return jobProgressVer;
+}
+export function getJobProgress(id: string): JobProgress | undefined {
+	return jobProgress.get(id);
+}
+/** 记录一次进度（值无变化则不通知，避免轮询期无谓重渲染） */
+export function setJobProgress(id: string, progress: number, extra?: TaskExtra): void {
+	const p = Number.isFinite(progress) ? Math.max(0, Math.min(100, Math.round(progress))) : 0;
+	const cur = jobProgress.get(id);
+	if (cur && cur.progress === p && sameExtra(cur.extra, extra)) return;
+	jobProgress.set(id, { progress: p, extra });
+	bumpJobProgress();
+}
+export function clearJobProgress(id: string): void {
+	if (!jobProgress.delete(id)) return;
+	bumpJobProgress();
+}
 
 /** 把成功结果落到分镜：媒体→主图/主视频+历史；文本→推理出的提示词+基线 */
 function applyShotResult(target: NonNullable<PendingGen["shot"]>, uri: string): void {
@@ -120,6 +172,7 @@ function uploadPrefixOf(p: PendingGen): string {
 }
 
 async function applyResult(id: string, status: "success" | "failed", resultUri?: string, error?: string, assetId?: string, opts?: { recoverable?: boolean; rawLink?: boolean }): Promise<void> {
+	clearJobProgress(id); // 已终态，进度/排队位次作废（重试/重连会重新登记）
 	const st = useProjectStore.getState();
 	const p = st.pendingGens.find((x) => x.id === id);
 	if (!p) return; // 已切换项目/已被清除 → 丢弃（原项目重开时会续跑）
@@ -190,6 +243,8 @@ function runFromPending(id: string): void {
 			useProjectStore.getState().updatePendingGen(id, { taskId, adapterKey });
 			void useProjectStore.getState().save(true);
 		},
+		// 进度/排队位次（第251轮）：只进会话态 Map，不落 PendingGen（瞬时信息勿随项目落盘）
+		onProgress: (progress: number, _status: string, _partial?: string, extra?: TaskExtra) => setJobProgress(id, progress, extra),
 	};
 	// 推理（带 variables）走存盘的变量；分镜出图走自由 prompt+视觉风格；资产走自由 prompt。
 	// 第174轮：提交前把提示词里的预设胶囊【预设:id】展开成正文（资产拆分自动挂的 画风前缀/类别前后缀、
@@ -316,7 +371,9 @@ export function recallPendingGeneration(id: string): void {
 	trackTask({
 		taskId: p.taskId,
 		adapterKey: p.adapterKey,
-		onUpdate: (_progress, status, resultUri, error, assetId, _partial, rawLink) => {
+		onUpdate: (progress, status, resultUri, error, assetId, _partial, rawLink, extra) => {
+			// 重连找回同样喂进度/排队位次（重连回来的单可能仍在服务端队列里）
+			if (status === "queued" || status === "running") setJobProgress(p.id, progress, extra);
 			if (status === "success") void applyResult(p.id, "success", resultUri, undefined, assetId, { rawLink });
 			else if (status === "failed") void applyResult(p.id, "failed", undefined, error);
 			else if (status === "lost") void applyResult(p.id, "failed", undefined, error || "服务端异常：仍未找到原任务", undefined, { recoverable: true });
@@ -334,7 +391,9 @@ export function resumePendingGenerations(): void {
 			trackTask({
 				taskId: p.taskId,
 				adapterKey: p.adapterKey,
-				onUpdate: (_progress, status, resultUri, error, assetId, _partial, rawLink) => {
+				onUpdate: (progress, status, resultUri, error, assetId, _partial, rawLink, extra) => {
+					// 重挂轮询的在途单同样喂进度/排队位次（重启后接回的单可能仍在服务端队列里）
+					if (status === "queued" || status === "running") setJobProgress(p.id, progress, extra);
 					if (status === "success") void applyResult(p.id, "success", resultUri, undefined, assetId, { rawLink });
 					else if (status === "failed") void applyResult(p.id, "failed", undefined, error);
 					// 服务端重启丢任务 → 标可重连，UI 提示「服务端异常」+「重连原任务」

@@ -117,6 +117,12 @@ export interface NodeRuntime {
 	taskId: string | null;
 	scheduledAt: string | null;
 	error: string | null;
+	/** 排队位次（1 基）+ 同队总数（第251轮，服务端自有队列排队中才有）——
+	 *  节点进度文案经 lib/queueLabel.progressLabel 切成「排队中 · 第 3/8 位」 */
+	queuePosition?: number;
+	queueTotal?: number;
+	/** 服务端阶段文案（无位次时顶替「生成中 X%」） */
+	stageText?: string;
 }
 
 /** 错峰自动模式配置（人机协作） */

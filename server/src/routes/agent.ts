@@ -181,9 +181,9 @@ export async function registerAgentRoutes(app: FastifyInstance): Promise<void> {
 				switch (b.op) {
 					case "enable": if (updateUser(id, { enabled: true })) affected++; break;
 					case "disable": if (updateUser(id, { enabled: false })) affected++; break;
-					case "setFeature": { // 批量开关固定模式（assetMode/canvasMode/editorMode/libtv/dreamina）
+					case "setFeature": { // 批量开关固定模式（assetMode/canvasMode/editorMode/libtv/dreamina/comfyui）
 						if (!b.feature) break;
-						const f: Record<string, unknown> = { assetMode: true, canvasMode: true, editorMode: true, libtv: true, dreamina: true, ...(u.features ?? {}) };
+						const f: Record<string, unknown> = { assetMode: true, canvasMode: true, editorMode: true, libtv: true, dreamina: true, comfyui: true, ...(u.features ?? {}) };
 						f[b.feature] = b.value !== false;
 						if (f.assetMode === false && f.canvasMode === false && f.editorMode === false) { skipped++; break; } // 资产+画布+实时剪辑不能全关
 						if (updateUser(id, { features: f as User["features"] })) affected++;

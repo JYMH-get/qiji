@@ -135,7 +135,15 @@ export function buildManagedAdapter(model: CatalogModel): ModelAdapter {
 					return { status: "failed", progress: 100, error: t.error || "生成失败" };
 				}
 				// 进行中：把服务端流式累积的部分正文透出来（供调用方边收边解析渲染）
-				return { status: t.status, progress: t.progress ?? 50, partialText: t.result?.text };
+				// 第251轮：顺带透出排队位次/阶段文案（服务端自有队列才有；显示走 lib/queueLabel）
+				return {
+					status: t.status,
+					progress: t.progress ?? 50,
+					partialText: t.result?.text,
+					queuePosition: t.queuePosition,
+					queueTotal: t.queueTotal,
+					stageText: t.stageText,
+				};
 			} catch (err) {
 				// 服务端可达但任务不存在（404，多因服务端重启丢了内存任务）→ 标记 lost：
 				// 终态、提示「服务端异常」，可凭原 taskId 重连找回（不重新生成、不再扣费）。

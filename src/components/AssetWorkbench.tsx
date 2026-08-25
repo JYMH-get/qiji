@@ -38,6 +38,7 @@ type Form = {
 
 // 出图要求常量（模型/质量/比例/分辨率）抽到 @/lib/genParams，画布「生成图片」节点共用、保持一致。
 import { IMAGE_QUALITIES as QUALITIES, IMAGE_ASPECTS as ASPECTS, imageResolutionOptions, clampImageResolution, resolveSize } from "@/lib/genParams";
+import { assetImageAspectFrom } from "@/lib/templateAspect";
 import { mediaFilesFromClipboard } from "@/lib/clipboardMedia";
 
 // 资产 id 类型前缀（管理端据此分配 C00000123 等）：角色 C / 群像 G / 场景 S / 生物 M / 物品 P
@@ -75,7 +76,13 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
         [assets.length],
     );
     const [quality, setQuality] = useState("high");
-    const [aspect, setAspect] = useState("16:9");
+    // 第243轮比例决定链：资产拆分模板名内嵌比例（如「资产拆分9:16」）> 项目默认影片比例（mediaSettings.imageAspect）> 16:9；
+    // 页内改动（会话态）仍最高优先。挂载时解析一次（catalog 极端未到货时退项目默认，重进页面即取到）。
+    const [aspect, setAspect] = useState(() => assetImageAspectFrom(
+        useCatalogStore.getState().catalog?.templates,
+        useProjectStore.getState().mediaSettings?.assetExtractTplId,
+        useProjectStore.getState().mediaSettings?.imageAspect,
+    ));
     const [resolutionRaw, setResolution] = useState("2k");
     // 分辨率档由服务端按当前生效图像模型下发（catalog params.resolution 枚举），选择不在开放集时归一到第一档
     const imgModelKey = useEffectiveModelKey("image");

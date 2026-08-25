@@ -21,6 +21,7 @@ import { getPurposeMeta } from "@/lib/purposeRegistry";
 import { getAdapter } from "./adapters/registry";
 import { resolveAssetModelKey } from "./adapters/channelAdapter";
 import { trackTask } from "./taskCenter";
+import type { TaskExtra } from "./adapters/types";
 
 export interface RunPurposeInput {
 	/** 已合成的提示词正文（表格模式直接给正文；模板化调用可改用 variables/templateId） */
@@ -37,8 +38,8 @@ export interface RunPurposeInput {
 	params?: Record<string, unknown>;
 	/** 显式指定生效模型 key（画布节点传入已解析的节点模型；省略则按表格解析） */
 	modelKey?: string;
-	/** 进度回调（0~100 + 四态 + 文本流式部分正文） */
-	onProgress?: (progress: number, status: string, partialText?: string) => void;
+	/** 进度回调（0~100 + 四态 + 文本流式部分正文 + 排队/阶段情报（第251轮，尾部可选对象）） */
+	onProgress?: (progress: number, status: string, partialText?: string, extra?: TaskExtra) => void;
 	/** 提交确认后立即回传 taskId + adapterKey（供断连保护持久化在途任务） */
 	onTaskId?: (taskId: string, adapterKey: string) => void;
 	/**
@@ -62,14 +63,14 @@ export type RunPurposeResult =
 function awaitTask(
 	taskId: string,
 	adapterKey: string,
-	onProgress?: (progress: number, status: string, partialText?: string) => void,
+	onProgress?: (progress: number, status: string, partialText?: string, extra?: TaskExtra) => void,
 ): Promise<{ status: "success" | "failed"; resultUri?: string; assetId?: string; rawLink?: boolean; error?: string; lost?: boolean }> {
 	return new Promise((resolve) => {
 		trackTask({
 			taskId,
 			adapterKey,
-			onUpdate: (progress, status, resultUri, error, assetId, partialText, rawLink) => {
-				onProgress?.(progress, status, partialText);
+			onUpdate: (progress, status, resultUri, error, assetId, partialText, rawLink, extra) => {
+				onProgress?.(progress, status, partialText, extra);
 				if (status === "success") resolve({ status: "success", resultUri, assetId, rawLink });
 				else if (status === "failed") resolve({ status: "failed", error });
 				// lost：服务端丢任务——作为失败返回，但带 lost 标记供调用方提供「重连原任务」

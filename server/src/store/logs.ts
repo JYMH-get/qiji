@@ -60,6 +60,7 @@ export const PURPOSE_LABELS: Record<string, string> = {
 	"image.upscale": "图像超分",
 	"image.viewangle": "转视角",
 	"image.panorama": "720°全景",
+	"image.cover": "封面生成",
 	"audio.tts": "语音合成",
 	"storyboard.singleShot": "单卡推理",
 	"storyboard.unified": "图视同源（多卡）",
@@ -116,6 +117,10 @@ export interface LogMeta {
 	startedAt: string;
 	finishedAt?: string;
 	durationMs?: number;
+	/** 排队毫秒（第251轮，仅服务端自有队列=奇迹云实例池的任务有值）。
+	 *  ⚠ durationMs 语义**不变**=整段墙钟（提交→终态）；显示端算 实际生成 = durationMs - queuedMs，
+	 *  记作「365s（956s）」。旧记录无本字段 → 显示自然退化成原来的单值耗时。 */
+	queuedMs?: number;
 	error?: string;
 	resultLink?: string; // 成功产物链接（完成时从 response 预抽，导出/列表用，免读详情）
 	detailPruned?: boolean; // 详情已按 3 天期限清除（只剩索引记录；随索引落盘，重启不重复探删）
@@ -254,6 +259,7 @@ function toMeta(r: Record<string, unknown>): LogMeta {
 		startedAt: String(r.startedAt ?? new Date().toISOString()),
 		finishedAt: r.finishedAt as string | undefined,
 		durationMs: r.durationMs as number | undefined,
+		queuedMs: r.queuedMs as number | undefined,
 		error: r.error as string | undefined,
 		resultLink: (r.resultLink as string | undefined) || (r.response !== undefined ? resultLinkFrom(r.response) || undefined : undefined),
 		detailPruned: r.detailPruned === true ? true : undefined,
@@ -507,12 +513,16 @@ export interface FinishPatch {
 	response?: unknown;
 	error?: string;
 	taskId?: string;
+	/** 排队毫秒（第251轮，仅服务端自有队列的任务会带） */
+	queuedMs?: number;
 }
 
 function applyFinishMeta(m: LogMeta, patch: FinishPatch): void {
 	m.status = patch.status;
 	m.finishedAt = new Date().toISOString();
+	// ⚠ durationMs 仍是整段墙钟（含排队）——口径不变，显示端按 queuedMs 拆成「实际（排队）」
 	m.durationMs = new Date(m.finishedAt).getTime() - new Date(m.startedAt).getTime();
+	if (patch.queuedMs !== undefined && patch.queuedMs > 0) m.queuedMs = patch.queuedMs;
 	// 第168轮：请求记录的失败原因擦除渠道识别信息（会经 /v1/logs 与门户下发；③④上游段不受影响）
 	if (patch.error) m.error = scrubChannelInfo(patch.error);
 	if (patch.taskId) m.taskId = patch.taskId;

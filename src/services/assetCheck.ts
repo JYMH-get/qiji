@@ -1,20 +1,20 @@
 /**
- * assetCheck —— 手动「检查素材」：逐个资产探 OSS 直链是否可达，死链且本机有本地副本则自动重传修复。
+ * assetCheck —— 手动「检查素材」：逐个资产探 OSS 直链是否可达，链接换过就换用新链、
+ * 死链且本机有本地副本则自动重传修复。
  *
  * 三处入口共用：画布节点右键（本节点结果+素材）/ 资产界面·资产助手右键（单资产的图）/ 资产界面一键检查全部。
- * 检查=服务端 HEAD 探活（绕 webview CORS，可靠）；修复=本地字节 reput 写回 OSS 原键（url 不变，见 assetHeal/服务端）。
- * 约束同选项②：仅 Tauri + 台账真实资产 + 有本地副本才能修复；无副本只报告「无法修复」。
+ * ⚠ 恢复逻辑本身在 services/assetRecover（与提交前自愈 assetHeal 共用同一份，勿在此另写一套）；
+ *   本模块只负责「目标解析 + 状态映射 + 报告汇总」。
  */
 import { useProjectStore } from "@/store/projectStore";
 import { useCanvasStore } from "@/store/canvasStore";
 import { useLibraryStore } from "@/store/libraryStore";
-import { managedClient } from "@/services/managedClient";
 import { getNodeMaterialItems } from "@/canvas/nodeMaterials";
+import { recoverAsset, LEDGER_ID_RE, type RecoverOptions } from "@/services/assetRecover";
 import { useAssetCheckStore, type CheckStatus, type CheckItemResult, type CheckReport } from "@/store/assetCheckStore";
 
-/** 真·服务端台账资产 id 前缀（自愈只对这些有效，其余客户端派生 id 无 OSS 原键） */
-const LEDGER_ID_RE = /^(C|A|G|M|S|P|video|audio|TP)\d/;
-const isTauriEnv = () => typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
+/** 恢复例程的可注入项（cache 由本模块钉死为 "none"——手动检查必须真探） */
+export type CheckOpts = Omit<RecoverOptions, "cache">;
 
 export interface CheckTarget {
 	id: string;
@@ -25,98 +25,22 @@ export interface CheckTarget {
 	noLedger?: boolean;
 }
 
-export interface CheckDeps {
-	isTauri: () => boolean;
-	blobById: (id: string) => { url?: string; localPath?: string; mime?: string; ext?: string } | undefined;
-	/** 按资产 id 在项目 assets/ 目录里扫描本地副本（映射表缺记录时兜底）。
-	 *  返回 { localPath, ext, mime? }；未找到返回 null。仅 Tauri 环境有效。 */
-	findLocalById: (id: string) => Promise<{ localPath: string; ext: string; mime?: string } | null>;
-	readLocal: (path: string) => Promise<Uint8Array>;
-	alive: (id: string) => Promise<{ alive: boolean; url?: string }>;
-	reput: (id: string, blob: Blob, name: string) => Promise<{ url: string } | null>;
-	/** 服务端 url 变化（旧 OSS 桥接恢复/别人已恢复）→ 回写三元映射，后续提交直接用新链接 */
-	adoptUrl: (id: string, url: string) => void;
-}
-
-const adoptIntoStore = (id: string, url: string): void => {
-	const cur = useProjectStore.getState().assetBlobs[id];
-	if (!cur || cur.url !== url) useProjectStore.getState().registerAssetBlob({ id, url });
-};
-
-async function findLocalByIdImpl(id: string): Promise<{ localPath: string; ext: string; mime?: string } | null> {
-	try {
-		const st = useProjectStore.getState();
-		let savePath = st.savePath;
-		if (!savePath) return null;
-		const { join, dirname } = await import("@tauri-apps/api/path");
-		const assets = await join(await dirname(savePath), "assets");
-		const { exists } = await import("@tauri-apps/plugin-fs");
-		// 与 saveUploadedLocal/saveRemoteAsset 一致：文件名 = <id>.<ext>
-		for (const ext of ["png", "jpg", "jpeg", "webp", "mp4", "webm", "mov", "mp3", "wav", "ogg", "bin"]) {
-			const p = await join(assets, `${id}.${ext}`);
-			if (await exists(p)) {
-				const mime = ext === "jpg" ? "image/jpeg" : `${ext.startsWith("video") ? "video" : ext.startsWith("audio") ? "audio" : "image"}/${ext}`;
-				return { localPath: p, ext, mime };
-			}
-		}
-	} catch { /* 非 Tauri / 无项目 */ }
-	return null;
-}
-
-const defaultDeps: CheckDeps = {
-	isTauri: isTauriEnv,
-	blobById: (id) => useProjectStore.getState().assetBlobs[id],
-	findLocalById: findLocalByIdImpl,
-	readLocal: async (path) => {
-		const { readFile } = await import("@tauri-apps/plugin-fs");
-		return readFile(path);
-	},
-	alive: (id) => managedClient.assetAlive(id),
-	reput: (id, blob, name) => managedClient.reputAsset(id, blob, name),
-	adoptUrl: adoptIntoStore,
-};
-
-/** 单个资产：探活→死链则本地副本重传修复。第224轮起顺带把服务端当前 url 回写本机映射
- * （旧 OSS 桥接：别人恢复过的直接换用其链接；自己恢复的记下新链接——不重复上传）。返回状态。
+/**
+ * 单个资产：探活 → 换链 / 本地副本重传修复。
  *
- * 本地副本查找顺序：
- *  1. 三元映射 assetBlobs[id].localPath（已登记、项目文件持久化下来的）
- *  2. findLocalById fallback——扫描项目 assets/ 目录按 <id>.<ext> 文件名查找（映射表
- *     缺记录时仍能从磁盘找到，修复后登记进映射避免下次再扫）。 */
-export async function checkOne(target: CheckTarget, deps: CheckDeps = defaultDeps): Promise<CheckStatus> {
-	if (target.noLedger || !LEDGER_ID_RE.test(target.id)) return "missing"; // 无 OSS 记录=异常（非"跳过"）
-	const a = await deps.alive(target.id);
-	if (a.alive) {
-		if (a.url) deps.adoptUrl(target.id, a.url);
-		return "ok";
-	}
-	// 死链 → 有本地副本才能修复（选项②固有边界）
-	if (!deps.isTauri()) return "dead";
-
-	// ① 先查三元映射（快路径）
-	let blob = deps.blobById(target.id);
-
-	// ② 映射缺记录时 fallback 扫项目 assets/ 目录（修复"明明本地有却说没有"）
-	if (!blob?.localPath) {
-		const found = await deps.findLocalById(target.id);
-		if (found) {
-			const cur = useProjectStore.getState().assetBlobs[target.id];
-			useProjectStore.getState().registerAssetBlob({ id: target.id, url: cur?.url, localPath: found.localPath, ext: found.ext, mime: found.mime });
-			blob = { url: cur?.url, localPath: found.localPath, ext: found.ext, mime: found.mime };
-		}
-	}
-	if (!blob?.localPath) return "dead";
-
-	try {
-		const bytes = await deps.readLocal(blob.localPath);
-		const mime = blob.mime || "application/octet-stream";
-		const res = await deps.reput(target.id, new Blob([bytes as unknown as BlobPart], { type: mime }), `${target.id}.${blob.ext || "bin"}`);
-		if (res?.url) { deps.adoptUrl(target.id, res.url); return "healed"; }
-		return "dead";
-	} catch (e) {
-		console.warn("[assetCheck] reput failed:", e);
-		return "dead";
-	}
+ * ⚠ 第254轮（勿回退）：「本机无副本」(dead) 与「有副本但重传失败」(failed) **必须分开**——
+ * 旧实现两者都返回 dead，弹窗一律显示「云端已丢失且本机无副本」，而真实失败多是对象存储
+ * PUT 抖动（第197轮已实锤），用户看到的是彻底误导的结论。
+ *
+ * 手动检查一律 `cache:"none"` 真探——用户点「检查素材」就是要一个当下的结论，
+ * 不能被提交路径的会话缓存跳过。
+ */
+export async function checkOne(target: CheckTarget, opts?: CheckOpts): Promise<{ status: CheckStatus; reason?: string }> {
+	if (target.noLedger || !LEDGER_ID_RE.test(target.id)) return { status: "missing" }; // 无 OSS 记录=异常（非"跳过"）
+	const r = await recoverAsset(target.id, { ...opts, cache: "none" });
+	// adopted（服务端链接换过、已回写本机映射）对用户就是「正常」
+	const status: CheckStatus = r.status === "adopted" ? "ok" : r.status;
+	return { status, reason: r.reason };
 }
 
 /** 对结果计数汇总（纯函数） */
@@ -126,6 +50,7 @@ export function summarize(items: CheckItemResult[]): CheckReport {
 		ok: items.filter((i) => i.status === "ok").length,
 		healed: items.filter((i) => i.status === "healed").length,
 		dead: items.filter((i) => i.status === "dead").length,
+		failed: items.filter((i) => i.status === "failed").length,
 		missing: items.filter((i) => i.status === "missing").length,
 		items,
 	};
@@ -135,7 +60,7 @@ export function summarize(items: CheckItemResult[]): CheckReport {
 export async function checkAssetTargets(
 	targets: CheckTarget[],
 	onProgress?: (done: number, total: number) => void,
-	deps: CheckDeps = defaultDeps,
+	opts?: CheckOpts,
 ): Promise<CheckReport> {
 	const list = dedupById(targets);
 	const items: CheckItemResult[] = [];
@@ -145,8 +70,8 @@ export async function checkAssetTargets(
 	const worker = async () => {
 		while (idx < list.length) {
 			const t = list[idx++];
-			const status = await checkOne(t, deps);
-			items.push({ id: t.id, name: t.name, status });
+			const { status, reason } = await checkOne(t, opts);
+			items.push({ id: t.id, name: t.name, status, reason });
 			done += 1;
 			onProgress?.(done, list.length);
 		}

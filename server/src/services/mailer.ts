@@ -36,7 +36,7 @@ export async function sendMail(to: string, subject: string, text: string): Promi
 export async function sendCodeMail(to: string, code: string, action: string): Promise<void> {
 	await sendMail(
 		to,
-		`【灵创工场】${action}验证码`,
+		`【Qiji】${action}验证码`,
 		`您的${action}验证码为：${code}\n\n10 分钟内有效，请勿泄露给他人。如非本人操作请忽略本邮件。`,
 	);
 }

@@ -1221,3 +1221,56 @@ body:not(.dark) .qiji-login-page input:not([type="submit"]):not([type="button"])
 body:not(.dark) .qiji-login-page input::placeholder {
   color: #9aa0aa !important;
 }
+
+/* ===== 第245轮补充：浅色主题可读性 —— 表单字段/区块文字按「所在表面」三层配色 =====
+   ① 深色默认（= 原内联样式观感，深色主题与深色页面零变化）；
+   ② body:not(.dark) 浅色页面高对比（新建项目页等浅色 Pixso 页面，白字贴白底的修复）；
+   ③ body:not(.dark) .Qiji-panel 深色玻璃弹窗内恢复深色配色——弹窗在浅色大厅上仍是深色面板（「深色孤岛」，
+     与上方 .qiji-login-page 同一先例）。
+   ⚠ 共享组件（ModelPicker/TemplatePicker/Frame164 区块）勿再把颜色写回内联 style——内联会压过这三层规则，
+   浅色主题下又变回白字贴白底/深底深字。 */
+.qiji-sec-title { color: #fff; }
+.qiji-field-label { color: rgba(255, 255, 255, 0.55); }
+.qiji-field-select { background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.12); color: #fff; }
+.qiji-field-note { color: rgba(255, 255, 255, 0.35); }
+.qiji-field-hint { color: #c4b5fd; }
+.qiji-check-label { color: rgba(255, 255, 255, 0.75); }
+.qiji-aspect-chip { background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.12); color: rgba(255, 255, 255, 0.65); }
+.qiji-aspect-chip .qiji-aspect-box { border: 1.5px solid rgba(255, 255, 255, 0.35); }
+.qiji-aspect-chip.on { background: rgba(139, 92, 246, 0.15); border: 1.5px solid #8b5cf6; color: #c4b5fd; }
+.qiji-aspect-chip.on .qiji-aspect-box { border-color: #8b5cf6; }
+
+body:not(.dark) .qiji-sec-title { color: #1a1a2e; }
+body:not(.dark) .qiji-field-label { color: #4b5563; }
+body:not(.dark) .qiji-field-select { background: #ffffff; border-color: rgba(17, 24, 39, 0.2); color: #111827; }
+body:not(.dark) .qiji-field-note { color: rgba(17, 24, 39, 0.55); }
+body:not(.dark) .qiji-field-hint { color: #7c3aed; }
+body:not(.dark) .qiji-check-label { color: rgba(17, 24, 39, 0.8); }
+body:not(.dark) .qiji-aspect-chip { background: rgba(17, 24, 39, 0.04); border-color: rgba(17, 24, 39, 0.18); color: rgba(17, 24, 39, 0.7); }
+body:not(.dark) .qiji-aspect-chip .qiji-aspect-box { border-color: rgba(17, 24, 39, 0.4); }
+body:not(.dark) .qiji-aspect-chip.on { background: rgba(139, 92, 246, 0.12); border-color: #8b5cf6; color: #6d28d9; }
+body:not(.dark) .qiji-aspect-chip.on .qiji-aspect-box { border-color: #8b5cf6; }
+
+body:not(.dark) .Qiji-panel .qiji-sec-title { color: #fff; }
+body:not(.dark) .Qiji-panel .qiji-field-label { color: rgba(255, 255, 255, 0.55); }
+body:not(.dark) .Qiji-panel .qiji-field-select { background: rgba(255, 255, 255, 0.05); border-color: rgba(255, 255, 255, 0.12); color: #e8eaf0; }
+body:not(.dark) .Qiji-panel .qiji-field-note { color: rgba(255, 255, 255, 0.35); }
+body:not(.dark) .Qiji-panel .qiji-check-label { color: rgba(255, 255, 255, 0.75); }
+
+/* 深色玻璃弹窗（.Qiji-panel：个人中心/设置/工具箱/项目设置等）=「深色孤岛」：
+   上面的全局浅色主题输入规则会把弹窗内 输入/下拉/文本域 的文字改成深色（深底深字=看不清，
+   第245轮补充实锤）——弹窗内一律恢复浅色文字与深色下拉选项。特异性高于全局浅色规则。 */
+body:not(.dark) .Qiji-panel textarea,
+body:not(.dark) .Qiji-panel select,
+body:not(.dark) .Qiji-panel input[type="text"],
+body:not(.dark) .Qiji-panel input:not([type="submit"]):not([type="button"]) {
+  color: #e8eaf0 !important;
+}
+body:not(.dark) .Qiji-panel select option {
+  background-color: #1f1f2e !important;
+  color: #e8eaf0 !important;
+}
+body:not(.dark) .Qiji-panel textarea::placeholder,
+body:not(.dark) .Qiji-panel input::placeholder {
+  color: #9aa0aa !important;
+}

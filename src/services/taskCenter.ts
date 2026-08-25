@@ -8,6 +8,7 @@
  */
 
 import { TaskTracker } from "./taskTracker";
+import type { TaskExtra } from "./adapters/types";
 
 export type TaskUpdate = (
 	progress: number,
@@ -18,6 +19,8 @@ export type TaskUpdate = (
 	partialText?: string,
 	/** 服务端未转存的原始时效直链结果（meta.rehosted=false）——调用方需本机下载+上传转存（第158轮） */
 	rawLink?: boolean,
+	/** 排队/阶段情报（第251轮）：⚠ 统一以**尾部可选对象**追加，勿再往后加位置参数 */
+	extra?: TaskExtra,
 ) => void;
 
 /** taskId → 该任务的更新回调 */
@@ -28,10 +31,10 @@ let _tracker: TaskTracker | null = null;
 function getTracker(): TaskTracker {
 	if (_tracker) return _tracker;
 	// TaskTracker 的 nodeId 形参在此用作关联 id（= taskId），用于回查 handler
-	_tracker = new TaskTracker((corrId, progress, status, resultUri, error, assetId, partialText, rawLink) => {
+	_tracker = new TaskTracker((corrId, progress, status, resultUri, error, assetId, partialText, rawLink, extra) => {
 		const h = handlers.get(corrId);
 		if (!h) return;
-		h(progress, status, resultUri, error, assetId, partialText, rawLink);
+		h(progress, status, resultUri, error, assetId, partialText, rawLink, extra);
 		if (status === "success" || status === "failed" || status === "lost") handlers.delete(corrId);
 	});
 	return _tracker;

@@ -67,6 +67,16 @@ const BRAND_TOKENS = [
 	// ComfyUI 是其平台技术名（工作流报错可能透出）——一并作品牌词擦除
 	"autodl",
 	"ComfyUI",
+	// 奇迹云（第249轮，自建 autodl 实例池）：翻译器前缀「奇迹云」=模式对外名（占位符保护，改名后即开始被擦）
+	"奇迹云",
+	// BYS（第252轮，www.boyesir.icu）：翻译器前缀「BYS」=模式对外名（占位符保护，改名后即开始被擦）；
+	// 站点自称 Boyesir AI，域名段 boyesir 作品牌词擦除
+	"Boyesir",
+	"boyesir",
+	// QiQi（第255轮，pidoi.com）：翻译器前缀「QiQi」=模式对外名（占位符保护，改名后即开始被擦）；
+	// 域名段 pidoi 作品牌词擦除（⚠ 与我方品牌 Qiji 字面不同，不会误伤）
+	"QiQi",
+	"pidoi",
 	// 协议 id 里的品牌段（「协议不存在或已禁用：dimensio-video」一类）
 	"dimensio",
 	"huaying",
@@ -91,6 +101,7 @@ const HOST_TOKENS = [
 	"zhengapi.top",
 	"chre3.com",
 	"vosle.xyz",
+	"pixellelabs.com", // 简梦P（api.pixellelabs.com）API 域（第242轮 2026-08 新版文档明给；成片下载端点同域）
 	"zexitongxue.com",
 	"jian1.vip",
 	"volces.com",
@@ -107,6 +118,13 @@ const HOST_TOKENS = [
 	"808relay.com", // Skylee API 域（第230轮；主入口 api. / 备用入口 api2. 同域，子域一并吞）
 	"congchen.top", // congge（聪宸）API 域（第233轮；图片结果图与视频成片若返回本站直链同域）
 	"autodl.art", // autodl API 域（第234轮；成片 results[].url 若为本站直链同域）
+	// 奇迹云（第249轮）：实例服务域——ComfyUI 入口（service_6006_domain）落在这几个域下，
+	// 错误文案若透出实例地址一律隐藏（实例地址=渠道信息）
+	"autodl.com",
+	"gpuhub.com",
+	"seetacloud.com",
+	"boyesir.icu", // BYS（www.boyesir.icu）API 域（第252轮；成片直链与网页版 canvas. 子域一并吞）
+	"pidoi.com", // QiQi（pidoi.com）API 域（第255轮；成片直链 /video/task_xxx.mp4 与下载端点同域）
 ];
 
 function escRe(s: string): string {

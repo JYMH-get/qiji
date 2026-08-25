@@ -55,7 +55,12 @@ const now = (): string => new Date().toISOString();
 // v19（第230轮）：新增「Skylee」（skylee，api.808relay.com）——异步图片渠道（GPT Image 2/Gemini/Midjourney 12 款）归入。
 // v20（第233轮）：新增「congge」（congchen.top·聪宸）——同站图片（同步 3 款）+ 视频（Seedance 2.0/2.5 4 款）归入。
 // v21（第234轮）：新增「autodl」（autodl.art·ComfyUI 工作流平台）——H3 视频三工作流（多图参考/文生/首尾帧）归入。
-const MODES_SEED_VERSION = 21;
+// v22（第249轮）：新增「奇迹云」（qijicloud）——自建 autodl 云实例池 + ComfyUI 直驱（qj933-minimax-h3）归入。
+// v23（第252轮）：新增「BYS」（bys，www.boyesir.icu·Boyesir AI）——精选 15 款视频模型
+//   （Seedance 2.0/2.5 多线、MiniMax H3、Kling 3.0 Turbo、Gemini Omni Flash）归入。
+// v24（第255轮）：新增「QiQi」（qiqi，pidoi.com·Seedance 官转 API）——Seedance 2.0 720p 单款
+//   （content[] 多模态：9 图 + 3 音频 + 3 视频参考、小写 @imageN 引用、首尾帧 role）归入。
+const MODES_SEED_VERSION = 24;
 const DEFAULT_MODES: Mode[] = [
 	{ id: "qiji", name: "Qiji 视频", order: 1, createdAt: now(), updatedAt: now() },
 	{ id: "qiji-img", name: "Qiji 图片", order: 2, createdAt: now(), updatedAt: now() },
@@ -77,6 +82,9 @@ const DEFAULT_MODES: Mode[] = [
 	{ id: "skylee", name: "Skylee", order: 20, createdAt: now(), updatedAt: now() },
 	{ id: "congge", name: "congge", order: 21, createdAt: now(), updatedAt: now() },
 	{ id: "autodl", name: "autodl", order: 22, createdAt: now(), updatedAt: now() },
+	{ id: "qijicloud", name: "奇迹云", order: 23, createdAt: now(), updatedAt: now() },
+	{ id: "bys", name: "BYS", order: 24, createdAt: now(), updatedAt: now() },
+	{ id: "qiqi", name: "QiQi", order: 25, createdAt: now(), updatedAt: now() },
 ];
 
 let store: Store = loadJson<Store>(FILE, { version: 0, modes: [] });

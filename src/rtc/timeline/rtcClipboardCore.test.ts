@@ -37,7 +37,7 @@ describe("rtcClipboardCore copiedSegTemplate", () => {
 		expect(t).toMatchObject({ name: "镜头1", sourceStartUs: 500_000, speed: 2, volume: 0.5, muted: true });
 	});
 
-	it("⚠ 在途占位的 status/progress/taskRef/error/originSegId 一律不继承，落成干净 pending", () => {
+	it("⚠ 在途占位的 status/progress/taskRef/error/originSegId 一律不继承，落成干净 pending；shotRef 也不继承（需求⑧）", () => {
 		const ph = seg("p1", 0, 3 * SEC, {
 			kind: "placeholder",
 			media: undefined,
@@ -55,8 +55,25 @@ describe("rtcClipboardCore copiedSegTemplate", () => {
 		expect(t.taskRef).toBeUndefined(); // 不会与原片段抢同一个生成任务
 		expect(t.error).toBeUndefined();
 		expect(t.originSegId).toBeUndefined();
-		expect(t.shotRef).toEqual({ episodeId: "ep1", shotId: "sh1" }); // 分镜引用保留
+		// ⚠ 第251轮需求⑧（推翻第240轮「两个占位指同一分镜」）：副本要有自己的分镜，
+		// 模板里剥掉 shotRef，改由落位后的 deriveShotForCopy 派生一个独立补镜头。
+		expect(t.shotRef).toBeUndefined();
 		expect(t.genKind).toBe("video");
+	});
+
+	it("需求⑧：buildClipEntries 把源分镜出处记在 srcShotRef（只是派生线索，不是副本的 shotRef）", () => {
+		const ph = seg("p1", 0, 3 * SEC, {
+			kind: "placeholder",
+			media: undefined,
+			genKind: "video",
+			shotRef: { episodeId: "ep1", shotId: "sh1" },
+		});
+		const [e] = buildClipEntries(doc({ id: "v1", segments: [ph] }), ["p1"]);
+		expect(e.srcShotRef).toEqual({ episodeId: "ep1", shotId: "sh1" });
+		expect(e.seg.shotRef).toBeUndefined();
+		// 纯素材片段（无分镜）：不带 srcShotRef，行为与改造前一致
+		const [m] = buildClipEntries(doc({ id: "v1", segments: [seg("s1", 0, SEC)] }), ["s1"]);
+		expect(m.srcShotRef).toBeUndefined();
 	});
 
 	it("media 片段不被塞 status（只有占位才有生成状态）", () => {

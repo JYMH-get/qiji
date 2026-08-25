@@ -31,6 +31,7 @@ import { withSegmentTransform } from "../rtcTransform";
 import { applyAttrsToDoc, extractSegAttrs, useRtcAttrClipboard } from "../rtcAttrClipboard";
 import { useRtcEditorSettingsStore } from "../settings/rtcEditorSettingsStore";
 import { buildClipEntries, duplicateAnchorUs, materializePasteEntries, type RtcClipEntry } from "./rtcClipboardCore";
+import { deriveShotsForCopies } from "../panel/segShotBinding";
 /* 集成轮 glue（关键帧 T / 倒放 D / 裁剪 C 的键盘入口） */
 import { toggleKeyframeAtPlayhead } from "@/lib/rtcKeyframes";
 import type { RtcKfProp } from "@/types/rtc";
@@ -38,6 +39,20 @@ import { toggleReverse } from "../panel/reverseActions";
 import { requestCropEditor } from "../panel/cropEditorStore";
 
 /* ────────────────────────── 复制 / 剪切 / 粘贴 / 副本 ────────────────────────── */
+
+/**
+ * 落位后给「带分镜出处」的副本各派生一个**独立分镜**（第251轮需求⑧）。
+ * entries 与 prepared 逐位对应（materializePasteEntries 是 1:1 map），用下标配对即可。
+ * ⚠ 单独一次 commit：派生本身要改 projectStore（分镜表）+ rtcDoc（片段挂 shotRef），
+ *   与粘贴那次 commit 分开=多一步 undo，但换来「撤销粘贴后分镜表也能撤回来」以外的复杂度为零；
+ *   纯素材片段（无 srcShotRef）完全不进这条路，行为与改造前一致。
+ */
+function deriveCopiedShots(entries: RtcClipEntry[], prepared: { seg: { id: string } }[]): void {
+	const items = entries
+		.map((e, i) => ({ segId: prepared[i]?.seg.id ?? "", src: e.srcShotRef }))
+		.filter((x) => x.segId && x.src);
+	if (items.length) deriveShotsForCopies(items);
+}
 
 /** 复制选中片段到会话剪贴板；返回条数（0=选区为空，此时**不清空**已有剪贴板） */
 export function copySelection(): number {
@@ -71,6 +86,7 @@ export function pasteClipboard(atUs?: number): number {
 	const prepared = materializePasteEntries(entries, () => genId("seg"));
 	const anchor = atUs ?? st.playheadUs;
 	st.commitActive((d) => pasteSegments(d, prepared, anchor));
+	deriveCopiedShots(entries, prepared);
 	useRtcStore.getState().setSelection(prepared.map((p) => p.seg.id));
 	return prepared.length;
 }
@@ -88,6 +104,7 @@ export function duplicateSelection(): number {
 	if (entries.length === 0 || anchor == null) return 0;
 	const prepared = materializePasteEntries(entries, () => genId("seg"));
 	st.commitActive((d) => pasteSegments(d, prepared, anchor));
+	deriveCopiedShots(entries, prepared);
 	useRtcStore.getState().setSelection(prepared.map((p) => p.seg.id));
 	return prepared.length;
 }

@@ -27,6 +27,17 @@ export interface SubmitResult {
   taskId: string;
 }
 
+/**
+ * 在途任务的排队/阶段情报（第251轮）——服务端自有队列（奇迹云实例池）才会带；
+ * 沿 poll → taskTracker → taskCenter → purposeRunner 一路以**尾部可选对象**透传，
+ * 显示端经 lib/queueLabel.progressLabel 转成「排队中 · 第 3/8 位」。
+ */
+export interface TaskExtra {
+	queuePosition?: number;
+	queueTotal?: number;
+	stageText?: string;
+}
+
 export interface PollResult {
   /** lost：服务端可达但找不到该任务（多因服务端重启丢了内存任务）——终态，但可凭原 taskId 重连找回 */
   status: "queued" | "running" | "success" | "failed" | "lost";
@@ -40,6 +51,12 @@ export interface PollResult {
    *  客户端应自行下载（本机网络）并经 POST /v1/assets 上传回服务端落 OSS 替换成永久直链（第158轮） */
   rawLink?: boolean;
   error?: string;
+  /** 排队位次（1 基）——有值即「服务端队列排队中」（status 仍为 running/queued） */
+  queuePosition?: number;
+  /** 同队总数 */
+  queueTotal?: number;
+  /** 服务端阶段文案（无位次时顶替「生成中 X%」） */
+  stageText?: string;
 }
 
 export interface ModelAdapter {

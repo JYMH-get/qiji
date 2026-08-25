@@ -10,18 +10,22 @@
  *   - 在途任务 chips（中栏也有，这里留一份便于扫状态）。
  *
  * 档位值域一把尺（勿自造）：全部读写 projectStore.mediaSettings（setMediaSettings——与表格模式
- * Frame161195「视频设置」同一份**项目级**设置，两处改动互通）；图像比例=IMG_SIZE 表的键、
- * 分辨率=imageResolutionOptions（catalog 生效图像模型服务端控档，clampImageResolution 归一）、
- * 视频三档=videoReqOptions（catalog 生效视频模型）——显示层 clamp 与提交层（shotGenActions）同一把尺。
+ * Frame161195「视频设置」同一份**项目级**设置，两处改动互通）；图像比例/画质=genParams 的
+ * IMAGE_ASPECTS / IMAGE_QUALITIES、出图 size=resolveSize（全客户端唯一一份 SIZE_MAP）、
+ * 分辨率与视频三档/方法=**[modelOptions](@/lib/modelOptions) 按模型 key 取**——⚠ 第251轮改点：
+ * 原来的 `catalog.models.find(...)` 只认 catalog，选中 ComfyUI 直连/LibTV/即梦 这类本地渠道模型时
+ * 档位会掉回内置三档（480p/720p/1080p），显示与提交都错；modelOptions 会回退到适配器 paramsSchema。
+ * 显示层 clamp 与提交层（shotGenActions）用的是同一组函数。
  * 不做 Frame161195 那个「换模型后回写收敛」effect（它已在表格页承担，双处回写徒增竞态面）。
  */
+import { useMemo } from "react";
 import { useProjectStore } from "@/store/projectStore";
 import { useCatalogStore } from "@/store/catalogStore";
 import ModelPicker, { useEffectiveModelKey } from "@/components/ModelPicker";
-import { clampDuration, imageResolutionOptions, clampImageResolution } from "@/lib/genParams";
-import { METHOD_LABELS, ASPECT_LABELS, modelMethods, clampMethod, videoReqOptions, clampToOptions, clampDurationTo } from "@/lib/videoMethods";
+import { clampDuration, clampImageResolution, resolveSize, IMAGE_ASPECTS, IMAGE_QUALITIES } from "@/lib/genParams";
+import { METHOD_LABELS, ASPECT_LABELS, clampMethod, clampToOptions, clampDurationTo } from "@/lib/videoMethods";
+import { imageResolutionOptionsForKey, modelMethodsForKey, videoReqOptionsForKey } from "@/lib/modelOptions";
 import type { MediaSettings } from "@/services/projectFile";
-import { IMG_SIZE } from "./shotGenActions";
 import { JobChips, secTitle, secBox } from "./shotWorkbenchParts";
 
 /* 单行样式：标题左 + 控件右（与 Frame161195 视频设置面板同观感，收窄适配 360px 右栏） */
@@ -41,21 +45,21 @@ export function RtcShotWorkbench({ episodeId, shotId }: { episodeId: string; sho
 	const ms = useProjectStore((s) => s.mediaSettings);
 	const setMS = (patch: Partial<MediaSettings>) => useProjectStore.getState().setMediaSettings(patch);
 
-	// 生图档位：分辨率由服务端按当前生效图像模型下发（catalog params.resolution 枚举），与 Frame161195 同尺
-	const models = useCatalogStore((s) => s.catalog?.models);
+	// 生图档位：分辨率按当前生效图像模型收敛——走 modelOptions 一把尺
+	// （catalog 优先、ComfyUI/LibTV/即梦 等本地渠道回退适配器 paramsSchema），与提交层 shotGenActions 同尺
+	const catalogVer = useCatalogStore((s) => s.catalog?.version);
 	const sbImgModelKey = useEffectiveModelKey("image");
-	const sbResOptions = imageResolutionOptions(models?.find((m) => m.id === sbImgModelKey));
+	const sbResOptions = useMemo(() => imageResolutionOptionsForKey(sbImgModelKey), [sbImgModelKey, catalogVer]);
 	const imageAspect = ms.imageAspect ?? "16:9";
-	const imageResolution = clampImageResolution(ms.imageResolution, sbResOptions).toUpperCase();
+	const imageResolution = clampImageResolution(ms.imageResolution, sbResOptions);
 	const imageQuality = ms.imageQuality ?? "high";
-	const imageSize = IMG_SIZE[imageAspect]?.[imageResolution] || "2048x1152";
+	const imageSize = resolveSize(imageAspect, imageResolution);
 
 	// 生视频档位：方法/时长/分辨率/比例按当前生效视频模型 catalog 下发（本地 CLI 模型=内置回退档）
 	const vidModelKey = useEffectiveModelKey("video");
-	const vidCatModel = models?.find((m) => m.id === vidModelKey);
-	const vidMethods = modelMethods(vidCatModel);
+	const vidMethods = useMemo(() => modelMethodsForKey(vidModelKey), [vidModelKey, catalogVer]);
 	const vidMethod = clampMethod(ms.videoMethod, vidMethods);
-	const vidReq = videoReqOptions(vidCatModel);
+	const vidReq = useMemo(() => videoReqOptionsForKey(vidModelKey), [vidModelKey, catalogVer]);
 	const maxDuration = ms.maxDuration ?? 15;
 	const sameSource = ms.imgVideoSameSource ?? false;
 
@@ -88,21 +92,21 @@ export function RtcShotWorkbench({ episodeId, shotId }: { episodeId: string; sho
 				<label style={rowSt}>
 					<span style={rowLb}>图像比例</span>
 					<select value={imageAspect} onChange={(e) => setMS({ imageAspect: e.target.value })} style={rowCtl}>
-						{Object.keys(IMG_SIZE).map((a) => (
-							<option key={a} value={a} style={optBg}>{ASPECT_LABELS[a] || a}</option>
+						{IMAGE_ASPECTS.map((a) => (
+							<option key={a.v} value={a.v} style={optBg}>{ASPECT_LABELS[a.v] || a.label}</option>
 						))}
 					</select>
 				</label>
 				<label style={rowSt}>
 					<span style={rowLb}>分辨率</span>
 					<select value={imageResolution} onChange={(e) => setMS({ imageResolution: e.target.value })} style={rowCtl}>
-						{sbResOptions.map((r) => <option key={r.v} value={r.v.toUpperCase()} style={optBg}>{r.label}</option>)}
+						{sbResOptions.map((r) => <option key={r.v} value={r.v} style={optBg}>{r.label}</option>)}
 					</select>
 				</label>
 				<label style={rowSt}>
 					<span style={rowLb}>画质 <span style={{ color: "rgba(255,255,255,0.35)" }}>（size {imageSize}）</span></span>
 					<select value={imageQuality} onChange={(e) => setMS({ imageQuality: e.target.value })} style={rowCtl}>
-						{Object.entries(QUALITY_LABEL).map(([v, label]) => <option key={v} value={v} style={optBg}>{label}</option>)}
+						{IMAGE_QUALITIES.map((v) => <option key={v} value={v} style={optBg}>{QUALITY_LABEL[v] || v}</option>)}
 					</select>
 				</label>
 			</div>

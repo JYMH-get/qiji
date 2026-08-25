@@ -31,7 +31,8 @@ tiny_http = "0.12"
 # 原生 HTTP 下载（绕过 webview CORS，把上游直链落成本地 asset:// 供 <video> 播放）。
 # native-tls → Windows 用 schannel，无需 OpenSSL/ring/C 工具链。
 # stream → 批量下载（第232轮 download_to）流式落盘，几百 MB 的成片不整个进内存。
-reqwest = { version = "0.13", default-features = false, features = ["native-tls", "stream"] }
+# json/multipart → ComfyUI 直连（comfy_http_json / comfy_upload_file：ComfyUI 默认不带 CORS 头，走原生收发）。
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "stream", "json", "multipart"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 # 仅 Windows：访问 WebView2 控制器，在 release 关闭 devtools + 浏览器加速键（F12/刷新/打印）。
