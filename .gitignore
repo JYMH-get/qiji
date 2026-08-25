@@ -43,3 +43,6 @@ qiji-server-deploy.tgz
 
 # 内置深度模型 Depth Anything V2-Small（约 45MB，不入库；用 src-tauri/scripts/fetch-depth-model.ps1 重新拉取）
 public/depth-model/
+
+# 换机导出包（本地生成，不入库）
+outcode/
