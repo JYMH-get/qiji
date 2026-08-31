@@ -38,14 +38,14 @@ describe("buildLegend — 角色声音参考配对（音频不产「是」条目
             { id: "img", assetId: "C01", kind: "character", name: "楚长生", uri: "", media: "image" },
             { id: "aud", assetId: "audio1", kind: "local", name: "楚长生的声音", uri: "", media: "audio", voiceForAssetId: "C01" },
         ];
-        expect(buildLegend(mats, false)).toBe("【素材图例】@Image1 是 楚长生，@Image1的声音参考@Audio1，");
+        expect(buildLegend(mats, false)).toBe("【素材图例】@Image1 是 楚长生；@Image1的声音参考@Audio1；");
     });
     it("故事板图例（imagesOnly）不含音频与声音参考", () => {
         const mats: ShotMaterial[] = [
             { id: "img", assetId: "C01", kind: "character", name: "楚长生", uri: "", media: "image" },
             { id: "aud", assetId: "audio1", kind: "local", name: "楚长生的声音", uri: "", media: "audio", voiceForAssetId: "C01" },
         ];
-        expect(buildLegend(mats, true)).toBe("【素材图例】@Image1 是 楚长生，");
+        expect(buildLegend(mats, true)).toBe("【素材图例】@Image1 是 楚长生；");
     });
     it("音频无对应角色图像时不产生任何图例条目（图例为空）", () => {
         const mats: ShotMaterial[] = [
@@ -58,7 +58,7 @@ describe("buildLegend — 角色声音参考配对（音频不产「是」条目
             { id: "img", assetId: "C01", kind: "character", name: "楚长生", uri: "", media: "image" },
             { id: "vid", assetId: "video1", kind: "local", name: "运镜参考", uri: "", media: "video" },
         ];
-        expect(buildLegend(mats, false)).toBe("【素材图例】@Image1 是 楚长生，@Video1 是 运镜参考，");
+        expect(buildLegend(mats, false)).toBe("【素材图例】@Image1 是 楚长生；@Video1 是 运镜参考；");
     });
 });
 
@@ -72,21 +72,51 @@ describe("stripLegend / applyLegend — 素材增删同步图例（删不留残�
         // 删了张三(@Image1)，剩李四；新图例由 buildLegend([李四]) 得到
         const newLegend = buildLegend([mat("b", "李四", "image")], false);
         const out = applyLegend(prompt, newLegend, { media: "image", n: 1 });
-        expect(out).toBe("【素材图例】@Image1 是 李四，\n\n镜头推近 @Image1 说话");
+        expect(out).toBe("【素材图例】@Image1 是 李四；\n\n镜头推近 @Image1 说话");
         expect(out).not.toContain("张三");
     });
     it("删除声音素材：图例里「@ImageN的声音参考@AudioM」整体重建、无残留", () => {
         const prompt = "【素材图例】@Image1 是 楚长生，@Image1的声音参考@Audio1，\n\n@Image1 开口";
-        // 删了声音(@Audio1)，剩角色图；新图例只剩「@Image1 是 楚长生，」
+        // 删了声音(@Audio1)，剩角色图；新图例只剩「@Image1 是 楚长生；」
         const newLegend = buildLegend([{ id: "img", assetId: "C01", kind: "character", name: "楚长生", uri: "", media: "image" }], false);
         const out = applyLegend(prompt, newLegend, { media: "audio", n: 1 });
-        expect(out).toBe("【素材图例】@Image1 是 楚长生，\n\n@Image1 开口");
+        expect(out).toBe("【素材图例】@Image1 是 楚长生；\n\n@Image1 开口");
         expect(out).not.toContain("声音参考");
     });
     it("添加素材（无 removed）：剥旧图例前置新图例、正文不动", () => {
         const prompt = "【素材图例】@Image1 是 张三，\n\n@Image1 登场";
         const newLegend = buildLegend([mat("a", "张三", "image"), mat("c", "李四", "image")], false);
-        expect(applyLegend(prompt, newLegend)).toBe("【素材图例】@Image1 是 张三，@Image2 是 李四，\n\n@Image1 登场");
+        expect(applyLegend(prompt, newLegend)).toBe("【素材图例】@Image1 是 张三；@Image2 是 李四；\n\n@Image1 登场");
+    });
+
+    it("图例后只有单换行或与正文同行时，仍只剥图例、不吞正文", () => {
+        expect(stripLegend("【素材图例】@Image1 是 张三，\n正文在这")).toBe("正文在这");
+        expect(stripLegend("【素材图例】@Image1 是 张三，正文在这")).toBe("正文在这");
+        expect(stripLegend("【素材图例】@Image1 是 张三。正文在这")).toBe("正文在这");
+    });
+
+    it("新分号格式允许资产说明包含普通逗号，刷新时完整保留说明", () => {
+        const prompt = "【素材图例】@Image1 是 张三，青年造型；\n\n正文在这";
+        const newLegend = buildLegend([mat("a", "张三", "image"), mat("b", "李四", "image")], false);
+        expect(applyLegend(prompt, newLegend)).toBe(
+            "【素材图例】@Image1 是 张三，青年造型；@Image2 是 李四；\n\n正文在这",
+        );
+    });
+
+    it("再次添加素材只补缺失条目，保留用户改过的现有资产说明与正文", () => {
+        const prompt = "【素材图例】@Image1 是 赵三娘，赵三娘和李四在吃饭";
+        const newLegend = buildLegend([mat("a", "三娘", "image"), mat("b", "李四", "image")], false);
+        expect(applyLegend(prompt, newLegend)).toBe(
+            "【素材图例】@Image1 是 赵三娘；@Image2 是 李四；\n\n赵三娘和李四在吃饭",
+        );
+    });
+
+    it("删除素材时移除对应说明并重编号，同时保留其余资产的用户说明", () => {
+        const prompt = "【素材图例】@Image1 是 张三，@Image2 是 四爷，\n\n@Image2 登场";
+        const newLegend = buildLegend([mat("b", "李四", "image")], false);
+        expect(applyLegend(prompt, newLegend, { media: "image", n: 1 })).toBe(
+            "【素材图例】@Image1 是 四爷；\n\n@Image1 登场",
+        );
     });
 });
 

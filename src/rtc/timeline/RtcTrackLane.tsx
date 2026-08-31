@@ -20,7 +20,7 @@
  *   - 先用同步缓存铺满（零闪烁），缺帧的才走 requestIdleCallback 错峰抽取；
  *   - 波形按**固定桶数解码一次**，显示时 resamplePeaks 本地降采样，缩放不触发重解码；
  *   - ⚠ 生成中动效只作用在**该片段自己的一个元素**上，且只动 transform/opacity
- *     （CLAUDE.md §9 画布性能规则：不做常驻逐帧重绘的东西）。
+ *     （画布性能规则：不做常驻逐帧重绘的东西）。
  * ⚠ 红线：缩略图 dataURL / 峰值数组只存在运行时模块缓存里，绝不写回 RtcSegment 或项目文件。
  *
  * 交互不在此处理——data-seg / data-edge / data-track-id 供 RtcTimeline 集中派发。

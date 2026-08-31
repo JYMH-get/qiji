@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
+  prepareAltDragDuplicate,
   copyToClipboard,
   pasteFromClipboard,
   hasClipboardData,
@@ -120,5 +121,70 @@ describe("clipboard", () => {
     (pasted.nodes[0].data.params as any).nested.key = "changed";
     const pasted2 = pasteFromClipboard()!;
     expect(pasted2.nodes[0].data.params.nested).toEqual({ key: "val" });
+  });
+
+  it("Alt 拖动复制普通节点时只保留配置并重置为待命", () => {
+    const source = makeNode({
+      id: "generated-image",
+      type: "image.gen",
+      data: {
+        input: { text: "上游输入" },
+        params: { prompt: "继续抽卡", model: "seedream" },
+        resultAssetId: "asset-current",
+        resultHistory: ["asset-old", "asset-current"],
+        resultMetaByAssetId: { "asset-current": { model: "seedream", prompt: "旧结果" } },
+        resultText: "旧文本结果",
+        shotAssets: ["shot-1"],
+        fileUri: "asset://local/old-result.png",
+        fileName: "old-result.png",
+        fileMime: "image/png",
+        task: { taskId: "task-running", adapterKey: "remote", startedAt: 1 },
+      },
+    });
+
+    const duplicate = prepareAltDragDuplicate(source);
+
+    expect(duplicate.node.id).toBe(source.id);
+    expect(duplicate.node.data.input).toEqual({ text: "上游输入" });
+    expect(duplicate.node.data.params).toEqual({ prompt: "继续抽卡", model: "seedream" });
+    expect(duplicate.node.data.resultAssetId).toBeNull();
+    expect(duplicate.node.data.resultHistory).toBeUndefined();
+    expect(duplicate.node.data.resultMetaByAssetId).toBeUndefined();
+    expect(duplicate.node.data.resultText).toBeUndefined();
+    expect(duplicate.node.data.shotAssets).toBeUndefined();
+    expect(duplicate.node.data.fileUri).toBeUndefined();
+    expect(duplicate.node.data.fileName).toBeUndefined();
+    expect(duplicate.node.data.fileMime).toBeUndefined();
+    expect(duplicate.node.data.task).toBeUndefined();
+    expect(duplicate.runtime).toEqual({
+      status: "idle",
+      progress: 0,
+      taskId: null,
+      scheduledAt: null,
+      error: null,
+    });
+  });
+
+  it("Alt 拖动复制资产节点时保留它唯一承载的结果", () => {
+    const source = makeNode({
+      id: "asset-node",
+      type: "upload",
+      data: {
+        input: {},
+        params: {},
+        resultAssetId: "asset-image",
+        resultHistory: ["asset-image"],
+        fileUri: "asset://local/asset-image.png",
+        fileName: "asset-image.png",
+        fileMime: "image/png",
+      },
+    });
+
+    const duplicate = prepareAltDragDuplicate(source);
+
+    expect(duplicate.node.data.resultAssetId).toBe("asset-image");
+    expect(duplicate.node.data.resultHistory).toEqual(["asset-image"]);
+    expect(duplicate.node.data.fileUri).toBe("asset://local/asset-image.png");
+    expect(duplicate.runtime.status).toBe("idle");
   });
 });

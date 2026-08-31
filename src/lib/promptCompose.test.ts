@@ -39,7 +39,12 @@ describe("promptCompose 规范顺序落位", () => {
 		expect(placeUpstreamCapsules("用户正文", 2)).toBe("【上游文本1】\n【上游文本2】\n用户正文");
 		expect(placeUpstreamCapsules("【预设:preset.pfx】\n用户正文", 1)).toBe("【预设:preset.pfx】\n【上游文本1】\n用户正文");
 		expect(placeUpstreamCapsules("【素材图例】@Image1 是 张三，\n\n用户正文", 1))
-			.toBe("【素材图例】@Image1 是 张三，\n\n【上游文本1】\n用户正文");
+			.toBe("【素材图例】@Image1 是 张三；\n\n【上游文本1】\n用户正文");
+	});
+
+	it("图例与正文没有空行时也保留正文", () => {
+		expect(placeUpstreamCapsules("【素材图例】@Image1 是 赵三娘，赵三娘吃饭", 1))
+			.toBe("【素材图例】@Image1 是 赵三娘；\n\n【上游文本1】\n赵三娘吃饭");
 	});
 
 	it("上游胶囊幂等：已有 1 枚 → 需要 2 枚时重置为恰好 2 枚", () => {

@@ -5,7 +5,7 @@ import { useCanvasStore } from "@/store/canvasStore";
 import { useUiStore } from "@/store/uiStore";
 import { dispatchCommand } from "@/command/dispatch";
 import { resolveCollision } from "@/canvas/nodeFactory";
-import { cloneNodesWithEdges, splitEdgesForCopy } from "@/lib/clipboard";
+import { cloneNodesWithEdges, prepareAltDragDuplicate, splitEdgesForCopy } from "@/lib/clipboard";
 import { getPlugin } from "@/nodes/pluginRegistry";
 import { computeBranchPush, type PushRect } from "@/lib/branchPush";
 import { snapPosition, type SnapGuide } from "@/lib/dragSnap";
@@ -358,22 +358,21 @@ export function useCanvasDrag() {
           }
           if (changed) useCanvasStore.setState({ edges });
 
-          // 堆叠节点 ALT 复制：被拖走的复制体**只带主图**（resultHistory 收敛为 [主图]），
-          // 完整堆叠历史留在原地克隆上（克隆是 structuredClone，天然带全量 history）。
-          const nodesNow = { ...useCanvasStore.getState().nodes };
-          let histTrimmed = false;
+          // 被拖走的是用于继续抽卡的空白副本：保留输入/提示词/模型设置，清掉全部结果与在途态；
+          // 原位克隆继续承接旧结果、结果历史与下游连线。upload 资产节点例外，它本身只有结果。
+          const latest = useCanvasStore.getState();
+          const nodesNow = { ...latest.nodes };
+          const runtimeNow = { ...latest.runtime };
+          let resetAny = false;
           for (const id of baseIds) {
             const n = nodesNow[id];
-            const dk = n ? getPlugin(n.type)?.displayKind : undefined;
-            if (n && (dk === "image" || dk === "video") && (n.data.resultHistory?.length ?? 0) > 1) {
-              nodesNow[id] = {
-                ...n,
-                data: { ...n.data, resultHistory: n.data.resultAssetId ? [n.data.resultAssetId] : [] },
-              };
-              histTrimmed = true;
-            }
+            if (!n || n.type === "group") continue;
+            const prepared = prepareAltDragDuplicate(n);
+            nodesNow[id] = prepared.node;
+            runtimeNow[id] = prepared.runtime;
+            resetAny = true;
           }
-          if (histTrimmed) useCanvasStore.setState({ nodes: nodesNow });
+          if (resetAny) useCanvasStore.setState({ nodes: nodesNow, runtime: runtimeNow });
         }
       }
 

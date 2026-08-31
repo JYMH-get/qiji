@@ -184,7 +184,7 @@ export function genCapabilityFor(kind: RtcGenKind): Capability | null {
 /**
  * 产物类型 → Purpose。
  * image 用 `asset.scene.image`（库内通用文生图用途，分镜故事板同款——见 shotGenActions.genShotStoryboard）；
- * audio 无接线的生成用途（contract 里的 audio.tts 尚未接线，见 CLAUDE.md §7）→ null。
+ * audio 无接线的生成用途（contract 里的 audio.tts 尚未接线）→ null。
  */
 export function genPurposeFor(kind: RtcGenKind): Purpose | null {
 	if (kind === "video") return "video.generate";
@@ -252,7 +252,7 @@ export interface FreeRefUrl {
 /**
  * 垫素材按模态分组成 `input`（保序对齐上游 @ImageN/@VideoN/@AudioN 图例编号）。
  * ⚠ 一条都不许静默丢——取不到公网直链的素材必须在调用方**明确报错且不发请求**
- *   （丢一条即整段编号错位，CLAUDE.md §9 红线）。空数组返回 undefined（不带 input 字段）。
+ *   （丢一条即整段编号错位）。空数组返回 undefined（不带 input 字段）。
  */
 export function buildFreeInput(refs: FreeRefUrl[]): Record<string, unknown> | undefined {
 	const images = refs.filter((r) => r.media === "image").map((r) => ({ url: r.url, name: r.name }));

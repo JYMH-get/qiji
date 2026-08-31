@@ -87,7 +87,7 @@ describe("canvasProjection（资产模式↔画布全映射）", () => {
 		expect(byRef("shotSb:sh1")?.type).toBe("image.gen");
 		expect(byRef("shotSb:sh1")?.data.title).toBe("分镜1故事板");
 		// 投影后提示词=表格正文 + 按画布素材枚举重建的图例前缀（素材「张起天」占 @Image1——图例与素材区一一对应）
-		expect(byRef("shotSb:sh1")?.data.params.prompt).toBe("【素材图例】@Image1 是 张起天，\n\n故事板提示词");
+		expect(byRef("shotSb:sh1")?.data.params.prompt).toBe("【素材图例】@Image1 是 张起天；\n\n故事板提示词");
 		expect(byRef("shotSb:sh1")?.data.resultAssetId).toBeTruthy();
 		expect(byRef("shotVid:sh1")?.type).toBe("video.gen");
 		expect(byRef("shotVid:sh1")?.data.title).toBe("分镜1视频");
@@ -258,7 +258,7 @@ describe("canvasProjection（资产模式↔画布全映射）", () => {
 		const vid = byRef("shotVid:sh1")!;
 		const prompt = String(vid.data.params.prompt);
 		// 画布枚举：上游故事板图（分镜1故事板）@Image1 → 表格素材顺延 @Image2/@Image3；正文保留
-		expect(prompt).toContain("【素材图例】@Image1 是 分镜1故事板，@Image2 是 甲，@Image3 是 乙，");
+		expect(prompt).toContain("【素材图例】@Image1 是 分镜1故事板；@Image2 是 甲；@Image3 是 乙；");
 		expect(prompt).toContain("正文");
 		expect(prompt).not.toContain("@Image1 是 甲");
 		// matOrder 同步锁定（上游边在前、表格素材在后），后续增删/@ 待选按同一枚举

@@ -1,0 +1,18 @@
+[
+  {
+    "name": "简梦",
+    "users": 39,
+    "total": 596467,
+    "path": "D:/kaifa/qiji/qiji/outputs/team-usage-20260829/渠道商/Qiji生产环境-渠道商-简梦-近30天每日消耗-2026-08-29.xlsx",
+    "totalRow": 45,
+    "errors": "{\"kind\":\"notice\",\"message\":\"Cell search matched 0 entries.\"}"
+  },
+  {
+    "name": "净寻",
+    "users": 4,
+    "total": 7355,
+    "path": "D:/kaifa/qiji/qiji/outputs/team-usage-20260829/渠道商/Qiji生产环境-渠道商-净寻-近30天每日消耗-2026-08-29.xlsx",
+    "totalRow": 10,
+    "errors": "{\"kind\":\"notice\",\"message\":\"Cell search matched 0 entries.\"}"
+  }
+]

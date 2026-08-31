@@ -1,7 +1,7 @@
 /**
  * purposeRunner —— 以 Purpose 为键的统一生成入口（表格按键复用节点执行管线）。
  *
- * 背景（CLAUDE.md §9「两条执行管线待合并」）：
+ * 背景：旧表格与画布曾各自维护执行管线，现统一到本入口。
  *   表格生成按键此前各自 `adapter.submit + 自建 30×1s 轮询`，与画布的
  *   `defaultNodeExecute → nodeTaskTracker` 互不复用。
  *

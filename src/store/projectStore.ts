@@ -1144,9 +1144,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       } else if ((project as any).assets) {
         useLibraryStore.setState({ assets: (project as any).assets });
       }
-      // 素材库显示自愈（第145轮）：死 blob:/远程 CSP 裂图的记录按 localPath/映射/公网 url 重解显示 uri
-      // （fire-and-forget；动态 import 防 projectStore ↔ libraryHeal 循环依赖）
-      void import("@/services/libraryHeal").then((m) => m.healLibraryAssets()).catch(() => {});
+      // 项目资产自愈：先校验三元映射 localPath，缺失则按同一 id 从 OSS 恢复并改写项目死引用；
+      // 再处理素材库旧 blob:/远程快照。串行保证 libraryHeal 看到的是已更新映射（均后台执行，不阻塞打开）。
+      void import("@/services/projectAssetHeal")
+        .then((m) => m.healProjectAssetBlobs())
+        .then(() => import("@/services/libraryHeal"))
+        .then((m) => m.healLibraryAssets())
+        .catch(() => {});
 
       // 引用上报（P1）：告诉服务端这个项目还在用哪些资产 → 刷 last_ref_at，保留更久。
       // 打开项目是最完整的一次引用声明，强制上报（跳过节流）。fire-and-forget 不阻塞加载。
@@ -1358,8 +1362,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           if ((project as any).assets) {
             useLibraryStore.setState({ assets: (project as any).assets });
           }
-          // 导入路径同样自愈素材库显示 uri（浏览器侧：死 blob: 换公网 url）
-          void import("@/services/libraryHeal").then((m) => m.healLibraryAssets()).catch(() => {});
+          // 导入路径同样先恢复项目三元映射，再自愈素材库显示 uri。
+          void import("@/services/projectAssetHeal")
+            .then((m) => m.healProjectAssetBlobs())
+            .then(() => import("@/services/libraryHeal"))
+            .then((m) => m.healLibraryAssets())
+            .catch(() => {});
           resolve(true);
         } catch (err) {
           console.error("Failed to import project:", err);

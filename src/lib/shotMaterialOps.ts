@@ -19,7 +19,7 @@ function liveShot(epId: string, shotId: string) {
  *  按项目模式把图例写进当前生效的提示词——图视同源=unifiedPrompt（含声音配对，该提示词同时喂图片与视频）、
  *  双结果=videoPrompt 全模态 + storyboardPrompt 仅图像；非当前模式的提示词不新增图例，但**已有图例仍随素材重建**
  *  （模式来回切换不留陈旧编号）；removed 给出被删素材的 media+全局@号时，三份提示词的正文内联 @ 引用一并重编号。
- * shot.materials 传**更新后**的素材集；各提示词传旧值（applyLegend 会剥旧图例重建）。
+ * shot.materials 传**更新后**的素材集；各提示词传旧值（applyLegend 会逐条合并，保留用户改过的说明）。
  */
 function syncShotLegend(shot: StoryboardShot, removed?: { media: MediaKind; n: number }): Partial<StoryboardShot> {
 	const sameSource = !!useProjectStore.getState().mediaSettings?.imgVideoSameSource;

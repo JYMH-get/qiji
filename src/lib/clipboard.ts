@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import type { CanvasEdge, CanvasNode } from "@/types";
+import type { CanvasEdge, CanvasNode, NodeRuntime } from "@/types";
 import { genId } from "./id";
 
 /**
@@ -18,6 +18,37 @@ interface ClipboardData {
 
 let clipboardRef: ClipboardData | null = null;
 let copiedAt = 0;
+
+/**
+ * Alt 拖动时，手势中的原节点会成为被拖走的“副本”，原位克隆继续承接旧结果与下游连线。
+ * 这里把被拖走节点收敛为空白抽卡节点，并显式给出待命运行态。
+ */
+export function prepareAltDragDuplicate(source: CanvasNode): { node: CanvasNode; runtime: NodeRuntime } {
+  const node = structuredClone(source);
+  const runtime: NodeRuntime = {
+    status: "idle",
+    progress: 0,
+    taskId: null,
+    scheduledAt: null,
+    error: null,
+  };
+  // 从资产面板拖入的 upload 节点本身就是结果容器；剥掉结果会只剩一个无意义空壳。
+  if (node.type === "upload") return { node, runtime };
+  const data = node.data;
+  data.resultAssetId = null;
+  delete data.resultHistory;
+  delete data.resultMetaByAssetId;
+  delete data.resultText;
+  delete data.shotAssets;
+  delete data.fileUri;
+  delete data.fileName;
+  delete data.fileMime;
+  delete data.messages;
+  delete data.task;
+  delete data.annotation;
+  delete data.stage3d;
+  return { node, runtime };
+}
 
 export function copyToClipboard(nodes: CanvasNode[], edges: CanvasEdge[], upstreamEdges?: CanvasEdge[]): void {
   clipboardRef = { nodes, edges, upstreamEdges };

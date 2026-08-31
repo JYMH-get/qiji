@@ -332,6 +332,7 @@ export function syncCanvasFromProject(episodeIdArg?: string | null): boolean {
 	// @ImageN 就与素材区/@ 待选/提交收集错位（表格图例编号 ≠ 画布编号，「无法一一对应」的画布侧根源，勿省略）。
 	// 已知边界：表格提示词**正文**里手写的内联 @ 引用仍按表格编号（图例块整体重建为画布编号；推理产出通常无内联 @）。
 	let legendDirty = false;
-	for (const id of mediaSyncIds) if (syncNodeLegend(id)) legendDirty = true;
+	// 投影可能在素材最前插入「上游故事板图」，同一个 @ImageN 已换了资产身份，不能按编号保留旧说明。
+	for (const id of mediaSyncIds) if (syncNodeLegend(id, undefined, { preserveExisting: false })) legendDirty = true;
 	return dirty || legendDirty;
 }

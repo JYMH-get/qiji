@@ -238,7 +238,7 @@ export function importAssetToNode(
 const MEDIA_OF_GROUP: Record<MatGroup, MatMedia> = { images: "image", videos: "video", audios: "audio" };
 
 /**
- * 构造节点「素材图例」（`【素材图例】@Image1 是 张三，@Image1的声音参考@Audio1，`）。
+ * 构造节点「素材图例」（`【素材图例】@Image1 是 张三；@Image1的声音参考@Audio1；`）。
  * 素材顺序/编号 = listNodeMaterials 单点枚举（加入顺序），与素材区显示、提交数组恒一致；
  * assetId/voiceForAssetId 供音频「声音参考」配对。
  * inputOverride：本次将要写入的 input（含新增/删后素材），传入则按更新后素材编号。
@@ -262,14 +262,18 @@ export function computeMatOrder(nodeId: string, inputOverride?: Record<string, L
  * 同时把当前素材加入顺序落进 node.data.matOrder（新素材恒在尾部——「素材只往后加」的落库点）。
  * 读最新节点态再写回。返回是否发生写入（投影等调用方据此聚合 dirty）。
  */
-export function syncNodeLegend(nodeId: string, removed?: { media: MatMedia; n: number }): boolean {
+export function syncNodeLegend(
+	nodeId: string,
+	removed?: { media: MatMedia; n: number },
+	options?: { preserveExisting?: boolean },
+): boolean {
 	const cs = useCanvasStore.getState();
 	const n = cs.nodes[nodeId];
 	if (!n) return false;
 	const prompt = typeof n.data.params.prompt === "string" ? (n.data.params.prompt as string) : "";
 	// 添加素材：始终补/更新图例；删除素材：仅当提示词已有图例才重建（不给没图例的提示词硬塞），并重编号正文 @ 引用
 	const legend = !removed || prompt.includes(LEGEND_START) ? buildNodeLegend(nodeId) : "";
-	const next = applyLegend(prompt, legend, removed && removed.n > 0 ? removed : undefined);
+	const next = applyLegend(prompt, legend, removed && removed.n > 0 ? removed : undefined, options);
 	const matOrder = computeMatOrder(nodeId);
 	const prev = Array.isArray(n.data.matOrder) ? n.data.matOrder : [];
 	const orderChanged = matOrder.length !== prev.length || matOrder.some((k, i) => k !== prev[i]);

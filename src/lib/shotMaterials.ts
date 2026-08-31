@@ -79,9 +79,9 @@ export function extractPromptText(text: string): string {
     return raw; // 非 JSON（纯文本提示词）→ 原样返回
 }
 
-/** 图例块前缀标识（提取资产写入提示词的「@ImageN 是 资产名，」前缀，可被再次提取/推理刷新而不重复堆叠） */
+/** 图例块前缀标识（提取资产写入提示词的「@ImageN 是 资产名；」前缀，可被再次提取/推理刷新而不重复堆叠） */
 export const LEGEND_START = "【素材图例】";
-/** 构建图例：「@Image1 是 张起灵，…」单行（imagesOnly=true 仅图像，供故事板提示词用）。
+/** 构建图例：「@Image1 是 张起灵；…」单行（imagesOnly=true 仅图像，供故事板提示词用）。
  *  「@X 是 名」是图像/视频用的格式；音频**不**产出该条目，只以「角色↔声音参考」配对出现：
  *  `@Image1的声音参考@Audio1`（音频素材带 voiceForAssetId 指向角色），避免前缀重复。 */
 export function buildLegend(materials: ShotMaterial[], imagesOnly: boolean): string {
@@ -99,27 +99,121 @@ export function buildLegend(materials: ShotMaterial[], imagesOnly: boolean): str
             if (img) entries.push(`${tags[img.id]}的声音参考${tags[m.id]}`);
         }
     }
-    return entries.length ? `${LEGEND_START}${entries.join("，")}，` : "";
+    return entries.length ? `${LEGEND_START}${entries.join("；")}；` : "";
 }
-/** 剥掉提示词里的旧「素材图例」块（从 LEGEND_START 到首个空行），返回用户正文（含内联 @ 引用）。 */
-export function stripLegend(prompt: string): string {
-    let body = prompt || "";
-    const i = body.indexOf(LEGEND_START);
-    if (i >= 0) {
-        const end = body.indexOf("\n\n", i);
-        body = (body.slice(0, i) + (end >= 0 ? body.slice(end + 2) : "")).trim();
+
+export interface LegendEntry {
+    /** 资产说明按 @tag 唯一；声音参考按图像/音频 tag 对唯一。 */
+    key: string;
+    /** 不含末尾分隔符，保留用户改过的「是 xxx」说明。 */
+    text: string;
+}
+
+export interface LegendPromptParts {
+    legend: string;
+    body: string;
+    entries: LegendEntry[];
+}
+
+const DESC_HEAD_RE = /^(@(?:Image|Video|Audio)\d+)\s*是\s*/;
+const VOICE_ENTRY_RE = /^(@Image\d+)\s*的声音参考\s*(@Audio\d+)/;
+const NEW_ENTRY_SEPARATOR_RE = /[；;]/;
+const LEGACY_ENTRY_SEPARATOR_RE = /[，,。\r\n]/;
+type LegendSeparator = "semicolon" | "legacy-comma";
+
+function entryAt(text: string, start: number, separator: LegendSeparator): { entry: LegendEntry; end: number } | null {
+    const rest = text.slice(start);
+    const voice = VOICE_ENTRY_RE.exec(rest);
+    if (voice) {
+        return {
+            entry: { key: `voice:${voice[1]}:${voice[2]}`, text: voice[0].trim() },
+            end: start + voice[0].length,
+        };
     }
-    return body;
+    const desc = DESC_HEAD_RE.exec(rest);
+    if (!desc) return null;
+    const valueStart = start + desc[0].length;
+    const relEnd = text.slice(valueStart).search(
+        separator === "semicolon" ? NEW_ENTRY_SEPARATOR_RE : LEGACY_ENTRY_SEPARATOR_RE,
+    );
+    const end = relEnd >= 0 ? valueStart + relEnd : text.length;
+    return { entry: { key: `desc:${desc[1]}`, text: text.slice(start, end).trim() }, end };
 }
-/** 把图例并入 prompt 前缀（先剥离旧图例块，再前置新图例，做到刷新不堆叠） */
-export function withLegend(prompt: string, legend: string): string {
-    const body = stripLegend(prompt);
-    if (!legend) return body;
-    return body ? `${legend}\n\n${body}` : legend;
+
+function renderLegend(entries: LegendEntry[]): string {
+    return entries.length ? `${LEGEND_START}${entries.map((e) => e.text).join("；")}；` : "";
 }
 
 /**
- * 素材**重排**后把正文内联 @ 引用按「旧 tag → 新 tag」映射整体置换（图例块由 buildLegend 整体重建，不经此函数）。
+ * 新图例统一用分号划分资产，资产说明里的普通逗号因此可以原样保留。
+ * 旧项目仍是逗号格式：只有 marker 所在行出现分号时才按新文法读取，避免正文后续的分号误判格式。
+ */
+function legendSeparatorOf(text: string, marker: number): LegendSeparator {
+    const lineEnd = text.indexOf("\n", marker);
+    const legendLine = text.slice(marker + LEGEND_START.length, lineEnd >= 0 ? lineEnd : text.length);
+    return NEW_ENTRY_SEPARATOR_RE.test(legendLine) ? "semicolon" : "legacy-comma";
+}
+
+/**
+ * 按「每个资产一条说明」的文法拆图例，而不是依赖空行。
+ * buildLegend 恒在每条说明后写 `；`，所以说明中的普通逗号不会再被误判为资产边界；
+ * 同时兼容旧项目的逗号分隔格式。
+ */
+export function splitLegendPrompt(prompt: string): LegendPromptParts {
+    const text = prompt || "";
+    const marker = text.indexOf(LEGEND_START);
+    if (marker < 0) return { legend: "", body: text, entries: [] };
+
+    const entries: LegendEntry[] = [];
+    const separator = legendSeparatorOf(text, marker);
+    let cursor = marker + LEGEND_START.length;
+    let bodyStart = cursor;
+    while (cursor < text.length) {
+        while (text[cursor] === " " || text[cursor] === "\t") cursor++;
+        const parsed = entryAt(text, cursor, separator);
+        if (!parsed) break;
+        entries.push(parsed.entry);
+        cursor = parsed.end;
+
+        // 每条图例后的分隔符只承担边界作用；若后面紧跟下一条 @ 说明则继续解析，
+        // 否则剩余内容就是用户正文（同一行、单换行、空行三种形态都支持）。
+        const boundary = separator === "semicolon" ? /[；;]/ : /[，,。]/;
+        if (boundary.test(text[cursor] || "")) cursor++;
+        let probe = cursor;
+        while (text[probe] === " " || text[probe] === "\t") probe++;
+        if (entryAt(text, probe, separator)) {
+            cursor = probe;
+            continue;
+        }
+        bodyStart = cursor;
+        break;
+    }
+
+    if (entries.length === 0) {
+        // 兼容损坏/旧格式：最多剥掉 marker 所在行，绝不再把「marker 到字符串末尾」整段吞掉。
+        const lineEnd = text.indexOf("\n", marker);
+        bodyStart = lineEnd >= 0 ? lineEnd + 1 : marker + LEGEND_START.length;
+    }
+    while (/\s/.test(text[bodyStart] || "")) bodyStart++;
+    const before = text.slice(0, marker).trim();
+    const after = text.slice(bodyStart).trim();
+    const body = before && after ? `${before}\n${after}` : before || after;
+    return { legend: renderLegend(entries), body, entries };
+}
+
+/** 剥掉提示词里的旧「素材图例」条目，返回用户正文（含内联 @ 引用）。 */
+export function stripLegend(prompt: string): string {
+    return splitLegendPrompt(prompt).body;
+}
+
+/** 把图例并入 prompt 前缀；已有资产说明逐条保留，只补本次缺失的条目。 */
+export function withLegend(prompt: string, legend: string): string {
+    return applyLegend(prompt, legend);
+}
+
+/**
+ * 素材**重排**后把图例与正文里的 @ 引用按「旧 tag → 新 tag」映射整体置换；
+ * 随后的 applyLegend 会按新 tag 保留对应资产说明。
  * String.replace 单次扫描：置换结果不会被二次匹配，交换类映射（@Image1↔@Image3）不串连改写；映射外的 tag 原样保留。
  */
 export function remapBodyTags(prompt: string, mapping: Record<string, string>): string {
@@ -143,13 +237,42 @@ export function renumberBodyRefs(prompt: string, media: MediaKind, removedN: num
 }
 
 /**
- * 素材增删后统一同步图例（画布/资产模式共用，杜绝「删了素材但图例里的『是xxx』残留」）：
- *  1) 剥掉旧图例块 → 正文；2) 删除时按 removed 重编号正文内联 @ 引用；3) 前置由当前素材新建的图例。
- * legend 由调用方按当前素材集 buildLegend/buildNodeLegend 得到（增删/重排都传全新图例，整体替换不堆叠）。
+ * 素材增删后统一同步图例（画布/资产模式共用）：
+ *  1) 按条拆旧图例与正文；2) 删除时移除/重编号对应说明及正文 @ 引用；
+ *  3) 按 @tag 合并当前素材图例——已有说明保留用户文本，只为新资产补缺失说明。
+ * legend 由调用方按当前素材集 buildLegend/buildNodeLegend 得到，作为「当前应有哪些条目」的清单。
  */
-export function applyLegend(prompt: string, legend: string, removed?: { media: MediaKind; n: number }): string {
-    let body = stripLegend(prompt);
+export function applyLegend(
+    prompt: string,
+    legend: string,
+    removed?: { media: MediaKind; n: number },
+    options?: { preserveExisting?: boolean },
+): string {
+    const current = splitLegendPrompt(prompt);
+    let existing = current.entries;
+    if (removed) {
+        const kind = TAG_KIND[removed.media];
+        const removedTag = new RegExp(`@${kind}${removed.n}(?!\\d)`);
+        const renumber = new RegExp(`@${kind}(\\d+)`, "g");
+        existing = existing.flatMap((entry) => {
+            if (removedTag.test(entry.text)) return [];
+            const text = entry.text.replace(renumber, (tag, num: string) => {
+                const n = Number(num);
+                return n > removed.n ? `@${kind}${n - 1}` : tag;
+            });
+            const parsed = entryAt(text, 0, "semicolon");
+            return parsed ? [parsed.entry] : [];
+        });
+    }
+
+    let body = current.body;
     if (removed) body = renumberBodyRefs(body, removed.media, removed.n);
-    if (!legend) return body;
-    return body ? `${legend}\n\n${body}` : legend;
+    const wanted = splitLegendPrompt(legend).entries;
+    const preserved = options?.preserveExisting === false
+        ? new Map<string, string>()
+        : new Map(existing.map((entry) => [entry.key, entry.text]));
+    const merged = wanted.map((entry) => ({ ...entry, text: preserved.get(entry.key) ?? entry.text }));
+    const nextLegend = renderLegend(merged);
+    if (!nextLegend) return body;
+    return body ? `${nextLegend}\n\n${body}` : nextLegend;
 }

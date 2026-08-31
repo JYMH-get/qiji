@@ -28,6 +28,8 @@ interface Store {
 	seeded?: boolean;
 	/** 种子版本（第131轮起）：落后即按 id 补种缺失的内置模式（不覆盖已有同 id） */
 	seedVersion?: number;
+	/** 管理端删除的内置模式墓碑：后续种子升级也不得将其复活。 */
+	deletedSeedIds?: string[];
 	modes: Mode[];
 }
 
@@ -87,10 +89,13 @@ const DEFAULT_MODES: Mode[] = [
 	{ id: "qiqi", name: "QiQi", order: 25, createdAt: now(), updatedAt: now() },
 ];
 
-let store: Store = loadJson<Store>(FILE, { version: 0, modes: [] });
+const BUILTIN_MODE_IDS = new Set(DEFAULT_MODES.map((m) => m.id));
+
+let store: Store = loadJson<Store>(FILE, { version: 0, modes: [], deletedSeedIds: [] });
 if (!store.seeded || (store.seedVersion ?? 1) < MODES_SEED_VERSION) {
 	// 按 id 补种缺失的内置模式（不覆盖已有同 id——管理端改过名/序的保留）
-	for (const d of DEFAULT_MODES) if (!store.modes.some((m) => m.id === d.id)) store.modes.push(d);
+	const tomb = new Set(store.deletedSeedIds ?? []);
+	for (const d of DEFAULT_MODES) if (!tomb.has(d.id) && !store.modes.some((m) => m.id === d.id)) store.modes.push(d);
 	// 一次性清理第130轮的空占位「简梦」模式（仅当未被模型引用且名字未被管理端改过才删，防误删用户数据）
 	if ((store.seedVersion ?? 1) < 2) {
 		const legacy = store.modes.find((m) => m.id === "jianmeng");
@@ -190,6 +195,10 @@ export function deleteMode(id: string): boolean {
 	const before = store.modes.length;
 	store.modes = store.modes.filter((m) => m.id !== id);
 	if (store.modes.length === before) return false;
+	if (BUILTIN_MODE_IDS.has(id)) {
+		store.deletedSeedIds ??= [];
+		if (!store.deletedSeedIds.includes(id)) store.deletedSeedIds.push(id);
+	}
 	persist();
 	// 引用该模式的模型 → 清空 modeId（回落默认模式常开）
 	clearModeFromModels(id);

@@ -5,7 +5,7 @@
 # EXCLUDES:
 #   - dependencies / build output: node_modules (x2), src-tauri/target, src-tauri/gen, dist
 #   - secrets / runtime state:     server/.env, server/data
-#   - "our records":               .git, .claude, CLAUDE.md
+#   - legacy agent runtime:         .git, .claude
 #   - deploy/build artifacts:      _deploy, _migrate, *.tgz, *.zip, *.log
 #
 # Usage:
@@ -34,7 +34,7 @@ $xd = @(
   (Join-Path $root "_migrate")
 )
 # Files to exclude by name/pattern
-$xf = @("CLAUDE.md", "*.log", "*.tgz", "*.zip")
+$xf = @("*.log", "*.tgz", "*.zip")
 
 robocopy $root $stage /E /XD $xd /XF $xf | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed (exit $LASTEXITCODE)" }

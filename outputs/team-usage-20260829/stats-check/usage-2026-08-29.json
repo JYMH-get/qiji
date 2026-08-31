@@ -1,0 +1,577 @@
+{
+  "generatedAt": "2026-08-29T12:01:53.013Z",
+  "users": {
+    "total": 193,
+    "enabled": 190,
+    "disabled": 3,
+    "bound": 145,
+    "unbound": 48,
+    "totalCredits": 18655146,
+    "totalSpentAll": 31039294,
+    "regByDay": [
+      {
+        "date": "2026-07-31",
+        "count": 3
+      },
+      {
+        "date": "2026-08-01",
+        "count": 0
+      },
+      {
+        "date": "2026-08-02",
+        "count": 0
+      },
+      {
+        "date": "2026-08-03",
+        "count": 0
+      },
+      {
+        "date": "2026-08-04",
+        "count": 1
+      },
+      {
+        "date": "2026-08-05",
+        "count": 0
+      },
+      {
+        "date": "2026-08-06",
+        "count": 0
+      },
+      {
+        "date": "2026-08-07",
+        "count": 0
+      },
+      {
+        "date": "2026-08-08",
+        "count": 1
+      },
+      {
+        "date": "2026-08-09",
+        "count": 11
+      },
+      {
+        "date": "2026-08-10",
+        "count": 0
+      },
+      {
+        "date": "2026-08-11",
+        "count": 7
+      },
+      {
+        "date": "2026-08-12",
+        "count": 7
+      },
+      {
+        "date": "2026-08-13",
+        "count": 2
+      },
+      {
+        "date": "2026-08-14",
+        "count": 5
+      },
+      {
+        "date": "2026-08-15",
+        "count": 1
+      },
+      {
+        "date": "2026-08-16",
+        "count": 1
+      },
+      {
+        "date": "2026-08-17",
+        "count": 2
+      },
+      {
+        "date": "2026-08-18",
+        "count": 0
+      },
+      {
+        "date": "2026-08-19",
+        "count": 3
+      },
+      {
+        "date": "2026-08-20",
+        "count": 1
+      },
+      {
+        "date": "2026-08-21",
+        "count": 0
+      },
+      {
+        "date": "2026-08-22",
+        "count": 1
+      },
+      {
+        "date": "2026-08-23",
+        "count": 1
+      },
+      {
+        "date": "2026-08-24",
+        "count": 3
+      },
+      {
+        "date": "2026-08-25",
+        "count": 1
+      },
+      {
+        "date": "2026-08-26",
+        "count": 3
+      },
+      {
+        "date": "2026-08-27",
+        "count": 7
+      },
+      {
+        "date": "2026-08-28",
+        "count": 2
+      },
+      {
+        "date": "2026-08-29",
+        "count": 1
+      }
+    ],
+    "topSpenders": [
+      {
+        "name": "刘佳丽",
+        "spent": 1061005,
+        "credits": 88065
+      },
+      {
+        "name": "duer",
+        "spent": 1046405,
+        "credits": 32763
+      },
+      {
+        "name": "邱梓恩",
+        "spent": 957084,
+        "credits": 20736
+      },
+      {
+        "name": "陈嘉敏",
+        "spent": 954179,
+        "credits": 100560
+      },
+      {
+        "name": "汤汤",
+        "spent": 909384,
+        "credits": 20616
+      },
+      {
+        "name": "王靖伟",
+        "spent": 882515,
+        "credits": 21460
+      },
+      {
+        "name": "刘存",
+        "spent": 788249,
+        "credits": 21156
+      },
+      {
+        "name": "邓婷",
+        "spent": 740055,
+        "credits": 19945
+      }
+    ]
+  },
+  "requests": {
+    "totalRequests": 168569,
+    "reqByDay": [
+      {
+        "date": "2026-07-31",
+        "success": 0,
+        "failed": 0,
+        "total": 0
+      },
+      {
+        "date": "2026-08-01",
+        "success": 0,
+        "failed": 0,
+        "total": 0
+      },
+      {
+        "date": "2026-08-02",
+        "success": 0,
+        "failed": 0,
+        "total": 0
+      },
+      {
+        "date": "2026-08-03",
+        "success": 0,
+        "failed": 0,
+        "total": 0
+      },
+      {
+        "date": "2026-08-04",
+        "success": 0,
+        "failed": 0,
+        "total": 0
+      },
+      {
+        "date": "2026-08-05",
+        "success": 0,
+        "failed": 0,
+        "total": 0
+      },
+      {
+        "date": "2026-08-06",
+        "success": 0,
+        "failed": 0,
+        "total": 0
+      },
+      {
+        "date": "2026-08-07",
+        "success": 0,
+        "failed": 0,
+        "total": 0
+      },
+      {
+        "date": "2026-08-08",
+        "success": 0,
+        "failed": 0,
+        "total": 0
+      },
+      {
+        "date": "2026-08-09",
+        "success": 0,
+        "failed": 0,
+        "total": 0
+      },
+      {
+        "date": "2026-08-10",
+        "success": 0,
+        "failed": 0,
+        "total": 0
+      },
+      {
+        "date": "2026-08-11",
+        "success": 0,
+        "failed": 0,
+        "total": 0
+      },
+      {
+        "date": "2026-08-12",
+        "success": 2,
+        "failed": 1,
+        "total": 3
+      },
+      {
+        "date": "2026-08-13",
+        "success": 10003,
+        "failed": 1394,
+        "total": 11397
+      },
+      {
+        "date": "2026-08-14",
+        "success": 9102,
+        "failed": 1359,
+        "total": 10461
+      },
+      {
+        "date": "2026-08-15",
+        "success": 8012,
+        "failed": 440,
+        "total": 8452
+      },
+      {
+        "date": "2026-08-16",
+        "success": 7910,
+        "failed": 340,
+        "total": 8250
+      },
+      {
+        "date": "2026-08-17",
+        "success": 7784,
+        "failed": 356,
+        "total": 8140
+      },
+      {
+        "date": "2026-08-18",
+        "success": 10360,
+        "failed": 1454,
+        "total": 11814
+      },
+      {
+        "date": "2026-08-19",
+        "success": 11128,
+        "failed": 1487,
+        "total": 12615
+      },
+      {
+        "date": "2026-08-20",
+        "success": 5021,
+        "failed": 444,
+        "total": 5465
+      },
+      {
+        "date": "2026-08-21",
+        "success": 5343,
+        "failed": 190,
+        "total": 5533
+      },
+      {
+        "date": "2026-08-22",
+        "success": 11422,
+        "failed": 361,
+        "total": 11783
+      },
+      {
+        "date": "2026-08-23",
+        "success": 11736,
+        "failed": 260,
+        "total": 11996
+      },
+      {
+        "date": "2026-08-24",
+        "success": 11360,
+        "failed": 458,
+        "total": 11818
+      },
+      {
+        "date": "2026-08-25",
+        "success": 11695,
+        "failed": 1035,
+        "total": 12730
+      },
+      {
+        "date": "2026-08-26",
+        "success": 10876,
+        "failed": 284,
+        "total": 11160
+      },
+      {
+        "date": "2026-08-27",
+        "success": 10517,
+        "failed": 410,
+        "total": 10927
+      },
+      {
+        "date": "2026-08-28",
+        "success": 9973,
+        "failed": 699,
+        "total": 10672
+      },
+      {
+        "date": "2026-08-29",
+        "success": 5135,
+        "failed": 176,
+        "total": 5353
+      }
+    ],
+    "creditByDay": [
+      {
+        "date": "2026-07-31",
+        "credits": 0
+      },
+      {
+        "date": "2026-08-01",
+        "credits": 0
+      },
+      {
+        "date": "2026-08-02",
+        "credits": 0
+      },
+      {
+        "date": "2026-08-03",
+        "credits": 0
+      },
+      {
+        "date": "2026-08-04",
+        "credits": 0
+      },
+      {
+        "date": "2026-08-05",
+        "credits": 0
+      },
+      {
+        "date": "2026-08-06",
+        "credits": 0
+      },
+      {
+        "date": "2026-08-07",
+        "credits": 0
+      },
+      {
+        "date": "2026-08-08",
+        "credits": 0
+      },
+      {
+        "date": "2026-08-09",
+        "credits": 0
+      },
+      {
+        "date": "2026-08-10",
+        "credits": 0
+      },
+      {
+        "date": "2026-08-11",
+        "credits": 0
+      },
+      {
+        "date": "2026-08-12",
+        "credits": 190
+      },
+      {
+        "date": "2026-08-13",
+        "credits": 1253021
+      },
+      {
+        "date": "2026-08-14",
+        "credits": 1196475
+      },
+      {
+        "date": "2026-08-15",
+        "credits": 990242
+      },
+      {
+        "date": "2026-08-16",
+        "credits": 906800
+      },
+      {
+        "date": "2026-08-17",
+        "credits": 553405
+      },
+      {
+        "date": "2026-08-18",
+        "credits": 657272
+      },
+      {
+        "date": "2026-08-19",
+        "credits": 951950
+      },
+      {
+        "date": "2026-08-20",
+        "credits": 429853
+      },
+      {
+        "date": "2026-08-21",
+        "credits": 228315
+      },
+      {
+        "date": "2026-08-22",
+        "credits": 674515
+      },
+      {
+        "date": "2026-08-23",
+        "credits": 1413860
+      },
+      {
+        "date": "2026-08-24",
+        "credits": 1610378
+      },
+      {
+        "date": "2026-08-25",
+        "credits": 1615215
+      },
+      {
+        "date": "2026-08-26",
+        "credits": 1448135
+      },
+      {
+        "date": "2026-08-27",
+        "credits": 1102924
+      },
+      {
+        "date": "2026-08-28",
+        "credits": 832100
+      },
+      {
+        "date": "2026-08-29",
+        "credits": 427920
+      }
+    ],
+    "byPurpose": [
+      {
+        "key": "asset.scene.image",
+        "label": "场景出图",
+        "count": 42164
+      },
+      {
+        "key": "asset.character.image",
+        "label": "角色出图",
+        "count": 38322
+      },
+      {
+        "key": "script.analyze",
+        "label": "剧本分析",
+        "count": 28559
+      },
+      {
+        "key": "video.generate",
+        "label": "视频生成",
+        "count": 23535
+      },
+      {
+        "key": "storyboard.unifiedShot",
+        "label": "图视同源（单卡）",
+        "count": 21152
+      },
+      {
+        "key": "chat.reply",
+        "label": "AI 对话",
+        "count": 3992
+      },
+      {
+        "key": "asset.prop.image",
+        "label": "物品出图",
+        "count": 3263
+      },
+      {
+        "key": "storyboard.split",
+        "label": "剧本分镜",
+        "count": 2565
+      },
+      {
+        "key": "storyboard.unified",
+        "label": "图视同源（多卡）",
+        "count": 2084
+      },
+      {
+        "key": "storyboard.singleShot",
+        "label": "单卡推理",
+        "count": 1874
+      }
+    ],
+    "byModel": [
+      {
+        "key": "gpt-image-2",
+        "count": 77093
+      },
+      {
+        "key": "gemini 3.1 pro",
+        "count": 23323
+      },
+      {
+        "key": "gpt-5.5",
+        "count": 18186
+      },
+      {
+        "key": "gpt-5.6",
+        "count": 13975
+      },
+      {
+        "key": "seedance-2.0-s",
+        "count": 12587
+      },
+      {
+        "key": "seedance-2.5-s",
+        "count": 5884
+      },
+      {
+        "key": "fee-thirdparty",
+        "count": 3992
+      },
+      {
+        "key": "banana pro",
+        "count": 3259
+      },
+      {
+        "key": "os933-sd2.0",
+        "count": 1957
+      },
+      {
+        "key": "yali-gpt-image-2",
+        "count": 1759
+      }
+    ]
+  }
+}

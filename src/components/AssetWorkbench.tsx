@@ -16,6 +16,7 @@ import { sharedItemFromUri } from "@/services/sharedPublish";
 import { openSharedPick } from "@/store/sharedPickStore";
 import { confirmDialog } from "@/lib/confirmDialog";
 import { listPresetOptions } from "@/lib/presetSchemes";
+import { AssetDisplayImage } from "@/components/AssetDisplayImage";
 
 interface AssetWorkbenchProps {
     cat: AssetCat;                 // 角色/场景/生物/物品/群像 对应的 store 数组字段
@@ -565,7 +566,8 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
                                 style={{ ...panel, display: "flex", gap: 8, padding: 8, cursor: "pointer", background: isActive ? "rgba(139,92,246,0.12)" : "rgba(255,255,255,0.03)", borderColor: isActive ? accent : "rgba(255,255,255,0.08)" }}>
                                 <div onDoubleClick={(e) => { e.stopPropagation(); if (a.image) openLightbox({ uri: a.image, name: a.name, media: "image" }); }}
                                     title={a.image ? "双击查看大图 / 右键更多操作" : "右键更多操作"}
-                                    style={{ position: "relative", width: 40, height: 40, borderRadius: 6, flexShrink: 0, overflow: "hidden", background: a.image ? `center/cover no-repeat url(${a.image})` : "rgba(255,255,255,0.06)" }}>
+                                    style={{ position: "relative", width: 40, height: 40, borderRadius: 6, flexShrink: 0, overflow: "hidden", background: "rgba(255,255,255,0.06)" }}>
+                                    {a.image && <AssetDisplayImage uri={a.image} alt="" draggable={false} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />}
                                     {assetRunning(a.id) ? (
                                         <div title="生成中" style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.5)" }}>
                                             <div style={{ width: 16, height: 16, border: "2px solid rgba(167,139,250,0.35)", borderTopColor: "#a78bfa", borderRadius: "50%", animation: "Qiji-spin 0.8s linear infinite" }} />
@@ -628,7 +630,8 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
                                 style={{ ...panel, padding: 8, cursor: "pointer", background: isActive ? "rgba(139,92,246,0.12)" : "rgba(255,255,255,0.03)", borderColor: isActive ? accent : "rgba(255,255,255,0.08)" }}>
                                 <div onDoubleClick={(e) => { e.stopPropagation(); if (f.image) openLightbox({ uri: f.image, name: `${f.title}（${f.label}）`, media: "image" }); }}
                                     title={f.image ? "双击查看大图" : undefined}
-                                    style={{ position: "relative", width: "100%", aspectRatio: "1/1", borderRadius: 6, overflow: "hidden", background: f.image ? `center/cover no-repeat url(${f.image})` : "rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.3)", fontSize: 11 }}>
+                                    style={{ position: "relative", width: "100%", aspectRatio: "1/1", borderRadius: 6, overflow: "hidden", background: "rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.3)", fontSize: 11 }}>
+                                    {f.image && <AssetDisplayImage uri={f.image} alt="" draggable={false} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />}
                                     {isBusy ? (
                                         <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, background: f.image ? "rgba(0,0,0,0.45)" : "transparent", color: "#a78bfa" }}>
                                             <div style={{ width: 18, height: 18, border: "2px solid rgba(167,139,250,0.3)", borderTopColor: "#a78bfa", borderRadius: "50%", animation: "Qiji-spin 0.8s linear infinite" }} />
@@ -705,7 +708,8 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
                                 {refImages.map((r) => (
                                     <div key={r.id} title={r.error ? `${r.name || "垫图"}：上传失败` : (r.name || "垫图")}
                                         onDoubleClick={() => !r.error && openLightbox({ uri: r.uri, name: r.name, media: "image" })}
-                                        style={{ position: "relative", width: 48, height: 48, borderRadius: 6, overflow: "hidden", border: r.error ? "1px solid #f87171" : "1px solid rgba(255,255,255,0.15)", background: `center/cover no-repeat url(${r.uri})`, cursor: r.error ? "default" : "zoom-in" }}>
+                                        style={{ position: "relative", width: 48, height: 48, borderRadius: 6, overflow: "hidden", border: r.error ? "1px solid #f87171" : "1px solid rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.04)", cursor: r.error ? "default" : "zoom-in" }}>
+                                        <AssetDisplayImage uri={r.uri} alt="" draggable={false} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                                         {r.uploading && <span style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.5)" }}><span style={{ width: 14, height: 14, border: "2px solid rgba(167,139,250,0.35)", borderTopColor: "#a78bfa", borderRadius: "50%", animation: "Qiji-spin 0.8s linear infinite" }} /></span>}
                                         {r.error && <span style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#f87171", fontSize: 16, fontWeight: 700 }}>✕</span>}
                                         <span onClick={() => mutateRefs((prev) => prev.filter((x) => x.id !== r.id))}
@@ -729,7 +733,9 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
                                         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                                             {libraryImages.map((img, i) => (
                                                 <div key={i} title={img.name} onClick={() => { mutateRefs((prev) => [...prev, { id: refUid(), uri: img.uri, url: toRefUri(img.uri), name: img.name }]); setRefPickerOpen(false); }}
-                                                    style={{ width: 44, height: 44, borderRadius: 6, cursor: "pointer", border: "1px solid rgba(255,255,255,0.12)", background: `center/cover no-repeat url(${img.uri})` }} />
+                                                    style={{ width: 44, height: 44, borderRadius: 6, cursor: "pointer", overflow: "hidden", border: "1px solid rgba(255,255,255,0.12)", background: "rgba(255,255,255,0.04)" }}>
+                                                    <AssetDisplayImage uri={img.uri} alt="" draggable={false} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                                                </div>
                                             ))}
                                         </div>
                                     )}
@@ -841,7 +847,7 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
                             style={{ flex: 1, minHeight: 0, borderRadius: 8, background: "rgba(255,255,255,0.04)", display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.35)", fontSize: 13, overflow: "hidden" }}>
                             {/* 展示区按 viewSel 显示：成功图 / 选中的在途（生成中·失败原因）；一次只一个，互不叠加 */}
                             {shownImageUri ? (
-                                <img src={shownImageUri} alt={activeForm.title} title="滚轮缩放·拖动平移·双击复位" draggable={false}
+                                <AssetDisplayImage uri={shownImageUri} alt={activeForm.title} recovery="bar" title="滚轮缩放·拖动平移·双击复位" draggable={false}
                                     onDragStart={(e) => e.preventDefault()}
                                     ref={(el) => {
                                         if (el && el.complete && el.naturalWidth && (!imgDims || imgDims.w !== el.naturalWidth || imgDims.h !== el.naturalHeight)) {
@@ -888,7 +894,9 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
                                         <div key={i} onClick={() => { if (activeAsset) { setAssetMainImage(cat, activeAsset.id, activeForm.variantId, uri); setViewSel({ kind: "image", uri }); } }}
                                             onDoubleClick={() => openLightbox({ uri, name: `${activeForm.title}（${activeForm.label}）`, media: "image" })}
                                             title={isMain ? "当前主图（双击查看大图）" : "单击设为主图 / 双击查看大图"}
-                                            style={{ width: 64, height: 64, borderRadius: 6, cursor: "pointer", background: `center/cover no-repeat url(${uri})`, border: (isMain || isViewed) ? `2px solid ${accent}` : "2px solid transparent", boxShadow: isMain ? "0 0 0 1px rgba(139,92,246,0.4)" : "none" }} />
+                                            style={{ width: 64, height: 64, borderRadius: 6, cursor: "pointer", overflow: "hidden", background: "rgba(255,255,255,0.04)", border: (isMain || isViewed) ? `2px solid ${accent}` : "2px solid transparent", boxShadow: isMain ? "0 0 0 1px rgba(139,92,246,0.4)" : "none" }}>
+                                            <AssetDisplayImage uri={uri} alt="" draggable={false} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                                        </div>
                                     );
                                 })}
                                 {/* 在途占位：每条请求一个独立 64×64 占位（运行中=转圈 / 失败=红「!」），可点选；
@@ -938,7 +946,9 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
                                         {detail.refs.map((r, i) => (
                                             <div key={i} title={r.name || r.id || "垫图"} onDoubleClick={() => openLightbox({ uri: r.uri, name: r.name, media: "image" })}
                                                 style={{ width: 56, display: "flex", flexDirection: "column", gap: 2, cursor: "zoom-in" }}>
-                                                <div style={{ width: 56, height: 56, borderRadius: 6, border: "1px solid rgba(255,255,255,0.15)", background: `center/cover no-repeat url(${r.uri})` }} />
+                                                <div style={{ width: 56, height: 56, borderRadius: 6, overflow: "hidden", border: "1px solid rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.04)" }}>
+                                                    <AssetDisplayImage uri={r.uri} alt="" draggable={false} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                                                </div>
                                                 <span style={{ fontSize: 9, color: "rgba(255,255,255,0.5)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.name || r.id || "垫图"}</span>
                                             </div>
                                         ))}
@@ -1028,7 +1038,9 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
                                                 {variantsWithImg.map((v: any) => (
                                                     <div key={v.id} style={{ ...item, gap: 8, justifyContent: "flex-start" }} onMouseEnter={(e) => hov(e, true)} onMouseLeave={(e) => hov(e, false)}
                                                         onClick={() => replaceBaseFromVariant(a, v.image)}>
-                                                        <span style={{ width: 28, height: 28, borderRadius: 4, flexShrink: 0, background: `center/cover no-repeat url(${v.image})` }} />
+                                                        <span style={{ width: 28, height: 28, borderRadius: 4, flexShrink: 0, overflow: "hidden", background: "rgba(255,255,255,0.04)" }}>
+                                                            <AssetDisplayImage uri={v.image} alt="" draggable={false} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                                                        </span>
                                                         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.label || v.name || "分体"}</span>
                                                     </div>
                                                 ))}

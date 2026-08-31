@@ -38,10 +38,10 @@ describe("reorderShotMaterial — 重排后图例整体重建 + 正文 @ 引用�
         const s = shot();
         expect(s.materials.map((m) => m.name)).toEqual(["丙", "甲", "乙"]);
         // 图例按新素材序整体重建（截图事故形态：图例名字与素材位错开一位——此处锁死不再发生）
-        expect(s.videoPrompt).toContain("【素材图例】@Image1 是 丙，@Image2 是 甲，@Image3 是 乙，");
+        expect(s.videoPrompt).toContain("【素材图例】@Image1 是 丙；@Image2 是 甲；@Image3 是 乙；");
         // 正文内联引用跟随：丙 @Image3→@Image1、甲 @Image1→@Image2
         expect(s.videoPrompt).toContain("镜头推近 @Image1 与 @Image2");
-        expect(s.storyboardPrompt).toContain("【素材图例】@Image1 是 丙，@Image2 是 甲，@Image3 是 乙，");
+        expect(s.storyboardPrompt).toContain("【素材图例】@Image1 是 丙；@Image2 是 甲；@Image3 是 乙；");
         expect(s.storyboardPrompt).toContain("构图以 @Image1 为主体");
     });
 
@@ -58,19 +58,30 @@ describe("reorderShotMaterial — 重排后图例整体重建 + 正文 @ 引用�
         reorderShotMaterial("ep1", "sh1", "mb", "ma"); // 乙 拖到 甲 前
         const s = shot();
         expect(s.materials.map((m) => m.name)).toEqual(["乙", "甲"]);
-        expect(s.unifiedPrompt).toContain("【素材图例】@Image1 是 乙，@Image2 是 甲，");
+        expect(s.unifiedPrompt).toContain("【素材图例】@Image1 是 乙；@Image2 是 甲；");
         expect(s.unifiedPrompt).toContain("@Image1 出场");
     });
 });
 
 describe("removeShotMaterial / addShotMaterialFromAsset — 表格页增删收口语义", () => {
+	it("再次拖入资产只新增缺失说明，不还原用户改名或清空同行正文", () => {
+		const mats = [mat("ma", "三娘")];
+		seed({ materials: mats, videoPrompt: "【素材图例】@Image1 是 赵三娘，赵三娘和李四在吃饭" });
+		addShotMaterialFromAsset("ep1", "sh1", {
+			assetId: "ent-mb", uri: "asset://mb.png", name: "李四", media: "image", kind: "character",
+		});
+		expect(shot().videoPrompt).toBe(
+			"【素材图例】@Image1 是 赵三娘；@Image2 是 李四；\n\n赵三娘和李四在吃饭",
+		);
+	});
+
     it("删中间素材：图例重建无残句、正文编号前移", () => {
         const mats = [mat("ma", "甲"), mat("mb", "乙"), mat("mc", "丙")];
         seed({ materials: mats, videoPrompt: `${buildLegend(mats, false)}\n\n@Image3 说话` });
         removeShotMaterial("ep1", "sh1", "mb");
         const s = shot();
         expect(s.materials.map((m) => m.name)).toEqual(["甲", "丙"]);
-        expect(s.videoPrompt).toContain("【素材图例】@Image1 是 甲，@Image2 是 丙，");
+        expect(s.videoPrompt).toContain("【素材图例】@Image1 是 甲；@Image2 是 丙；");
         expect(s.videoPrompt).not.toContain("是 乙");
         expect(s.videoPrompt).toContain("@Image2 说话");
     });
@@ -95,6 +106,6 @@ describe("removeShotMaterial / addShotMaterialFromAsset — 表格页增删收�
         seed({ materials: mats, videoPrompt: "正文" });
         resyncShotLegend("ep1", "sh1");
         // 占位素材（uri 空）同样占 @ 编号 → 图例如实给号（提交层对空 uri 明确报错，不静默丢）
-        expect(shot().videoPrompt).toContain("【素材图例】@Image1 是 甲，@Image2 是 上传中，");
+        expect(shot().videoPrompt).toContain("【素材图例】@Image1 是 甲；@Image2 是 上传中；");
     });
 });

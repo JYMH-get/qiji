@@ -1,7 +1,7 @@
 /**
  * Claude（Anthropic）文本翻译器（真）。
  *
- * 结构化输出走 CLAUDE.md 锁定的方案：tool-use 强制。
+ * 结构化输出走项目锁定的方案：tool-use 强制。
  * 把 catalog 的输出 schema 当作一个工具的 input_schema，用 tool_choice 强制模型
  * 必须调用该工具，再从 tool_use 块的 input 取回已按 schema 约束的 JSON。
  * 纯文本则普通 messages 调用取 text。

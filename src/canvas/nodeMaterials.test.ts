@@ -159,7 +159,7 @@ describe("listNodeMaterials（加入顺序 + 命名）", () => {
 			["@Image1", "张起天"],
 			["@Image2", "分镜"],
 		]);
-		expect(buildNodeLegend("t")).toBe("【素材图例】@Image1 是 张起天，@Image2 是 分镜，");
+		expect(buildNodeLegend("t")).toBe("【素材图例】@Image1 是 张起天；@Image2 是 分镜；");
 	});
 
 	it("无 matOrder（旧项目/先连线后匹配）：保持旧序——上游在前、自加在后", () => {
@@ -193,7 +193,7 @@ describe("listNodeMaterials（加入顺序 + 命名）", () => {
 		removeUpstreamMaterial("t", "e1");
 		const s = useCanvasStore.getState();
 		expect(s.edges.e1).toBeUndefined();
-		expect(s.nodes.t.data.params.prompt).toBe("【素材图例】@Image1 是 张起天，\n\n@Image1特写，全景");
+		expect(s.nodes.t.data.params.prompt).toBe("【素材图例】@Image1 是 张起天；\n\n@Image1特写，全景");
 		expect(s.nodes.t.data.matOrder).toEqual(["s:S1"]); // 断线后快照同步剔除
 	});
 });
@@ -215,7 +215,7 @@ describe("removeNodeMaterial（删自加素材）— 已有图例时整体重建
 		});
 		removeNodeMaterial("t", "images", 0); // 删张三
 		const p = useCanvasStore.getState().nodes.t.data.params.prompt as string;
-		expect(p).toBe("【素材图例】@Image1 是 李四，\n\n镜头推近 @Image1 说话");
+		expect(p).toBe("【素材图例】@Image1 是 李四；\n\n镜头推近 @Image1 说话");
 		expect(p).not.toContain("张三");
 	});
 });

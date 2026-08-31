@@ -38,6 +38,9 @@ src-tauri/resources/dreamina/*
 # 服务端部署产物（用打包技能重新生成，不入库）
 qiji-server-deploy.tgz
 
+# 客户端一键打包生成的可分享安装包（本地产物，不入库）
+release/
+
 # 个人技能（含大体积宣传媒体，与项目无关不入库）
 .claude/skills/huashu-nuwa/
 
@@ -46,3 +49,12 @@ public/depth-model/
 
 # 换机导出包（本地生成，不入库）
 outcode/
+
+# 运维巡检/使用分析导出（本地产物，不进仓库）
+ops-reports/
+
+# LightRAG 本地 venv（不入库）
+.venv-lightrag/
+
+# 第三方 skills 由 npx skills 管理，不入库（清单见 skills-lock.json / ops-reports/skills-plan.md）
+.agents/

@@ -8,7 +8,7 @@ import { useCanvasStore } from "@/store/canvasStore";
 import { useLibraryStore } from "@/store/libraryStore";
 import { useAssetFormStore } from "@/store/assetFormStore";
 import { getPlugin } from "@/nodes/pluginRegistry";
-import { withLegend } from "@/lib/shotMaterials";
+import { stripLegend, withLegend } from "@/lib/shotMaterials";
 import { buildNodeLegend, computeMatOrder } from "@/canvas/nodeMaterials";
 import { findProjectAssetByImage } from "@/lib/projectAssets";
 
@@ -79,7 +79,7 @@ export function makeTermMatcher(rawText: string): (term: string) => boolean {
 
 /** 从提示词中剥掉素材图例前缀行（「【素材图例】…」是上一轮提取写入的资产名清单，参与匹配会自我循环） */
 export function stripLegendForMatch(s: string): string {
-	return String(s || "").replace(/【素材图例】[^\n]*\n?/g, "");
+	return stripLegend(String(s || ""));
 }
 
 /** 从资产名解析匹配候选（含别名）：按 / ／ 、 | ， 分隔，括号内也作别名 */

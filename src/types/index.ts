@@ -35,6 +35,17 @@ export interface NodeData {
 	params: Record<string, unknown>;
 	resultAssetId: AssetId | null;
 	/**
+	 * 每个媒体结果生成当时的真实参数快照；切换堆叠主结果时，节点信息按 assetId 展示对应模型属性，
+	 * 不被生成后继续修改的节点设置污染。旧项目无此字段时回退当前 params。
+	 */
+	resultMetaByAssetId?: Record<AssetId, {
+		model?: string;
+		aspect?: string;
+		duration?: number | string;
+		prompt?: string;
+		createdAt?: string;
+	}>;
+	/**
 	 * 节点素材区的**加入顺序**（素材只往后加、不往前插原则）：key = `e:<edgeId>`（上游连线素材）
 	 * / `s:<blobId|url>`（自加素材）。@ImageN 编号按此序（同媒体分组内 1-based），先匹配后连线时
 	 * 连线素材排在已匹配素材之后，已写入提示词的 @ 引用不错位。缺失/未记录的素材按旧序

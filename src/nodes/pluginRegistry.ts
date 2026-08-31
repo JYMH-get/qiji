@@ -761,13 +761,23 @@ export async function defaultNodeExecute(
 			const cs = useCanvasStore.getState();
 			if (cs.nodes[nodeId]) {
 				const prevHist = cs.nodes[nodeId].data.resultHistory || [];
+				const resultMetaByAssetId = {
+					...(cs.nodes[nodeId].data.resultMetaByAssetId || {}),
+					[assetId]: {
+						model: run.modelKey || modelKey,
+						aspect: String(runParams.aspect_ratio ?? runParams.aspect ?? runParams.ratio ?? ""),
+						duration: runParams.duration as number | string | undefined,
+						prompt: effectivePrompt,
+						createdAt: new Date().toISOString(),
+					},
+				};
 				useCanvasStore.setState({
 					nodes: {
 						...cs.nodes,
 						[nodeId]: {
 							...cs.nodes[nodeId],
 							// 新结果设为主图，并入历史（旧→新；堆叠展开可回看/切回）
-							data: { ...cs.nodes[nodeId].data, resultAssetId: assetId, resultHistory: prevHist.includes(assetId) ? prevHist : [...prevHist, assetId] },
+							data: { ...cs.nodes[nodeId].data, resultAssetId: assetId, resultHistory: prevHist.includes(assetId) ? prevHist : [...prevHist, assetId], resultMetaByAssetId },
 						},
 					},
 				});

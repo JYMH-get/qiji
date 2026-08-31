@@ -110,7 +110,7 @@ describe("matchShotAssets（store 集成：匹配→统一入口加素材→图�
 		expect(s.materials.map((m) => m.name)).toEqual(["甲", "甲的声音", "山庙"]);
 		expect(r!.added).toBe(3);
 		// 双结果模式：videoPrompt 全模态图例 + 音色配对；storyboardPrompt 仅图像
-		expect(s.videoPrompt).toContain("【素材图例】@Image1 是 甲，@Image2 是 山庙，@Image1的声音参考@Audio1，");
+		expect(s.videoPrompt).toContain("【素材图例】@Image1 是 甲；@Image2 是 山庙；@Image1的声音参考@Audio1；");
 		expect(s.storyboardPrompt).toContain("@Image1 是 甲");
 		expect(s.storyboardPrompt).not.toContain("声音参考");
 		// 用图默认=基础形象

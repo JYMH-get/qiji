@@ -9,7 +9,7 @@
  * 【缓存与性能策略（本文件的全部要点）】
  *   1. **模块级运行时缓存**：Map<`uri@t.toFixed(2)`, dataURL|null>。⚠ 红线：抽出的 dataURL
  *      只活在内存里，**绝不写进 RtcSegment / 项目文件**（项目文件禁 base64/data:，
- *      CLAUDE.md §7.1 有 161MB 撑爆事故先例）。切项目走 clearVideoThumbCache()。
+ *      内联 base64 曾把项目文件撑到 161MB 并扩大截断风险）。切项目走 clearVideoThumbCache()。
  *   2. **一个 uri 一条抽帧队列，复用同一个 <video> 元素顺序 seek**——绝不为每帧新建元素
  *      （每个 <video> 都占一份解码器，几十段片段同时建元素会直接拖垮 WebView2）。
  *   3. **全局并发上限 MAX_PARALLEL_VIDEOS=2**：其余 uri 排队，避免同时解码多个大文件。

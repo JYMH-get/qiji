@@ -52,6 +52,10 @@ describe("stripLegendForMatch", () => {
 		const s = "【素材图例】@Image1 是 楚长生，@Image1的声音参考@Audio1，\n镜头推近，楚长生抬头。";
 		expect(stripLegendForMatch(s)).toBe("镜头推近，楚长生抬头。");
 	});
+	it("图例与正文同行时只剥图例，正文仍参与匹配", () => {
+		expect(stripLegendForMatch("【素材图例】@Image1 是 赵三娘，赵三娘和李四吃饭"))
+			.toBe("赵三娘和李四吃饭");
+	});
 });
 
 // ── applyAssetMatchToImageNode：匹配后写入「素材图例」前缀（与资产模式同格式 @xxx是xxx）──
@@ -67,7 +71,7 @@ describe("applyAssetMatchToImageNode 写入素材图例", () => {
 		useAssetFormStore.setState({ selForm: {} } as never);
 	});
 
-	it("匹配到资产后：提示词前置「【素材图例】@Image1 是 资产名，」+ 图追加进素材区", () => {
+	it("匹配到资产后：提示词前置「【素材图例】@Image1 是 资产名；」+ 图追加进素材区", () => {
 		useProjectStore.setState({
 			characters: [{ id: "C1", name: "张三", image: "mem://c1", variants: [] }],
 			crowds: [], scenes: [], organisms: [], items: [],
@@ -77,7 +81,7 @@ describe("applyAssetMatchToImageNode 写入素材图例", () => {
 		expect(added).toBe(1);
 		const n = useCanvasStore.getState().nodes.n1;
 		const p = n.data.params.prompt as string;
-		expect(p.startsWith("【素材图例】@Image1 是 张三，")).toBe(true);
+		expect(p.startsWith("【素材图例】@Image1 是 张三；")).toBe(true);
 		expect(p.includes("张三站在门口")).toBe(true);
 		const imgs = (n.data.input as { images?: { name?: string }[] }).images || [];
 		expect(imgs.length).toBe(1);
@@ -124,7 +128,7 @@ describe("applyAssetMatchToImageNode 写入素材图例", () => {
 		const r = matchNodeDraftAssets("n1", "草稿：张三站在门口");
 		expect(r).not.toBeNull();
 		expect(r!.added).toBe(1);
-		expect(r!.prompt.startsWith("【素材图例】@Image1 是 张三，")).toBe(true);
+		expect(r!.prompt.startsWith("【素材图例】@Image1 是 张三；")).toBe(true);
 		expect(r!.prompt.includes("草稿：张三站在门口")).toBe(true);
 		// 节点提示词同步为草稿+图例（弹窗保存时再落同值幂等）
 		expect(useCanvasStore.getState().nodes.n1.data.params.prompt).toBe(r!.prompt);
@@ -160,7 +164,7 @@ describe("applyAssetMatchToImageNode 写入素材图例", () => {
 		applyAssetMatchToImageNode("n1");
 		const n = useCanvasStore.getState().nodes.n1;
 		const p = String(n.data.params.prompt);
-		expect(p.startsWith("【素材图例】@Image1 是 张三，@Image2 是 分镜，")).toBe(true);
+		expect(p.startsWith("【素材图例】@Image1 是 张三；@Image2 是 分镜；")).toBe(true);
 		expect(p).not.toContain("gen_output");
 		expect(n.data.matOrder).toEqual(["s:mem://c1", "e:e1"]);
 	});

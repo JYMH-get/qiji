@@ -11,16 +11,11 @@
  */
 import { PRESET_TAG_RE, presetTag, presetGroup, presetPosition } from "@/lib/presetSchemes";
 import { buildUpstreamCapsuleBlock, stripUpstreamCapsules } from "@/lib/upstreamText";
-import { LEGEND_START } from "@/lib/shotMaterials";
+import { splitLegendPrompt } from "@/lib/shotMaterials";
 
-/** 拆出图例块（【素材图例】…，到首个空行）与正文；无图例则 legend="" */
+/** 按逐资产说明文法拆出图例与正文；无图例则 legend=""。 */
 function splitLegend(prompt: string): { legend: string; body: string } {
-	const text = prompt || "";
-	const i = text.indexOf(LEGEND_START);
-	if (i < 0) return { legend: "", body: text };
-	const end = text.indexOf("\n\n", i);
-	const legend = (end >= 0 ? text.slice(i, end) : text.slice(i)).trim();
-	const body = (text.slice(0, i) + (end >= 0 ? text.slice(end + 2) : "")).trim();
+	const { legend, body } = splitLegendPrompt(prompt);
 	return { legend, body };
 }
 

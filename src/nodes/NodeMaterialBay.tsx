@@ -3,12 +3,21 @@ import { useCanvasStore } from "@/store/canvasStore";
 import { useLibraryStore } from "@/store/libraryStore";
 import { useProjectStore } from "@/store/projectStore";
 import { openLightbox } from "@/store/lightboxStore";
-import { confirmDialog } from "@/lib/confirmDialog";
 import { TAG_BADGE, BADGE_BG } from "@/lib/shotMaterials";
 import { mediaFilesFromDataTransfer } from "@/lib/clipboardMedia";
 import { addNodeMaterialFiles, removeNodeMaterial, removeUpstreamMaterial, listNodeMaterials, type NodeMatEntry } from "@/canvas/nodeMaterials";
 import { usePendingUploads, uploadKeys } from "@/store/uploadStore";
 import { useDisplayUri } from "@/nodes/ResultView";
+
+/** 右键取消垫图是快捷操作：拦住浏览器/画布菜单后立即执行，不再追加确认步骤。 */
+export function removeMaterialOnContextMenu(
+	e: Pick<React.MouseEvent, "preventDefault" | "stopPropagation">,
+	doRemove: () => void,
+): void {
+	e.preventDefault();
+	e.stopPropagation();
+	doRemove();
+}
 
 /**
  * 素材区单格：显示 uri 经 useDisplayUri 自愈解析（远程 https 在 Tauri 下被 CSP 拦、死 blob: 凭三元映射
@@ -22,11 +31,7 @@ function MatTile({ it, doRemove }: { it: NodeMatEntry; doRemove: (() => void) | 
 			className="relative w-11 h-11 rounded-xl border border-white/10 bg-white/5 overflow-hidden shrink-0 group cursor-zoom-in"
 			title={`${TAG_BADGE[it.media]}${it.n}${it.name ? `·${it.name}` : ""}${it.self ? "（双击放大 / 右键删除）" : "（上游素材·双击放大 / 右键删除=断开连线）"}`}
 			onDoubleClick={() => uri && openLightbox({ uri, media: it.media, name: it.name || "" })}
-			onContextMenu={doRemove ? (e) => {
-				e.preventDefault();
-				const hint = it.self ? `删除素材「${it.name || ""}」？` : `删除上游素材「${it.name || ""}」？将断开与上游节点的连线`;
-				void (async () => { if (await confirmDialog(hint)) doRemove(); })();
-			} : undefined}
+			onContextMenu={doRemove ? (e) => removeMaterialOnContextMenu(e, doRemove) : undefined}
 		>
 			{it.media === "video" ? (
 				<video src={uri} className="w-full h-full object-cover" muted preload="metadata" />

@@ -4,7 +4,7 @@
  *
  * ⚠ 为什么这条链走 [purposeRunner.runPurpose](@/services/purposeRunner) 而不是
  *   [generationQueue](@/services/generationQueue)（选路理由，勿当成"另起管线"）：
- *   - `runPurpose` **就是**库内唯一请求路径（CLAUDE.md §11.1：表格按键 / 画布节点 → runPurpose →
+ *   - `runPurpose` **就是**库内唯一请求路径（表格按键 / 画布节点 → runPurpose →
  *     taskCenter 集中轮询）。计费、失败退款、请求记录、模式门禁全部挂在它与服务端上，
  *     画布节点（defaultNodeExecute）走的也正是这一条，不是绕路；
  *   - `generationQueue` 是压在 runPurpose 之上的**断连保护层**，它的三种在途目标——

@@ -31,11 +31,17 @@ docker compose up -d --build
 
 ---
 
-## 2. 备份（1 分钟，别跳过）
+## 2. 备份（别跳过；禁止运行中直接复制）
 
 ```bash
-docker compose exec qiji-server sh -c 'cd /app/server/data && cp qiji.db "qiji.db.bak-p0-$(date +%Y%m%d-%H%M)"' && ls -la server/data/ | grep bak-p0
+# 默认安全方案：停止唯一写入者后做文件级复制
+docker compose stop qiji-server
+cp server/data/qiji.db "server/data/qiji.db.bak-p0-$(date +%Y%m%d-%H%M)"
+docker compose start qiji-server
+ls -la server/data/ | grep bak-p0
 ```
+
+> 不能停服时，只能使用 SQLite 原生 `VACUUM INTO` 或 `.backup` 在线备份，并先确认容器内工具可用。禁止对运行中的 `qiji.db` 直接 `cp`；“连同 WAL/SHM”不是运行中复制的许可。
 
 > 回滚 = 停服 → 把 `.bak-p0-*` 覆盖回 `qiji.db`（连同 `-wal`/`-shm` 一起删）→ 启服。
 > 但 P0 只加列不改列，服务端旧代码读新表完全正常，**基本不会用到回滚**。

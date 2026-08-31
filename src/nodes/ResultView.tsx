@@ -11,53 +11,24 @@ import { useProjectStore } from "@/store/projectStore";
 import { useUiStore } from "@/store/uiStore";
 import { openLightbox } from "@/store/lightboxStore";
 import { dispatchCommand } from "@/command/dispatch";
-import { saveRemoteAsset } from "@/services/assetPersist";
-import { isWebviewLocalUri } from "@/lib/publicUrl";
+import { resolveDisplayUri } from "@/services/projectAssetHeal";
 import { progressLabel } from "@/lib/queueLabel";
 import { getPlugin } from "./pluginRegistry";
 import type { ResultKind } from "@/types";
 
-const isTauriEnv = () => typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
-function hashUri(s: string): string {
-	let h = 0x811c9dc5;
-	for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
-	return "disp" + (h >>> 0).toString(36);
-}
 /**
- * 节点媒体显示 uri 解析：远程 https 直链在 Tauri 下被 CSP(img/media-src) 拦→裂图。
- *  - 本地/内联 uri（asset:// / blob: / data:）直接用；
- *  - 远程 https：优先已登记的本地副本（blobByUri.localUri）；无则原生下载到本地 asset:// 再显示（自愈）。
- *  - 浏览器（非 Tauri）无 CSP 限制，https 直接用。
+ * 节点媒体显示 uri 解析：每次显示先校验三元映射的 localPath；本地副本缺失时按同一 assetId
+ * 从 OSS 恢复并登记。项目加载时另有批量恢复，这里是运行期删文件/单项漏网的懒兜底。
  */
 export function useDisplayUri(uri?: string | null): string {
 	const [resolved, setResolved] = useState(uri || "");
 	useEffect(() => {
 		if (!uri) { setResolved(""); return; }
-		if (uri.startsWith("blob:")) {
-			// blob: objectURL 是会话级：上一会话持久化下来的（如上传节点 data.fileUri）已死——能凭三元映射
-			// 反查到别的源（localUri/公网 url）就换源；反查不到按原样用（本会话新建的 blob: 仍活）。
-			const b = useProjectStore.getState().blobByUri(uri);
-			if (b?.localUri && b.localUri !== uri) { setResolved(b.localUri); return; }
-			if (!isTauriEnv() && b?.url) { setResolved(b.url); return; } // 浏览器无 CSP：公网直显
-			setResolved(uri);
-			return;
-		}
-		if (!/^https?:/i.test(uri)) { setResolved(uri); return; } // 本地/内联直接用
-		// http://asset.localhost/... 形式上是 http 但**就是本地文件的显示态**：原样直用，绝不走
-		// blob 映射/下载换源——跨项目复制残留的失效映射会把能播的直链换成死链（「短暂显示后裂开」根因）。
-		if (isWebviewLocalUri(uri)) { setResolved(uri); return; }
-		const blob = useProjectStore.getState().blobByUri(uri);
-		if (blob?.localUri) { setResolved(blob.localUri); return; }
-		if (!isTauriEnv()) { setResolved(uri); return; } // 浏览器无 CSP 限制
-		setResolved(uri); // 先占位（Tauri 下会裂），随后被本地副本替换
+		setResolved(uri);
 		let alive = true;
-		void (async () => {
-			const b = await saveRemoteAsset(hashUri(uri), uri);
-			if (alive && b?.localUri) {
-				useProjectStore.getState().registerAssetBlob({ ...b, srcUri: uri });
-				setResolved(b.localUri);
-			}
-		})();
+		void resolveDisplayUri(uri)
+			.then((next) => { if (alive) setResolved(next); })
+			.catch(() => { if (alive) setResolved(uri); });
 		return () => { alive = false; };
 	}, [uri]);
 	return resolved;

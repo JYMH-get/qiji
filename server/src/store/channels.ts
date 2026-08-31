@@ -29,6 +29,8 @@ export interface ChannelDef {
 
 interface Store {
 	channels: ChannelDef[];
+	/** 管理端删除的内置渠道墓碑：阻止缺失补种在重启时把已删除渠道复活。 */
+	deletedSeedIds?: string[];
 }
 
 const FILE = "channels.json";
@@ -189,12 +191,16 @@ const DEFAULT_CHANNELS: ChannelDef[] = [
 	},
 ];
 
-let store: Store = loadJson<Store>(FILE, { channels: [] });
+const BUILTIN_CHANNEL_IDS = new Set(DEFAULT_CHANNELS.map((c) => c.id));
+
+let store: Store = loadJson<Store>(FILE, { channels: [], deletedSeedIds: [] });
 {
 	// 补种缺失的内置渠道（首启或旧库缺失时），不覆盖已有改动
 	const now = new Date().toISOString();
+	const tomb = new Set(store.deletedSeedIds ?? []);
 	let changed = false;
 	for (const d of DEFAULT_CHANNELS) {
+		if (tomb.has(d.id)) continue;
 		if (!store.channels.some((c) => c.id === d.id)) {
 			store.channels.push({ ...d, createdAt: now, updatedAt: now });
 			changed = true;
@@ -277,6 +283,10 @@ export function deleteChannel(id: string): boolean {
 	const before = store.channels.length;
 	store.channels = store.channels.filter((c) => c.id !== id);
 	if (store.channels.length !== before) {
+		if (BUILTIN_CHANNEL_IDS.has(id)) {
+			store.deletedSeedIds ??= [];
+			if (!store.deletedSeedIds.includes(id)) store.deletedSeedIds.push(id);
+		}
 		persist();
 		return true;
 	}
