@@ -22,7 +22,7 @@ import { uploadMediaToCanvasAsset, uploadKindFromFile } from "./nodeUpload";
 import { getPlugin } from "@/nodes/pluginRegistry";
 
 /**
- * 探测连入本节点的上游**文本**源（供「上游文本胶囊」明示：有则在提示词框显示胶囊）。
+ * 探测连入本节点的上游**文本**源（供提示词编辑器与执行层直接映射全文）。
  * ⚠ 判定规则须与 pluginRegistry.collectUpstreamTextForNode 保持一致（文本/对话/种子上游 + 取 resultText→prompt）。
  */
 export function upstreamTextSources(nodeId: string): { id: string; name: string; text: string }[] {
@@ -48,7 +48,7 @@ export type MatGroup = "images" | "videos" | "audios";
 export type MatMedia = "image" | "video" | "audio";
 const GROUP: Record<MatMedia, MatGroup> = { image: "images", video: "videos", audio: "audios" };
 
-type LegendRef = { id?: string; url?: string; name?: string; assetId?: string; voiceForAssetId?: string };
+type LegendRef = { id?: string; url?: string; name?: string; assetId?: string; usage?: "reference" | "identity"; voiceForAssetId?: string };
 
 /** 素材区一条素材（单点枚举结果）：n/tag 为同媒体分组内 1-based 编号，与图例/提交数组顺序恒一致 */
 export interface NodeMatEntry {
@@ -69,6 +69,7 @@ export interface NodeMatEntry {
 	id?: string;
 	/** 反查/匹配到的项目资产 id（音色「声音参考」按此配对） */
 	assetId?: string;
+	usage?: "reference" | "identity";
 	voiceForAssetId?: string;
 	/** 上游连线素材：来源边 id（删除=断开该连线） */
 	edgeId?: string;
@@ -126,7 +127,7 @@ export function listNodeMaterials(nodeId: string, inputOverride?: Record<string,
 			const url = ref.url || (ref.id && blobs[ref.id]?.url) || "";
 			raw.push({
 				key: `s:${ref.id || ref.url}`, media: KIND[g], name: ref.name || "", uri, url,
-				id: ref.id, assetId: ref.assetId, voiceForAssetId: ref.voiceForAssetId, self: { group: g, idx },
+				id: ref.id, assetId: ref.assetId, usage: ref.usage, voiceForAssetId: ref.voiceForAssetId, self: { group: g, idx },
 			});
 		});
 	}
@@ -146,11 +147,11 @@ export function listNodeMaterials(nodeId: string, inputOverride?: Record<string,
  * 取某节点素材区的 @ 待选候选（listNodeMaterials 单点枚举：加入顺序 + 与图例/提交一致的 @tag 编号）。
  * 供提示词放大弹窗/面板编辑器输入 @ 时的待选框与胶囊渲染使用。
  */
-export function getNodeMaterialItems(nodeId: string): { tag: string; name?: string; uri: string; media: MatMedia }[] {
-	return listNodeMaterials(nodeId).map((e) => ({ tag: e.tag, name: e.name || undefined, uri: e.uri, media: e.media }));
+export function getNodeMaterialItems(nodeId: string): { key: string; tag: string; name?: string; uri: string; media: MatMedia; assetId?: string; usage?: "reference" | "identity" }[] {
+	return listNodeMaterials(nodeId).map((e) => ({ key: e.key, tag: e.tag, name: e.name || undefined, uri: e.uri, media: e.media, assetId: e.assetId, usage: e.usage }));
 }
 
-type MatRef = { id?: string; url?: string; name?: string };
+type MatRef = LegendRef;
 
 function setNodeInput(nodeId: string, mutate: (input: Record<string, MatRef[]>) => void): void {
 	const cs = useCanvasStore.getState();
@@ -204,7 +205,7 @@ export async function addNodeMaterialFiles(nodeId: string, files: File[]): Promi
 /** 从资产（资产助手/本地素材库）直接把一条垫图加到节点素材区（不新建节点）。 */
 export function addNodeMaterialFromAsset(
 	nodeId: string,
-	asset: { id?: string; url?: string; name?: string; media?: MatMedia },
+	asset: { id?: string; assetId?: string; url?: string; name?: string; media?: MatMedia; usage?: "reference" | "identity" },
 ): void {
 	const media = asset.media ?? "image";
 	const group = GROUP[media];
@@ -214,9 +215,20 @@ export function addNodeMaterialFromAsset(
 		const arr = input[group] || (input[group] = []);
 		// 去重：同一资产（同 id 或同 url）不重复加入本节点素材区
 		if (arr.some((m) => (asset.id && m.id === asset.id) || (url && m.url === url))) return;
-		arr.push({ id: asset.id, url, name: asset.name });
+		arr.push({ id: asset.id, assetId: asset.assetId, url, name: asset.name, usage: asset.usage });
 	});
 	syncNodeLegend(nodeId); // 添加素材同步加入图例前缀
+}
+
+/** 画布素材卡用途落到自加素材引用；上游连线无可写 ref，仍由节点索引字段兼容。 */
+export function setNodeMaterialUsage(nodeId: string, key: string, usage: "reference" | "identity"): void {
+	const entry = listNodeMaterials(nodeId).find((item) => item.key === key);
+	if (!entry?.self) return;
+	setNodeInput(nodeId, (input) => {
+		const arr = input[entry.self!.group];
+		const ref = arr?.[entry.self!.idx];
+		if (ref) arr[entry.self!.idx] = { ...ref, usage };
+	});
 }
 
 /**
@@ -225,14 +237,14 @@ export function addNodeMaterialFromAsset(
  */
 export function importAssetToNode(
 	nodeId: string,
-	cand: { assetId: string; blobId?: string; url?: string; name: string; uri: string },
+	cand: { assetId: string; blobId?: string; url?: string; name: string; uri: string; kind?: ShotMaterial["kind"] },
 ): { tag: string; mat: ShotMaterial } | null {
-	addNodeMaterialFromAsset(nodeId, { id: cand.blobId, url: cand.url, name: cand.name, media: "image" });
+	addNodeMaterialFromAsset(nodeId, { id: cand.blobId, assetId: cand.assetId, url: cand.url, name: cand.name, media: "image", usage: cand.kind === "character" ? "identity" : undefined });
 	const items = getNodeMaterialItems(nodeId);
 	const it = items.find((x) => x.media === "image" && x.uri === cand.uri)
 		?? items.find((x) => x.media === "image" && x.name === cand.name);
 	if (!it) return null;
-	return { tag: it.tag, mat: { id: it.tag, kind: "local", media: "image", name: it.name || cand.name, uri: it.uri || cand.uri } };
+	return { tag: it.tag, mat: { id: it.tag, kind: cand.kind ?? "local", media: "image", name: it.name || cand.name, uri: it.uri || cand.uri, assetId: cand.assetId, usage: it.usage } };
 }
 
 const MEDIA_OF_GROUP: Record<MatGroup, MatMedia> = { images: "image", videos: "video", audios: "audio" };

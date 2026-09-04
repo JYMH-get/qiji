@@ -18,7 +18,7 @@ import { useCanvasStore } from "@/store/canvasStore";
 import { dispatchCommand } from "@/command/dispatch";
 import { makeNode, NODE_W, NODE_H } from "@/canvas/nodeFactory";
 import { addNodeMaterialFromAsset } from "@/canvas/nodeMaterials";
-import { addShotMaterialFromAsset } from "@/lib/shotMaterialOps";
+import { addShotMaterialFromAsset, materialKindFromAssetCat } from "@/lib/shotMaterialOps";
 import { usePromptModalStore } from "@/store/promptModalStore";
 import { ensureDragThumb, ensureLocalOriginal, saveRemoteAsset } from "@/services/assetPersist";
 import { openLightbox } from "@/store/lightboxStore";
@@ -211,7 +211,7 @@ function startAssetDragToCanvas(e: React.MouseEvent, item: AssetItem): boolean {
 		const bayNodeId = el?.closest?.("[data-node-material-bay]")?.getAttribute("data-node-material-bay");
 		if (bayNodeId) {
 			removeTemp();
-			addNodeMaterialFromAsset(bayNodeId, { id: blob?.id, url: blob?.url || item.uri, name: item.name, media: "image" });
+			addNodeMaterialFromAsset(bayNodeId, { id: blob?.id, assetId: item.id, url: blob?.url || item.uri, name: item.name, media: "image", usage: materialKindFromAssetCat(item.cat) === "character" ? "identity" : undefined });
 			return;
 		}
 		// 落点在资产模式分镜「素材条」（放大弹窗内）→ 加垫图到该分镜
@@ -219,7 +219,7 @@ function startAssetDragToCanvas(e: React.MouseEvent, item: AssetItem): boolean {
 		if (stripKey) {
 			removeTemp();
 			const [epId, shotId] = stripKey.split(":");
-			if (epId && shotId) addShotMaterialFromAsset(epId, shotId, { assetId: blob?.id, uri: ref, name: item.name, media: "image" });
+			if (epId && shotId) addShotMaterialFromAsset(epId, shotId, { assetId: item.id || blob?.id, uri: ref, name: item.name, media: "image", kind: materialKindFromAssetCat(item.cat) });
 			return;
 		}
 		if (modalOpen) { removeTemp(); return; } // 弹窗模式未落到素材栏 → 不建节点

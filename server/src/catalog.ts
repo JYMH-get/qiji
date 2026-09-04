@@ -215,7 +215,7 @@ export function buildCatalog(agentId?: string): Catalog {
 			// 第165轮：家族被全局停用时剥除（客户端 familyName 回查不到会裸显 id，剥掉才归「其他」）
 			familyId: m.familyId && !disabledFams.has(m.familyId) ? m.familyId : undefined,
 			methods: m.methods, // 第131轮：生成「方法」（omni 全能参考 / frames 首尾帧），客户端渲染方法级下拉
-			officialAssets: m.officialAssets, // 第131轮：官方真人库（苏打水 gf 系）→ 客户端「真人图」多选
+			officialAssets: m.officialAssets, // 上游人像素材库：客户端按图片素材卡逐项选择
 			refVideoSecondsWeight: m.refVideoSecondsWeight, // 第140轮：参考视频按秒计费系数（供客户端预估；实扣以服务端为准）
 			matLimits: m.matLimits, // 第145轮：素材数量上限（管理端可调；服务端硬闸为准，客户端提交前同尺预检）
 			note: m.note, // 第166轮：模型备注（管理端可编辑，用户可见）——客户端悬浮积分图标显示；未设=客户端按 matLimits 派生默认文案

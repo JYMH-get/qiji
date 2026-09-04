@@ -2,30 +2,9 @@ import { useCanvasStore } from "@/store/canvasStore";
 import { commandBus } from "../commandBus";
 import { genId } from "@/lib/id";
 import { getPlugin } from "@/nodes/pluginRegistry";
-import { upstreamTextSources } from "@/canvas/nodeMaterials";
-import { placeUpstreamCapsules } from "@/lib/promptCompose";
-import { stripUpstreamCapsules } from "@/lib/upstreamText";
-import { PRESET_TAG_RE } from "@/lib/presetSchemes";
-import { stripLegend } from "@/lib/shotMaterials";
 import type { CanvasGroup, CanvasNode } from "@/types";
 
 const store = () => useCanvasStore.getState();
-
-/** 连入上游文本后，在目标节点提示词补「上游文本」胶囊（明示文本入参）——仅当该节点还没有用户正文时。 */
-function addUpstreamCapsuleToNode(nodeId: string): void {
-  const s = store();
-  const node = s.nodes[nodeId];
-  if (!node) return;
-  const cur = typeof node.data.params.prompt === "string" ? (node.data.params.prompt as string) : "";
-  const n = upstreamTextSources(nodeId).length;
-  if (n <= 0) return;
-  // 有用户正文（剥掉 图例+上游胶囊+预设胶囊后非空）→ 不动
-  const bare = stripLegend(stripUpstreamCapsules(cur)).replace(new RegExp(PRESET_TAG_RE.source, "g"), "").trim();
-  if (bare !== "") return;
-  const next = placeUpstreamCapsules(cur, n);
-  if (next === cur) return;
-  useCanvasStore.setState({ nodes: { ...s.nodes, [nodeId]: { ...node, data: { ...node.data, params: { ...node.data.params, prompt: next } } } } });
-}
 
 /** 计算一组节点的外接矩形 */
 function calcGroupBounds(nodes: { x: number; y: number; w: number; h: number }[]) {
@@ -50,16 +29,7 @@ export function registerConnectionHandlers(): void {
     if (c.type !== "connect") return;
     const s = store();
     s.addEdge(c.edge);
-    // 连入上游文本 → 明示：在目标节点补「上游文本」胶囊（取消旧的「自动匹配资产」，匹配改为手动点「匹配资产」）。
-    const target = s.nodes[c.edge.target];
-    const source = s.nodes[c.edge.source];
-    const tp = target ? getPlugin(target.type) : null;
-    const sp = source ? getPlugin(source.type) : null;
-    const isTextSrc = sp?.displayKind === "text" || sp?.displayKind === "chat" || sp?.nodeKind === "seed";
-    const tk = tp?.nodeKind ?? "";
-    if (target && isTextSrc && tk !== "seed" && tk !== "chat") {
-      addUpstreamCapsuleToNode(c.edge.target);
-    }
+    // 文本连线不再向目标 prompt 写入占位胶囊；编辑器和执行层按连线动态直映射。
   });
 
   commandBus.register("disconnect", (c) => {

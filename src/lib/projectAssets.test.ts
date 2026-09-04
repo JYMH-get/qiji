@@ -4,7 +4,7 @@
  *  反查出资产身份（主图/历史/变体图均认），图例才能写「@ImageN 是 资产名」并配对音色。
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { findProjectAssetByImage } from "./projectAssets";
+import { findProjectAssetByImage, isCharacterProjectAsset } from "./projectAssets";
 import { applyAssetMatchToImageNode } from "./assetMatch";
 import { useProjectStore } from "@/store/projectStore";
 import { useCanvasStore } from "@/store/canvasStore";
@@ -45,6 +45,13 @@ describe("findProjectAssetByImage", () => {
 	it("变体图命中用造型名；未命中返回 null", () => {
 		expect(findProjectAssetByImage(undefined, "C002")?.name).toBe("阿黛·战损");
 		expect(findProjectAssetByImage("asset://nobody.png")).toBeNull();
+	});
+
+	it("角色主资产与变体均识别为角色，供旧画布应用默认人像用途", () => {
+		expect(findProjectAssetByImage(undefined, "C002")?.kind).toBe("character");
+		expect(isCharacterProjectAsset("char-ad")).toBe(true);
+		expect(isCharacterProjectAsset("v1")).toBe(true);
+		expect(isCharacterProjectAsset("missing")).toBe(false);
 	});
 });
 

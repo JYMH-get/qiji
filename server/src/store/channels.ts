@@ -59,6 +59,7 @@ export const CH_AUTODL = "ch-autodl";
 export const CH_QIJICLOUD = "ch-qijicloud";
 export const CH_BYS = "ch-bys";
 export const CH_QIQI = "ch-qiqi";
+export const CH_OFFICIAL = "ch-official";
 // Yali（api.yaliai.com，第229轮）：⚠ 一把 Key 绑定一种「接口类型」→ 按接口类型分两个渠道，各填各的 Key
 export const CH_YALI_OPENAI = "ch-yali-openai";
 export const CH_YALI_GEMINI = "ch-yali-gemini";
@@ -182,6 +183,11 @@ const DEFAULT_CHANNELS: ChannelDef[] = [
 	{
 		id: CH_QIQI, name: "QiQi（pidoi）", baseUrl: "https://pidoi.com", apiKey: "",
 		enabled: true, note: "QiQi 模式视频渠道（2 款：qq933-sd2.0-720p·Seedance 官转 / qq933-sora-v3-pro·933 真人视频）；密钥填站点 sk-（控制台→令牌创建，Bearer 鉴权，留空走环境 QIQI_API_KEY）；⚠ Base URL 填根域不带 /v1（翻译器自拼 /v1/videos、/v1/videos/{id}、/v1/videos/{id}/content）；⚠ **同站两套请求形态**，翻译器按上游模型名分派（seedace-2.0-720p=content[] 多模态、支持首尾帧、不传 resolution；sora-v3-933-pro=扁平 image_url+reference_*、resolution 必填 720p、seconds 仅 15、不支持尾帧、素材总数≤12）——新建模型时上游名照抄站点清单（GET /v1/models 带 Bearer 可自助拉取），**逐字勿改**（seedace 少一个 n 是站方原样写法）；素材上限 9 图 + 3 音频 + 3 视频，⚠ Seedance 款用音频/视频参考时必须至少 1 张图（上游硬约束，已前置拒单）",
+		createdAt: "", updatedAt: "",
+	},
+	{
+		id: CH_OFFICIAL, name: "官方", baseUrl: "https://kwjm.com", apiKey: "",
+		enabled: true, note: "官方模式视频渠道（6 款 dreamina-seedance-2-0 / 2-5 系模型）；密钥填站点 API Key（Bearer 鉴权，留空走环境 OFFICIAL_API_KEY）；Base URL 填根域 https://kwjm.com 不带 /v1，翻译器自拼 /v1/videos/generations；2.0 系上限 9 图+3 视频+3 音频、4~15 秒且不可纯音频，2.5 系上限 30 图+10 视频+10 音频、4~30 秒且允许纯音频；上游模型名逐字照抄文档，价格暂为占位价，上线前须定真价；模型清单可用 GET /v1/models（需 Bearer）更新",
 		createdAt: "", updatedAt: "",
 	},
 	{

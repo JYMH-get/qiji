@@ -7,6 +7,9 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $buildStartedAt = Get-Date
+$embeddedNyxenUploadKey = 'sk_7f71fe98b2664f5fa1605e8a'
+$injectedEmbeddedNyxenKey = $false
+$scriptExitCode = 0
 
 function Assert-File {
     param(
@@ -43,6 +46,14 @@ try {
     Assert-File -Path (Join-Path $projectRoot 'src-tauri\resources\ffmpeg\ffmpeg.exe') -Label 'FFmpeg'
     Assert-File -Path (Join-Path $projectRoot 'src-tauri\resources\libtv\libtv.exe') -Label 'LibTV CLI'
     Assert-File -Path (Join-Path $projectRoot 'src-tauri\resources\dreamina\dreamina.exe') -Label '即梦 CLI'
+
+    if ([string]::IsNullOrWhiteSpace($env:NYXEN_UPLOAD_KEY)) {
+        $env:NYXEN_UPLOAD_KEY = $embeddedNyxenUploadKey
+        $injectedEmbeddedNyxenKey = $true
+        Write-Host '已自动注入稳定模式加速桶专项密钥。' -ForegroundColor Green
+    } else {
+        Write-Host '已从当前打包进程环境读取加速桶专项密钥。' -ForegroundColor Green
+    }
 
     $depthFiles = @(
         'public\depth-model\onnx-community\depth-anything-v2-small\config.json',
@@ -134,8 +145,15 @@ try {
     if (-not $NoOpen) {
         Start-Process explorer.exe -ArgumentList @($shareDir)
     }
-    exit 0
 } catch {
     Write-Host "`n打包失败：$($_.Exception.Message)" -ForegroundColor Red
-    exit 1
+    $scriptExitCode = 1
+} finally {
+    if ($injectedEmbeddedNyxenKey) {
+        Remove-Item Env:NYXEN_UPLOAD_KEY -ErrorAction SilentlyContinue
+        Write-Host '当前打包进程中的专项密钥已清除。' -ForegroundColor DarkGray
+    }
+    $embeddedNyxenUploadKey = $null
 }
+
+exit $scriptExitCode

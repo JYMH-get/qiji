@@ -40,6 +40,7 @@ import { submitAutodlVideo, pollAutodlVideo } from "./autodl.ts";
 import { submitQijicloudVideo, pollQijicloudVideo } from "./qijicloud.ts";
 import { submitBysVideo, pollBysVideo } from "./bys.ts";
 import { submitQiqiVideo, pollQiqiVideo } from "./qiqi.ts";
+import { submitOfficialVideo, pollOfficialVideo } from "./official.ts";
 import { isBuiltinProtocol, getProtocolDef, type CustomProtocol } from "../store/protocols.ts";
 import { runCustomText, runCustomImmediate, customSubmit, customPoll } from "./custom.ts";
 import { resolveContentType } from "./contentType.ts";
@@ -119,7 +120,7 @@ export async function rehostVideo(url: string, opts?: { prefix?: string; name?: 
 
 /** 视频驱动：不同渠道（简梦 / OpenAI 风格）各自的提交+轮询，由 createVideoPollingTask 复用轮询循环 */
 interface VideoDriver {
-	submit: (req: GenerateRequest, up: Upstream, onUpstream?: OnUpstream) => Promise<VideoSubmit>;
+	submit: (req: GenerateRequest, up: Upstream, onUpstream?: OnUpstream, onStage?: (progress: number, stageText: string) => void) => Promise<VideoSubmit>;
 	poll: (up: Upstream, taskId: string, onUpstream?: OnUpstream) => Promise<VideoPoll>;
 }
 
@@ -154,6 +155,8 @@ const VIDEO_DRIVERS: Record<string, VideoDriver> = {
 	"bys-video": { submit: submitBysVideo, poll: pollBysVideo },
 	// QiQi（pidoi.com·Seedance 官转，第255轮）：提交 /v1/videos、查询 /v1/videos/{task_id}
 	"qiqi-video": { submit: submitQiqiVideo, poll: pollQiqiVideo },
+	// 官方（kwjm.com·dreamina Seedance 2.0/2.5）：提交/查询均为 /v1/videos/generations
+	"official-video": { submit: submitOfficialVideo, poll: pollOfficialVideo },
 };
 
 /** 内置协议轮询间隔覆盖（缺省 8s）。Aivide 文档 §4.4 明确要求 10-15s、勿高频轮询 → 12s；
@@ -266,7 +269,9 @@ function createVideoPollingTask(req: GenerateRequest, up: Upstream, protocol: st
 	const rec = createRunningTask(capability, req.clientTaskId, logId);
 	const deadlineMs = pollOpts?.timeoutMs && pollOpts.timeoutMs > 0 ? pollOpts.timeoutMs : VIDEO_DEADLINE_MS;
 	(async () => {
-		const sub = await driver.submit(req, up, onUpstream);
+		const sub = await driver.submit(req, up, onUpstream, (progress, stageText) => {
+			setTaskProgress(rec.taskId, progress, { stageText });
+		});
 		if (!sub.ok) {
 			failTask(rec.taskId, sub.error);
 			if (logId) finishLog(logId, { status: "failed", error: sub.error, taskId: rec.taskId });
@@ -510,6 +515,7 @@ export async function dispatchGenerate(
 		case "qijicloud-comfy":
 		case "bys-video":
 		case "qiqi-video":
+		case "official-video":
 			return createVideoPollingTask(req, up, model.protocol, VIDEO_DRIVERS[model.protocol], logId, onUpstream,
 				"video", { intervalMs: BUILTIN_POLL_INTERVALS[model.protocol] });
 		case "jmz-image":

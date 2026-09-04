@@ -10,7 +10,7 @@
  *   - 左列：提示词工作区——**两行头照抄表格模式**（Frame161195 分镜行 1768-1850 行同构）：
  *     第一行 = 提示词页签（同源胶囊/故事板|视频切换）+ ▦预设方案 + 补镜头（重排编号走 lib/shotReindex，
  *     与表格模式/inferRun 共用同一纯函数）；
- *     第二行 = **仅本分镜**的视频参数 mini selects（方法→时长/比例/分辨率→真人图→行尾放大按钮）
+ *     第二行 = **仅本分镜**的视频参数 mini selects（方法→时长/比例/分辨率→行尾放大按钮）
  *     ——写 shot.overrides/durationSec，与提交层 shotGenActions.genShotVideo 读的字段一一对应
  *     （method/aspect/resolution/officialAssetIndexes + durationSec）；
  *     ⚠ **第251轮：模型选择只在右栏属性页**（本行原有的 家族/线路/模型 三下拉与右栏重复且冲突，
@@ -39,7 +39,6 @@ import { reindexShots } from "@/lib/shotReindex";
 import { clampDuration } from "@/lib/genParams";
 import { METHOD_LABELS, clampMethod, clampToOptions, clampDurationTo } from "@/lib/videoMethods";
 import { modelMethodsForKey, videoReqOptionsForKey } from "@/lib/modelOptions";
-import { mediaOf } from "@/lib/shotMaterials";
 import { useEffectiveModelKey } from "@/components/ModelPicker";
 import type { StoryboardShot } from "@/services/projectFile";
 import { useWorkbenchTarget } from "./useRtcSelected";
@@ -220,8 +219,6 @@ function WorkbenchBody({ episodeId, shotId, segId, imageSlot, isMedia }: { episo
 	const maxDuration = ms.maxDuration ?? 15;
 	const aspect = ms.aspect ?? "16:9";
 	const resolution = ms.resolution ?? "720p";
-	const shotImgCount = Math.min(9, shot.materials.filter((m) => { const md = mediaOf(m); return md !== "video" && md !== "audio"; }).length);
-	const officialSel = new Set((ov.officialAssetIndexes ?? []).filter((i) => i >= 0 && i < shotImgCount));
 	// 单镜覆盖 setter（与 Frame161195.setShotOverride 同尺）
 	const setShotOverride = (patch: Partial<NonNullable<StoryboardShot["overrides"]>>) =>
 		update({ overrides: { ...(shot.overrides || {}), ...patch } });
@@ -267,7 +264,7 @@ function WorkbenchBody({ episodeId, shotId, segId, imageSlot, isMedia }: { episo
 							匹配资产
 						</button>
 					</div>
-					<RtcMaterialStrip episodeId={episodeId} shotId={shotId} />
+					<RtcMaterialStrip episodeId={episodeId} shotId={shotId} identityEnabled={!!curCatModel?.officialAssets} />
 				</div>
 
 				{/* 提示词大编辑区（ShotPromptField：@/#/预设/放大弹窗全套；两行头经 renderHeader 照表格模式排布） */}
@@ -300,7 +297,7 @@ function WorkbenchBody({ episodeId, shotId, segId, imageSlot, isMedia }: { episo
 									onClick={toggleSupplement}
 									style={{ padding: "3px 8px", fontSize: 11, cursor: "pointer", borderRadius: 6, border: shot.isSupplement ? "1px solid rgba(245,196,81,0.7)" : "1px solid rgba(255,255,255,0.18)", background: shot.isSupplement ? "rgba(245,196,81,0.18)" : "transparent", color: shot.isSupplement ? "#f5c451" : "rgba(255,255,255,0.7)" }}>补镜头</button>
 							</div>
-							{/* 第二行：仅本分镜的视频参数（方法→时长/比例/分辨率→真人图→放大），
+							{/* 第二行：仅本分镜的视频参数（方法→时长/比例/分辨率→放大），
 							    写 shot.overrides/durationSec = 提交层 genShotVideo 读的字段。
 							    ⚠ 第251轮用户定稿：**模型选择只在右栏属性栏**——本行原来的 家族/线路/模型
 							    三个下拉与右栏重复且冲突，已删除（overrides.videoModelKey 的**读取链保留**，存量数据仍生效）。 */}
@@ -319,22 +316,6 @@ function WorkbenchBody({ episodeId, shotId, segId, imageSlot, isMedia }: { episo
 								<select title="视频分辨率（仅本分镜）" value={clampToOptions(shot.overrides?.resolution || resolution, curReq.resolutions)} onChange={(e) => setShotOverride({ resolution: e.target.value })} style={miniSel}>
 									{curReq.resolutions.map((r) => <option key={r} value={r} style={miniOpt}>{r}</option>)}
 								</select>
-								{curCatModel?.officialAssets && curMethod === "omni" && shotImgCount > 0 && (
-									<span title="真人图标记：点选素材区第 N 张图片为真人图像（官方真人库注册用；默认不选，仅本分镜）" style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, color: "rgba(255,255,255,0.55)" }}>
-										真人图
-										{Array.from({ length: shotImgCount }, (_, i) => (
-											<button key={i}
-												onClick={() => {
-													const next = new Set(officialSel);
-													if (next.has(i)) next.delete(i); else next.add(i);
-													setShotOverride({ officialAssetIndexes: [...next].sort((a, b) => a - b) });
-												}}
-												style={{ padding: "1px 6px", fontSize: 10, cursor: "pointer", borderRadius: 5, border: officialSel.has(i) ? "1px solid rgba(139,124,247,0.8)" : "1px solid rgba(255,255,255,0.18)", background: officialSel.has(i) ? "rgba(139,124,247,0.25)" : "transparent", color: officialSel.has(i) ? "#c9befd" : "rgba(255,255,255,0.6)" }}>
-												{i + 1}
-											</button>
-										))}
-									</span>
-								)}
 								{/* 放大编辑当前栏提示词，行尾（照表格模式 marginLeft:auto 位） */}
 								<span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center" }}>{expandBtn}</span>
 							</div>

@@ -1021,7 +1021,7 @@ function delChannel(id,name){
 }
 
 /* ════════════════ 模型管理 ════════════════ */
-const PROTOCOLS = ["echo","openai-chat","anthropic-messages","openai-image","gemini-image","jianmeng-video","openai-video","volc-mediakit","sudashui-video","aistars-video","aistars-image","huaying-video","dimensio-video","aivide-video","jianmengp-video","musem-video","jmz-video","jmz-image","jmt-video","jmf-video","overseas-video","suanli-video","jmh-image","jmh-video","skylee-image","yali-image","congge-image","congge-video","autodl-video","qijicloud-comfy","bys-video","qiqi-video","stub"];
+const PROTOCOLS = ["echo","openai-chat","anthropic-messages","openai-image","gemini-image","jianmeng-video","openai-video","volc-mediakit","sudashui-video","aistars-video","aistars-image","huaying-video","dimensio-video","aivide-video","jianmengp-video","musem-video","jmz-video","jmz-image","jmt-video","jmf-video","overseas-video","suanli-video","jmh-image","jmh-video","skylee-image","yali-image","congge-image","congge-video","autodl-video","qijicloud-comfy","bys-video","qiqi-video","official-video","stub"];
 const CAPS = ["text","image","video","audio","video-enhance","video-erase"];
 /* ── 模式（第130轮）：动态注册表，模型归属 + 用户/渠道商开关。全局缓存 MODES（null=未加载） ── */
 let MODES=null, mGroup='channel', mChip='on'; // mChip=模型状态筛选（on=启用/off=已禁用/all=全部）；默认只看启用——禁用的收进「已禁用」页签，防列表过长

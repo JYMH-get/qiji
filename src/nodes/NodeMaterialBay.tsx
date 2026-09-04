@@ -8,6 +8,7 @@ import { mediaFilesFromDataTransfer } from "@/lib/clipboardMedia";
 import { addNodeMaterialFiles, removeNodeMaterial, removeUpstreamMaterial, listNodeMaterials, type NodeMatEntry } from "@/canvas/nodeMaterials";
 import { usePendingUploads, uploadKeys } from "@/store/uploadStore";
 import { useDisplayUri } from "@/nodes/ResultView";
+import { IdentityAssetToggle } from "@/components/IdentityAssetToggle";
 
 /** 右键取消垫图是快捷操作：拦住浏览器/画布菜单后立即执行，不再追加确认步骤。 */
 export function removeMaterialOnContextMenu(
@@ -24,7 +25,7 @@ export function removeMaterialOnContextMenu(
  * 反查换源）——与 ResultView/素材库 LibTile 同一把尺，不再裸用 it.uri（裸用=垫图黑块「无法播放」观感）。
  * 双击放大也用解析后的 uri（灯箱同样要能播）。
  */
-function MatTile({ it, doRemove }: { it: NodeMatEntry; doRemove: (() => void) | null }) {
+function MatTile({ it, doRemove, identity }: { it: NodeMatEntry; doRemove: (() => void) | null; identity?: { active: boolean; toggle: () => void } }) {
 	const uri = useDisplayUri(it.uri || it.url);
 	return (
 		<div
@@ -50,6 +51,7 @@ function MatTile({ it, doRemove }: { it: NodeMatEntry; doRemove: (() => void) | 
 					className="absolute top-0 right-0 hidden group-hover:flex h-4 w-4 items-center justify-center text-[10px] leading-none text-white bg-black/60 rounded-bl"
 				>✕</button>
 			)}
+			{identity && <IdentityAssetToggle active={identity.active} onToggle={identity.toggle} />}
 		</div>
 	);
 }
@@ -61,7 +63,19 @@ function MatTile({ it, doRemove }: { it: NodeMatEntry; doRemove: (() => void) | 
  * 添加：＋打开本地文件资源管理器 / 把本地文件拖入 / 在提示词框粘贴(由面板转发)。
  * 显示走本地 uri(CSP 安全)，请求走公网 url(由 pluginRegistry 按同一枚举合并)。
  */
-export function NodeMaterialBay({ nodeId, rightAction }: { nodeId: string; rightAction?: React.ReactNode }) {
+export function NodeMaterialBay({
+	nodeId,
+	rightAction,
+	identityEnabled = false,
+	identityIndexes = [],
+	onToggleIdentity,
+}: {
+	nodeId: string;
+	rightAction?: React.ReactNode;
+	identityEnabled?: boolean;
+	identityIndexes?: number[];
+	onToggleIdentity?: (imageIndex: number) => void;
+}) {
 	const node = useCanvasStore((s) => s.nodes[nodeId]);
 	// 订阅枚举的全部数据源（listNodeMaterials 读 getState()，这些订阅保证变更时重渲染）
 	useCanvasStore((s) => s.edges);
@@ -89,7 +103,11 @@ export function NodeMaterialBay({ nodeId, rightAction }: { nodeId: string; right
 					: it.edgeId
 						? () => removeUpstreamMaterial(nodeId, it.edgeId!)
 						: null;
-				return <MatTile key={it.key} it={it} doRemove={doRemove} />;
+				const imageIndex = it.media === "image" ? it.n - 1 : -1;
+				const identity = identityEnabled && imageIndex >= 0 && onToggleIdentity
+					? { active: identityIndexes.includes(imageIndex), toggle: () => onToggleIdentity(imageIndex) }
+					: undefined;
+				return <MatTile key={it.key} it={it} doRemove={doRemove} identity={identity} />;
 			})}
 			{/* 在途上传占位：转圈，表示正在传 OSS */}
 			{Array.from({ length: uploading }).map((_, i) => (

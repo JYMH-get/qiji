@@ -6,6 +6,7 @@ import {
 	buildUpstreamCapsuleBlock,
 	setUpstreamCapsules,
 	expandUpstreamCapsules,
+	mapUpstreamText,
 } from "@/lib/upstreamText";
 
 describe("upstreamText（逐个编号胶囊）", () => {
@@ -48,5 +49,23 @@ describe("upstreamText（逐个编号胶囊）", () => {
 
 	it("无胶囊时 expand 原样返回", () => {
 		expect(expandUpstreamCapsules("普通提示词", ["上游"])).toBe("普通提示词");
+	});
+
+	it("无自有正文时直接映射上游全文", () => {
+		expect(mapUpstreamText("", ["分镜原文", "追加说明"])).toBe("分镜原文\n\n追加说明");
+	});
+
+	it("上游全文映射在图例和前置预设之后", () => {
+		expect(mapUpstreamText("【素材图例】@Image1 是 赵云；\n\n【预设:preset.pfx】", ["骑马入城"])).toBe(
+			"【素材图例】@Image1 是 赵云；\n\n【预设:preset.pfx】\n骑马入城",
+		);
+	});
+
+	it("目标节点已有自有正文时不自动混入上游", () => {
+		expect(mapUpstreamText("用户改写", ["上游原文"])).toBe("用户改写");
+	});
+
+	it("旧项目的上游胶囊在原位兼容展开", () => {
+		expect(mapUpstreamText("前缀\n【上游文本1】\n后缀", ["旧链路原文"])).toBe("前缀\n旧链路原文\n后缀");
 	});
 });

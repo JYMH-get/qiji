@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { useProjectStore } from "@/store/projectStore";
 import type { ShotMaterial, StoryboardShot } from "@/services/projectFile";
 import { buildLegend } from "@/lib/shotMaterials";
-import { reorderShotMaterial, removeShotMaterial, addShotMaterialFromAsset, resyncShotLegend } from "@/lib/shotMaterialOps";
+import { reorderShotMaterial, removeShotMaterial, addShotMaterialFromAsset, resyncShotLegend, setShotMaterialIdentity, identityIndexesForMaterials, isIdentityShotMaterial } from "@/lib/shotMaterialOps";
 
 /**
  * 分镜素材增删/重排的图例一致性（「(孟金珠) 是 贺长安」错位事故的回归锁）：
@@ -86,7 +86,7 @@ describe("removeShotMaterial / addShotMaterialFromAsset — 表格页增删收�
         expect(s.videoPrompt).toContain("@Image2 说话");
     });
 
-    it("添加保留 kind/voiceForAssetId（跨分镜复制随行），并同步补图例；同 assetId 去重", () => {
+	it("添加保留 kind/voiceForAssetId（跨分镜复制随行），并同步补图例；同 assetId 去重", () => {
         const mats = [mat("ma", "甲")];
         seed({ materials: mats, videoPrompt: `${buildLegend(mats, false)}\n\n正文` });
         addShotMaterialFromAsset("ep1", "sh1", { assetId: "ent-vc", uri: "asset://vc.mp3", name: "甲的声音", media: "audio", kind: "local", voiceForAssetId: "ent-ma" });
@@ -101,6 +101,15 @@ describe("removeShotMaterial / addShotMaterialFromAsset — 表格页增删收�
         expect(s.materials).toHaveLength(2);
     });
 
+	it("角色图片新增时默认人像，场景仍为普通参考，显式取消状态可跨分镜保留", () => {
+		seed({ materials: [] });
+		addShotMaterialFromAsset("ep1", "sh1", { assetId: "char-1", uri: "asset://char.png", name: "角色", media: "image", kind: "character" });
+		addShotMaterialFromAsset("ep1", "sh1", { assetId: "scene-1", uri: "asset://scene.png", name: "场景", media: "image", kind: "scene" });
+		expect(shot().materials.map((m) => m.usage)).toEqual(["identity", undefined]);
+		addShotMaterialFromAsset("ep1", "sh1", { assetId: "char-2", uri: "asset://char2.png", name: "已取消角色", media: "image", kind: "character", usage: "reference" });
+		expect(shot().materials[2]?.usage).toBe("reference");
+	});
+
     it("resyncShotLegend：调用方已写入素材（如上传占位）后按当前素材刷新图例", () => {
         const mats = [mat("ma", "甲"), mat("up1", "上传中", "")];
         seed({ materials: mats, videoPrompt: "正文" });
@@ -108,4 +117,31 @@ describe("removeShotMaterial / addShotMaterialFromAsset — 表格页增删收�
         // 占位素材（uri 空）同样占 @ 编号 → 图例如实给号（提交层对空 uri 明确报错，不静默丢）
         expect(shot().videoPrompt).toContain("【素材图例】@Image1 是 甲；@Image2 是 上传中；");
     });
+});
+
+describe("人像素材标记 — 绑定素材身份而非易错位索引", () => {
+	it("未写用途的角色默认人像；右下角取消后显式保存 reference，不会再次自动勾回", () => {
+		seed({ materials: [mat("ma", "甲"), mat("ms", "场景", undefined, { kind: "scene" })] });
+		expect(isIdentityShotMaterial(shot().materials[0], 0)).toBe(true);
+		expect(isIdentityShotMaterial(shot().materials[1], 1)).toBe(false);
+		setShotMaterialIdentity("ep1", "sh1", "ma", false);
+		expect(shot().materials.map((m) => m.usage)).toEqual(["reference", "reference"]);
+		expect(shot().overrides?.officialAssetIndexes).toEqual([]);
+		setShotMaterialIdentity("ep1", "sh1", "ms", true);
+		expect(shot().materials.map((m) => m.usage)).toEqual(["reference", "identity"]);
+		expect(shot().overrides?.officialAssetIndexes).toEqual([1]);
+	});
+
+	it("重排和删除后标记跟着同一素材，兼容索引同步刷新", () => {
+		seed({ materials: [mat("ma", "甲", undefined, { kind: "scene" }), mat("mb", "乙", undefined, { kind: "scene" }), mat("mc", "丙", undefined, { kind: "scene" })], overrides: { officialAssetIndexes: [1] } });
+		reorderShotMaterial("ep1", "sh1", "mb", "ma");
+		expect(shot().materials.map((m) => [m.name, m.usage])).toEqual([
+			["乙", "identity"], ["甲", "reference"], ["丙", "reference"],
+		]);
+		expect(identityIndexesForMaterials(shot().materials)).toEqual([0]);
+		expect(shot().overrides?.officialAssetIndexes).toEqual([0]);
+		removeShotMaterial("ep1", "sh1", "ma");
+		expect(shot().materials.find((m) => m.name === "乙")?.usage).toBe("identity");
+		expect(shot().overrides?.officialAssetIndexes).toEqual([0]);
+	});
 });

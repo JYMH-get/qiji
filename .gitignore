@@ -56,5 +56,8 @@ ops-reports/
 # LightRAG 本地 venv（不入库）
 .venv-lightrag/
 
+# Graphify 本地知识图谱与中间缓存（可按源代码重新生成，不入库）
+graphify-out/
+
 # 第三方 skills 由 npx skills 管理，不入库（清单见 skills-lock.json / ops-reports/skills-plan.md）
 .agents/

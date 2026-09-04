@@ -663,7 +663,7 @@ function renderUsers(){
   renderUserBatchbar();
 }
 const dispUName = (u) => (u.name && u.name.trim()) ? u.name : (u.account || "（未命名）");
-/* ── 用户批量选择与操作（P2b：启停 + 模式开关；删除/解绑随激活码机制移除）── */
+/* ── 用户批量选择与操作（仅限名下用户）── */
 function toggleSel(id, on){ if(on) uSel.add(id); else uSel.delete(id); const sa=$("#u_selall"); if(sa) sa.checked = U_SHOWN.length>0 && U_SHOWN.every(x=>uSel.has(x)); renderUserBatchbar(); }
 function toggleSelAll(on){ if(on) U_SHOWN.forEach(id=>uSel.add(id)); else U_SHOWN.forEach(id=>uSel.delete(id)); renderUsers(); }
 function renderUserBatchbar(){
@@ -680,6 +680,7 @@ function renderUserBatchbar(){
     <button class="sm" onclick="batchSetMode(true)">开启</button>
     <button class="sm" onclick="batchSetMode(false)">关闭</button>
     <span class="sp" style="flex:1"></span>
+    <button class="sm danger" onclick="batchDeleteUsers()">删除用户</button>
     <button class="sm ghost" onclick="uSel=new Set();renderUsers()">取消选择</button>`;
 }
 async function batchOp(body, okTpl){
@@ -694,6 +695,9 @@ function batchSetMode(on){
   const v = ($("#u_batchmode")||{}).value; if(!v) return;
   const k = v.split(":")[1];
   batchOp({op:"setFeature",feature:k,value:on}, (on?"已开启":"已关闭")+" {n} 个用户的该模式（心跳 ≤30s 生效）");
+}
+function batchDeleteUsers(){
+  confirmDo({ title:"批量删除用户", text:`即将删除选中 <b>${uSel.size}</b> 个名下用户，其账号立即失效、客户端掉线；请求记录保留。此操作不可撤销。`, okLabel:"确认删除", onOk:()=>batchOp({op:"delete"},"已删除 {n} 个用户") });
 }
 function setUSort(key){
   if (uSort.key!==key) uSort = { key, dir: 1 };
@@ -745,7 +749,15 @@ function renderUserDrawer(){
         <div class="frow"><label>最近活跃</label><span class="val mut">${u.lastSeenAt?new Date(u.lastSeenAt).toLocaleString():"—"}</span></div>
         <div class="frow"><label>请求记录</label><button class="sm" onclick="openUserLogs('${u.id}','${esc(dispUName(u))}')">查看该用户请求记录</button></div>
       </div>
+      <div class="dangerzone"><span class="tx">删除用户将立即使其账号失效；请求记录保留。</span><button class="danger sm" onclick="deleteOwnedUser('${u.id}')">删除用户</button></div>
     </div>`;
+}
+function deleteOwnedUser(id){
+  const u=USERS.find(x=>x.id===id); if(!u) return;
+  confirmDo({ title:"删除用户", text:`即将删除名下用户「<b>${esc(dispUName(u))}</b>」，其账号立即失效、客户端掉线；请求记录保留。此操作不可撤销。`, okLabel:"确认删除", onOk:async()=>{
+    try { await api("/agent-api/users/"+id,{method:"DELETE"}); toast("用户已删除"); closeDrawer(); await loadUsers(); }
+    catch(e){ toast(e.message,"bad"); }
+  }});
 }
 
 /* ════════════════ 兑换码 ════════════════ */

@@ -15,11 +15,7 @@ import { useLibraryStore } from "@/store/libraryStore";
 import { useCatalogStore } from "@/store/catalogStore";
 import { useSettingsStore } from "@/store/settingsStore";
 import { listPresetSchemes } from "@/lib/presetSchemes";
-import { hasUpstreamCapsule, stripUpstreamCapsules } from "@/lib/upstreamText";
-import { placeUpstreamCapsules } from "@/lib/promptCompose";
-import { PRESET_TAG_RE } from "@/lib/presetSchemes";
-import { stripLegend } from "@/lib/shotMaterials";
-import { getPlugin } from "@/nodes/pluginRegistry";
+import { mapUpstreamText } from "@/lib/upstreamText";
 import type { ShotMaterial } from "@/services/projectFile";
 
 export interface NodePromptEditorHandle {
@@ -40,17 +36,13 @@ export const NodePromptEditor = forwardRef<NodePromptEditorHandle, {
 	const editorRef = useRef<PromptMentionHandle>(null);
 	const [mentionPos, setMentionPos] = useState<{ x: number; y: number } | null>(null);
 	const [importPos, setImportPos] = useState<{ x: number; y: number } | null>(null);
-	const onChangeRef = useRef(onChange);
-	onChangeRef.current = onChange;
 
 	// 功能栏「预设方案」按钮经此把预设胶囊插到光标处（编辑器 ref 在本组件内）
 	useImperativeHandle(ref, () => ({
 		insertPreset: (id: string, name: string) => editorRef.current?.insertPreset(id, name),
 	}), []);
 
-	// 上游文本明示：本节点若「有上游文本」且「当前没有正文（空/仅图例）」——即会被静默当作输入的情形——
-	// 自动在提示词前插入逐个编号的「上游文本N」胶囊（每个上游文本源一枚），让提交内容明示；
-	// 上游文本增减则同步胶囊数量、消失则移除（不改动有正文节点的语义）。
+	// 上游文本直映射：签名包含全文，确保同长改字也会刷新编辑器。
 	const upstreamTextSig = useCanvasStore((s) =>
 		Object.values(s.edges)
 			.filter((e) => e.target === nodeId)
@@ -58,32 +50,15 @@ export const NodePromptEditor = forwardRef<NodePromptEditorHandle, {
 				const up = s.nodes[e.source];
 				const t = (typeof up?.data.resultText === "string" && up.data.resultText)
 					|| (typeof up?.data.params.prompt === "string" ? up.data.params.prompt : "");
-				return `${e.source}:${String(t).length}`;
+				return `${e.source}:${String(t)}`;
 			})
 			.sort()
 			.join("|"),
 	);
-	useEffect(() => {
-		const node = useCanvasStore.getState().nodes[nodeId];
-		if (!node) return;
-		// 种子=文本源本身不消费上游文本；对话=自带串联记忆上下文（buildChatPrompt），均不加胶囊
-		const kind = getPlugin(node.type)?.nodeKind ?? "";
-		if (kind === "seed" || kind === "chat") return;
-		const cur = typeof node.data.params.prompt === "string" ? node.data.params.prompt : "";
-		const n = upstreamTextSources(nodeId).length;
-		// 「无用户正文」= 剥掉 图例 + 上游胶囊 + 预设胶囊 后为空（只有这些自动配置项时才补上游胶囊）
-		const bareBody = stripLegend(stripUpstreamCapsules(cur)).replace(new RegExp(PRESET_TAG_RE.source, "g"), "").trim();
-		if (n > 0) {
-			// 把既有的隐形上游文本行为显性化（有用户正文的节点不动）；上游胶囊落在 图例+前缀预设 之后
-			if (bareBody === "") {
-				const next = placeUpstreamCapsules(cur, n); // 幂等：胶囊集恰好为 1..n，规范位置
-				if (next !== cur) onChangeRef.current(next);
-			}
-		} else if (hasUpstreamCapsule(cur)) {
-			onChangeRef.current(stripUpstreamCapsules(cur));
-		}
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [nodeId, upstreamTextSig]);
+	const displayedPrompt = useMemo(
+		() => mapUpstreamText(prompt, upstreamTextSources(nodeId).map((source) => source.text)),
+		[nodeId, prompt, upstreamTextSig],
+	);
 
 	// 出图预设方案（随 catalog 版本 + 自定义预设变化刷新）——仅供 PromptMentionEditor 把 【预设:id】 渲染成 pill；插入按钮在功能栏
 	const catalogVer = useCatalogStore((s) => s.catalog?.version);
@@ -134,7 +109,7 @@ export const NodePromptEditor = forwardRef<NodePromptEditorHandle, {
 		<div style={{ position: "relative", minWidth: 0, ...style }}>
 			<PromptMentionEditor
 				ref={editorRef}
-				value={prompt}
+				value={displayedPrompt}
 				materials={materials}
 				presets={presetOptions}
 				onChange={onChange}

@@ -9,18 +9,27 @@ import { useProjectStore } from "@/store/projectStore";
 import { openLightbox } from "@/store/lightboxStore";
 import { materialTags, mediaOf, TAG_BADGE, BADGE_BG } from "@/lib/shotMaterials";
 import { addLocalShotMaterials, removeShotMaterial } from "@/lib/shotMaterialOps";
+import { isIdentityShotMaterial, setShotMaterialIdentity } from "@/lib/shotMaterialOps";
 import { usePendingUploads, uploadKeys } from "@/store/uploadStore";
+import { IdentityAssetToggle } from "@/components/IdentityAssetToggle";
+import { useEffectiveModelKey } from "@/components/ModelPicker";
+import { useCatalogStore } from "@/store/catalogStore";
 
 export function ShotMaterialStrip({
 	episodeId,
 	shotId,
+	identityEnabled,
 }: {
 	episodeId: string;
 	shotId: string;
+	identityEnabled?: boolean;
 }) {
-	const materials = useProjectStore(
-		(s) => s.episodes.find((e) => e.id === episodeId)?.shots.find((x) => x.id === shotId)?.materials ?? [],
-	);
+	const shot = useProjectStore((s) => s.episodes.find((e) => e.id === episodeId)?.shots.find((x) => x.id === shotId));
+	const materials = shot?.materials ?? [];
+	const projectVideoModel = useEffectiveModelKey("video");
+	const activeVideoModel = shot?.overrides?.videoModelKey || projectVideoModel;
+	const supportsIdentity = useCatalogStore((s) => !!s.catalog?.models.find((m) => m.id === activeVideoModel)?.officialAssets);
+	const showIdentity = identityEnabled ?? supportsIdentity;
 	const fileRef = useRef<HTMLInputElement>(null);
 	const tags = materialTags(materials);
 	const uploading = usePendingUploads(uploadKeys.shot(episodeId, shotId)); // 在途上传数 → 占位转圈
@@ -30,6 +39,8 @@ export function ShotMaterialStrip({
 			{materials.map((m) => {
 				const md = mediaOf(m);
 				const num = tags[m.id]?.match(/\d+/)?.[0] ?? "";
+				const imageIndex = md === "image" ? materials.filter((x) => mediaOf(x) === "image").findIndex((x) => x.id === m.id) : -1;
+				const identity = imageIndex >= 0 && isIdentityShotMaterial(m, imageIndex, shot?.overrides?.officialAssetIndexes);
 				return (
 					<div
 						key={m.id}
@@ -56,6 +67,9 @@ export function ShotMaterialStrip({
 							className="hidden group-hover:flex"
 							style={{ position: "absolute", top: 0, right: 0, width: 15, height: 15, alignItems: "center", justifyContent: "center", fontSize: 10, color: "#fff", background: "rgba(0,0,0,0.6)", borderBottomLeftRadius: 4, border: "none", cursor: "pointer", lineHeight: 1 }}
 						>✕</button>
+						{showIdentity && md === "image" && (
+							<IdentityAssetToggle active={identity} onToggle={() => setShotMaterialIdentity(episodeId, shotId, m.id, !identity)} />
+						)}
 					</div>
 				);
 			})}

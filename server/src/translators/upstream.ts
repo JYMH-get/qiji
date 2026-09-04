@@ -70,9 +70,11 @@ export function resolveUpstream(m: ModelDef, req?: GenerateRequest): Upstream {
 																		? { baseUrl: config.qijicloud.baseUrl, apiKey: config.qijicloud.apiKey }
 																	: m.protocol === "bys-video"
 																		? { baseUrl: config.bys.baseUrl, apiKey: config.bys.apiKey }
-																	: m.protocol === "qiqi-video"
-																		? { baseUrl: config.qiqi.baseUrl, apiKey: config.qiqi.apiKey }
-																	: { baseUrl: config.gateway.baseUrl, apiKey: config.gateway.apiKey };
+																				: m.protocol === "qiqi-video"
+																					? { baseUrl: config.qiqi.baseUrl, apiKey: config.qiqi.apiKey }
+																				: m.protocol === "official-video"
+																					? { baseUrl: config.official.baseUrl, apiKey: config.official.apiKey }
+																				: { baseUrl: config.gateway.baseUrl, apiKey: config.gateway.apiKey };
 
 	const baseUrl = m.baseUrl || ch?.baseUrl || fallback.baseUrl;
 	const apiKey = m.apiKey || ch?.apiKey || fallback.apiKey;

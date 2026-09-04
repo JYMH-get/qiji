@@ -62,7 +62,8 @@ const now = (): string => new Date().toISOString();
 //   （Seedance 2.0/2.5 多线、MiniMax H3、Kling 3.0 Turbo、Gemini Omni Flash）归入。
 // v24（第255轮）：新增「QiQi」（qiqi，pidoi.com·Seedance 官转 API）——Seedance 2.0 720p 单款
 //   （content[] 多模态：9 图 + 3 音频 + 3 视频参考、小写 @imageN 引用、首尾帧 role）归入。
-const MODES_SEED_VERSION = 24;
+// v25（2026-09-03）：新增「官方」（official）——dreamina Seedance 2.0 / 2.5 六款模型归入。
+const MODES_SEED_VERSION = 25;
 const DEFAULT_MODES: Mode[] = [
 	{ id: "qiji", name: "Qiji 视频", order: 1, createdAt: now(), updatedAt: now() },
 	{ id: "qiji-img", name: "Qiji 图片", order: 2, createdAt: now(), updatedAt: now() },
@@ -87,6 +88,7 @@ const DEFAULT_MODES: Mode[] = [
 	{ id: "qijicloud", name: "奇迹云", order: 23, createdAt: now(), updatedAt: now() },
 	{ id: "bys", name: "BYS", order: 24, createdAt: now(), updatedAt: now() },
 	{ id: "qiqi", name: "QiQi", order: 25, createdAt: now(), updatedAt: now() },
+	{ id: "official", name: "官方", order: 26, createdAt: now(), updatedAt: now() },
 ];
 
 const BUILTIN_MODE_IDS = new Set(DEFAULT_MODES.map((m) => m.id));

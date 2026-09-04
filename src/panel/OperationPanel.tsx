@@ -7,7 +7,8 @@ import { useCanvasStore } from "@/store/canvasStore";
 import { ParamControl } from "./ParamControls";
 import { NodePromptEditor, type NodePromptEditorHandle } from "./NodePromptEditor";
 import { NodeMaterialBay } from "@/nodes/NodeMaterialBay";
-import { getNodeMaterialItems, importAssetToNode } from "@/canvas/nodeMaterials";
+import { getNodeMaterialItems, importAssetToNode, upstreamTextSources } from "@/canvas/nodeMaterials";
+import { mapUpstreamText } from "@/lib/upstreamText";
 import { matchNodeDraftAssets } from "@/lib/assetMatch";
 import { PromptExpandButton } from "@/components/PromptExpandButton";
 import { getAdapter } from "@/services/modelAdapter";
@@ -308,7 +309,7 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 					{/* 素材区（可编辑）：上游连线素材(前) + 自加素材(后)，＋/拖入/粘贴添加；最右为提示词放大按钮 */}
 					<NodeMaterialBay
 						nodeId={nodeId}
-						rightAction={<PromptExpandButton title="编辑提示词" getValue={() => prompt} onSave={onPromptEdit} placeholder="输入提示词…" getExtra={() => <NodeMaterialBay nodeId={nodeId} />} getMentions={() => getNodeMaterialItems(nodeId)} onImport={(cand) => importAssetToNode(nodeId, cand)} getPresets={def.capability === "image" ? () => listPresetOptions() : undefined} onMatchAssets={def.displayKind === "image" || def.displayKind === "video" ? (draft) => matchNodeDraftAssets(nodeId, draft) : undefined} />}
+						rightAction={<PromptExpandButton title="编辑提示词" getValue={() => mapUpstreamText(prompt, upstreamTextSources(nodeId).map((source) => source.text))} onSave={onPromptEdit} placeholder="输入提示词…" getExtra={() => <NodeMaterialBay nodeId={nodeId} />} getMentions={() => getNodeMaterialItems(nodeId)} onImport={(cand) => importAssetToNode(nodeId, cand)} getPresets={def.capability === "image" ? () => listPresetOptions() : undefined} onMatchAssets={def.displayKind === "image" || def.displayKind === "video" ? (draft) => matchNodeDraftAssets(nodeId, draft) : undefined} />}
 					/>
 
 					{/* 提示词输入区（自适应高度，超出内部滚动，不撑高面板）*/}

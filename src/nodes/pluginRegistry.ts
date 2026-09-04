@@ -294,13 +294,14 @@ export async function defaultNodeExecute(
 
 		const { resolveMentions } = await import("@/lib/mentionResolver");
 		const { resolvePresets } = await import("@/lib/presetSchemes");
-		const { hasUpstreamCapsule, expandUpstreamCapsules } = await import("@/lib/upstreamText");
-		// 先解析 @[端口] 上游引用，再展开预设胶囊【预设:id】、上游文本胶囊【上游文本N】（提交时才展开，显示层仍是 pill）
-		let resolvedPrompt = resolvePresets(resolveMentions(nodeId, String(params.prompt || "")));
-		if (hasUpstreamCapsule(resolvedPrompt)) {
-			const { upstreamTextSources } = await import("@/canvas/nodeMaterials");
-			resolvedPrompt = expandUpstreamCapsules(resolvedPrompt, upstreamTextSources(nodeId).map((s) => s.text));
-		}
+		const { mapUpstreamText } = await import("@/lib/upstreamText");
+		const { upstreamTextSources } = await import("@/canvas/nodeMaterials");
+		// 先解析 @[端口] 引用，再把上游全文动态映射到无正文节点，最后展开预设。
+		const promptWithUpstream = mapUpstreamText(
+			resolveMentions(nodeId, String(params.prompt || "")),
+			upstreamTextSources(nodeId).map((source) => source.text),
+		);
+		const resolvedPrompt = resolvePresets(promptWithUpstream);
 
 		// 提示词为空但有上游文本连线（如 文本种子 → 资产拆分；图视同源链路的图片/视频节点不内置提示词，
 		// 直接用上游「同源提示词」节点的文本——改同源节点即同时改图片与视频的提示词）：自动取上游文本作为输入。
@@ -350,11 +351,15 @@ export async function defaultNodeExecute(
 		const collectMedia = async (): Promise<Record<string, unknown>> => {
 			const { listNodeMaterials } = await import("@/canvas/nodeMaterials");
 			const { ensurePublicUrl } = await import("@/lib/publicUrl");
+			const { isCharacterProjectAsset } = await import("@/lib/projectAssets");
 			// 逐个解析为公网 url（与资产模式一致；上传失败则跳过该素材，不发本地直链）
-			const images: { id?: string; url: string; name?: string }[] = [];
+			const images: { id?: string; url: string; name?: string; usage?: "reference" | "identity" }[] = [];
 			const videos: typeof images = [];
 			const audios: typeof images = [];
 			const { useProjectStore: ups } = await import("@/store/projectStore");
+			const configuredIdentity = Array.isArray(params.officialAssetIndexes);
+			const selectedIdentity = new Set(((params.officialAssetIndexes as unknown[] | undefined) ?? []).map(Number).filter(Number.isInteger));
+			let imageIndex = 0;
 			for (const it of listNodeMaterials(nodeId)) {
 				const url = await ensurePublicUrl(it.url || it.uri, { name: it.name || undefined });
 				if (!url) continue;
@@ -366,10 +371,15 @@ export async function defaultNodeExecute(
 					const b = Object.values(ups.getState().assetBlobs).find((x) => x.srcUri === srcKey && !x.id.startsWith("LC-"));
 					if (b) sendId = b.id;
 				}
-				const ref = { url, ...(it.name ? { name: it.name } : {}), ...(sendId ? { id: sendId } : {}) };
-				if (it.media === "image") images.push(ref);
-				else if (it.media === "video") videos.push(ref);
-				else audios.push(ref);
+				const baseRef = { url, ...(it.name ? { name: it.name } : {}), ...(sendId ? { id: sendId } : {}) };
+				if (it.media === "image") {
+					const identity = it.usage === "identity"
+						|| (it.usage === undefined && (configuredIdentity ? selectedIdentity.has(imageIndex) : isCharacterProjectAsset(it.assetId)));
+					images.push({ ...baseRef, usage: identity ? "identity" : "reference" });
+					imageIndex++;
+				}
+				else if (it.media === "video") videos.push(baseRef);
+				else audios.push(baseRef);
 			}
 			const media: Record<string, unknown> = {};
 			if (images.length) media.images = images;
@@ -960,12 +970,12 @@ async function runScriptNode(nodeId: string, plugin: NodePlugin, node: import("@
 		setRuntime({ status: "running", progress: 50 });
 		const params = node.data.params;
 		const { resolveMentions } = await import("@/lib/mentionResolver");
-		const { hasUpstreamCapsule, expandUpstreamCapsules } = await import("@/lib/upstreamText");
-		let resolved = resolveMentions(nodeId, String(params.prompt || ""));
-		if (hasUpstreamCapsule(resolved)) {
-			const { upstreamTextSources } = await import("@/canvas/nodeMaterials");
-			resolved = expandUpstreamCapsules(resolved, upstreamTextSources(nodeId).map((s) => s.text));
-		}
+		const { mapUpstreamText } = await import("@/lib/upstreamText");
+		const { upstreamTextSources } = await import("@/canvas/nodeMaterials");
+		const resolved = mapUpstreamText(
+			resolveMentions(nodeId, String(params.prompt || "")),
+			upstreamTextSources(nodeId).map((source) => source.text),
+		);
 		const inputText = resolved.trim() ? resolved : await collectUpstreamTextForNode(nodeId);
 		if (!inputText.trim()) {
 			setRuntime({ status: "failed", progress: 100, error: "没有可拆分的文本（请连入上游文本或在面板输入）" });

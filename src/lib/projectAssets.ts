@@ -27,6 +27,7 @@ export interface BoundAssetHit {
 	assetId: string;
 	/** 展示名：基础图/历史图命中用资产名，变体图命中用造型名 */
 	name: string;
+	kind: ProjectAssetCandidate["kind"];
 	voiceUri?: string;
 	voiceAssetId?: string;
 	voiceName?: string;
@@ -46,21 +47,33 @@ export function findProjectAssetByImage(uri?: string, blobId?: string): BoundAss
 	const probeId = blobId || idOf(uri);
 	const eq = (img?: string): boolean =>
 		!!img && ((!!uri && img === uri) || (!!probeId && idOf(img) === probeId));
-	const hit = (a: any, name: string): BoundAssetHit => ({
-		assetId: a.id, name, voiceUri: a.voiceUri, voiceAssetId: a.voiceAssetId, voiceName: a.voiceName,
+	const hit = (a: any, name: string, kind: ProjectAssetCandidate["kind"]): BoundAssetHit => ({
+		assetId: a.id, name, kind, voiceUri: a.voiceUri, voiceAssetId: a.voiceAssetId, voiceName: a.voiceName,
 	});
-	const scan = (a: any): BoundAssetHit | null => {
-		if (eq(a.image) || (a.images || []).some((u: string) => eq(u))) return hit(a, a.name);
-		for (const v of a.variants || []) if (eq(v.image)) return hit(a, v.name || a.name);
+	const scan = (a: any, kind: ProjectAssetCandidate["kind"]): BoundAssetHit | null => {
+		if (eq(a.image) || (a.images || []).some((u: string) => eq(u))) return hit(a, a.name, kind);
+		for (const v of a.variants || []) if (eq(v.image)) return hit(a, v.name || a.name, kind);
 		return null;
 	};
-	for (const arr of [s.characters, s.crowds, s.scenes, s.organisms, s.items]) {
-		for (const a of arr as any[]) {
-			const h = scan(a);
+	const pools: Array<[any[], ProjectAssetCandidate["kind"]]> = [
+		[s.characters, "character"], [s.crowds, "character"], [s.scenes, "scene"], [s.organisms, "creature"], [s.items, "prop"],
+	];
+	for (const [arr, kind] of pools) {
+		for (const a of arr) {
+			const h = scan(a, kind);
 			if (h) return h;
 		}
 	}
 	return null;
+}
+
+/** 项目资产实体/变体 id 是否属于角色或群像；供旧画布素材在无显式用途时应用默认值。 */
+export function isCharacterProjectAsset(assetId?: string): boolean {
+	if (!assetId) return false;
+	const s = useProjectStore.getState();
+	return [...s.characters, ...s.crowds].some((asset: any) =>
+		asset.id === assetId || (asset.variants || []).some((variant: any) => variant.id === assetId),
+	);
 }
 
 export function getProjectAssetCandidates(): ProjectAssetCandidate[] {

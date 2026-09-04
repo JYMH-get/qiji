@@ -77,6 +77,9 @@ const BRAND_TOKENS = [
 	// 域名段 pidoi 作品牌词擦除（⚠ 与我方品牌 Qiji 字面不同，不会误伤）
 	"QiQi",
 	"pidoi",
+	// 官方（kwjm.com，2026-09-03）：模式名「官方」由动态模式占位符保护；协议段和域名需静态擦除。
+	"official-video",
+	"kwjm",
 	// 协议 id 里的品牌段（「协议不存在或已禁用：dimensio-video」一类）
 	"dimensio",
 	"huaying",
@@ -125,6 +128,7 @@ const HOST_TOKENS = [
 	"seetacloud.com",
 	"boyesir.icu", // BYS（www.boyesir.icu）API 域（第252轮；成片直链与网页版 canvas. 子域一并吞）
 	"pidoi.com", // QiQi（pidoi.com）API 域（第255轮；成片直链 /video/task_xxx.mp4 与下载端点同域）
+	"kwjm.com", // 官方（kwjm.com）API 域；成片若同域返回也不得泄漏
 ];
 
 function escRe(s: string): string {

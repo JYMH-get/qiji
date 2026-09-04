@@ -295,6 +295,9 @@ const REHOST_ALLOW_SUFFIXES = [
 	"boyesir.icu",
 	".pidoi.com", // QiQi（pidoi.com）API 域（第255轮；成片 video_url=本站 /video/task_xxx.mp4，下载带 Bearer）
 	"pidoi.com",
+	".kwjm.com", // 官方（kwjm.com）API 域；content.video_url 若同站托管则允许转存
+	"kwjm.com",
+	// ⚠ 官方渠道成片 CDN 域未知；小额真单后据请求记录 ④ 段 content.video_url 回补。
 	// ⚠ BYS 成片的实际 CDN 域未知（文档只写「https://.../xxx.mp4」占位、且明言保留 48 小时）——
 	//    真单转存失败时到请求记录 ④ 段看 result.videos[0] 实际域名并在此增补后缀。
 	// ⚠ autodl 成片的实际托管域未知（文档只写「https://」占位、且明言链接时效很短）——

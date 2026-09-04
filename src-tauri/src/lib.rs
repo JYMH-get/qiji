@@ -444,6 +444,87 @@ async fn download_to(
     Ok(DownloadToResult { bytes: written, skipped: false })
 }
 
+// ── nyxen 稳定渠道素材加速：客户端原生流式接力，绕过 WebView CORS，也不经过 Qiji 服务端。──
+
+#[tauri::command]
+async fn nyxen_accelerate_upload(source_url: String, kind: String) -> Result<String, String> {
+    const UPLOAD_ENDPOINT: &str = "https://api.nyxen.sbs/v1/upload";
+    const MAX_BYTES: u64 = 250 * 1024 * 1024;
+    let upload_key = option_env!("NYXEN_UPLOAD_KEY")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "客户端未配置稳定加速桶上传密钥，请重新打包安装".to_string())?;
+    if !source_url.starts_with("https://") && !source_url.starts_with("http://") {
+        return Err("素材地址必须是 http(s) 公网地址".to_string());
+    }
+    let fallback_type = match kind.as_str() {
+        "image" => "image/jpeg",
+        "video" => "video/mp4",
+        "audio" => "audio/mpeg",
+        _ => return Err("不支持的素材类型".to_string()),
+    };
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| format!("初始化上传连接失败：{e}"))?;
+    let source = client
+        .get(&source_url)
+        .timeout(std::time::Duration::from_secs(900))
+        .send()
+        .await
+        .map_err(|e| format!("读取原素材失败：{e}"))?;
+    if !source.status().is_success() {
+        return Err(format!("读取原素材 HTTP {}", source.status().as_u16()));
+    }
+    if let Some(length) = source.content_length() {
+        if length > MAX_BYTES {
+            return Err(format!(
+                "素材过大（{:.1}MB > 250MB 上限）",
+                length as f64 / 1048576.0
+            ));
+        }
+    }
+    let source_type = source
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "application/octet-stream")
+        .unwrap_or(fallback_type)
+        .to_string();
+    let source_length = source.content_length();
+    let stream = source.bytes_stream();
+    let mut request = client
+        .post(UPLOAD_ENDPOINT)
+        .bearer_auth(upload_key)
+        .header(reqwest::header::CONTENT_TYPE, source_type)
+        .body(reqwest::Body::wrap_stream(stream))
+        .timeout(std::time::Duration::from_secs(900));
+    if let Some(length) = source_length {
+        request = request.header(reqwest::header::CONTENT_LENGTH, length);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("上传请求失败：{e}"))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("读取上传响应失败：{e}"))?;
+    if !status.is_success() {
+        return Err(format!("上传 HTTP {}：{}", status.as_u16(), text.chars().take(300).collect::<String>()));
+    }
+    let url = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|body| body.get("url").and_then(|value| value.as_str()).map(str::to_string))
+        .filter(|value| value.starts_with("https://") || value.starts_with("http://"))
+        .ok_or_else(|| "加速桶响应缺少有效 URL".to_string())?;
+    Ok(url)
+}
+
 // ── ComfyUI 直连（第三方本地渠道）：webview 受 CORS 约束（ComfyUI 默认不带 CORS 头），
 //    与 download_url 同理走 Rust 原生收发；地址由前端从用户绑定的 ComfyUI 地址拼好传入。──
 
@@ -1047,6 +1128,7 @@ pub fn run() {
             reverse_media,
             download_url,
             download_to,
+            nyxen_accelerate_upload,
             comfy_http_json,
             comfy_upload_file,
             run_libtv,

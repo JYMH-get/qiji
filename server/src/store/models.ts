@@ -5,7 +5,7 @@
  * 管理端可自定义加载第三方模型、查看/编辑翻译格式。改动后 bump catalog 版本。
  */
 import { loadJson, saveJson } from "./db.ts";
-import { CH_GAISC, CH_JIANMENG, CH_VOLC, CH_SUDASHUI, CH_AISTARS, CH_HUAYING, CH_DIMENSIO, CH_AIVIDE, CH_JIANMENGP, CH_MUSEM, CH_JMZ, CH_JMH, CH_YUNWU, CH_JMT, CH_JMF, CH_OVERSEAS, CH_SUANLI, CH_YALI_OPENAI, CH_YALI_GEMINI, CH_SKYLEE, CH_CONGGE, CH_AUTODL, CH_QIJICLOUD, CH_BYS, CH_QIQI } from "./channels.ts";
+import { CH_GAISC, CH_JIANMENG, CH_VOLC, CH_SUDASHUI, CH_AISTARS, CH_HUAYING, CH_DIMENSIO, CH_AIVIDE, CH_JIANMENGP, CH_MUSEM, CH_JMZ, CH_JMH, CH_YUNWU, CH_JMT, CH_JMF, CH_OVERSEAS, CH_SUANLI, CH_YALI_OPENAI, CH_YALI_GEMINI, CH_SKYLEE, CH_CONGGE, CH_AUTODL, CH_QIJICLOUD, CH_BYS, CH_QIQI, CH_OFFICIAL } from "./channels.ts";
 import { audienceChain, agentModelBlocked, audienceGroupId } from "./agents.ts";
 import { normMatLimits, type MatLimits } from "../materialLimits.ts";
 import type { ParamField, Capability } from "../contract.ts";
@@ -44,6 +44,7 @@ export type Protocol =
 	| "qijicloud-comfy"
 	| "bys-video"
 	| "qiqi-video"
+	| "official-video"
 	| "stub";
 
 /**
@@ -113,7 +114,7 @@ export interface ModelDef {
 	/** 支持的生成「方法」（第131轮，视频模型）：omni=全能参考 / frames=首尾帧；缺省=仅全能参考。
 	 *  客户端按此渲染「方法」级下拉，提交时落 params.method（翻译器按 method 组不同 payload）。 */
 	methods?: string[];
-	/** 支持官方真人素材库（苏打水 gf 系专属）：客户端提供「真人图 1-9 多选」→ params.officialAssetIndexes（0 基）。 */
+	/** 支持上游人像素材库：客户端按图片素材卡逐项选择，服务端完成验证与上游 ID 转换。 */
 	officialAssets?: boolean;
 	/** 参考视频按秒计费折算系数（第140轮，按秒视频模型专用）：计费秒数 = duration + 系数 × Σceil(每条参考视频秒)
 	 *  （不足1秒算1秒，逐条向上取整）。缺省/0=参考视频不计费；1=与出片每秒价同价（用户定，Dimensio dm 系种子=1）。
@@ -150,6 +151,8 @@ interface Store {
 	modeInitVersion?: number;
 	/** 定向迁移版本（第140轮）：Dimensio dm 系存量模型补 refVideoSecondsWeight=1（参考视频与出片同价按秒计费） */
 	refVideoBillVersion?: number;
+	/** 定向迁移：给已补种的官方六款开启素材卡人像验证入口；只执行一次，后续尊重管理端修改。 */
+	officialIdentityVersion?: number;
 	/** 定向迁移版本（第148轮）：星辰全面换线 48/50/51（删 10 旧线模型进墓碑 + 强制刷新保留 4 个 + 补种 2 新模型） */
 	xcRefreshVersion?: number;
 	/** 定向迁移版本（第149轮）：苏打水按上游清单更新（删 6 死链进墓碑 + 存量上架 + 只补缺 matLimits + 补种 16 新模型） */
@@ -909,6 +912,27 @@ const qiqi = (id: string, label: string, upstream: string, perUnit: number, para
 		...(methods ? { methods } : {}),
 	});
 
+// ── 官方 dreamina Seedance 2.0 / 2.5 六款（2026-09-03 用户文档）──────────────
+// ⚠ 上游未给价格，全部暂用每秒 50 积分占位；上线前按官方价或小额真单定真价。
+// 文档参数总表明确：2.0=480p/720p/1080p/4k、4~15s；2.5=480p/720p/1080p、4~30s。
+const OFFICIAL_RATIO: ParamField = { key: "aspect_ratio", label: "宽高比", type: "enum", options: ["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16", "21:9"], default: "adaptive" };
+const officialParams = (is25: boolean): ParamField[] => [
+	{ key: "duration", label: "时长", type: "enum", options: ["-1", ...Array.from({ length: (is25 ? 30 : 15) - 3 }, (_, i) => String(i + 4))], default: "5", unit: "s" },
+	OFFICIAL_RATIO,
+	{ key: "resolution", label: "分辨率", type: "enum", options: is25 ? ["480p", "720p", "1080p"] : ["480p", "720p", "1080p", "4k"], default: "720p" },
+	{ key: "generate_audio", label: "生成音频", type: "enum", options: ["true", "false"], default: "true" },
+	{ key: "watermark", label: "添加水印", type: "enum", options: ["false", "true"], default: "false" },
+];
+const official = (id: string, label: string, upstream: string, is25: boolean): ModelDef => {
+	const maxDuration = is25 ? 30 : 15;
+	return def(id, label, "video", "official-video", officialParams(is25), 50 * maxDuration, {
+		channelId: CH_OFFICIAL, upstreamModel: upstream, modeId: "official",
+		costField: "duration", costPerUnit: 50,
+		matLimits: is25 ? { img: 30, vid: 10, aud: 10 } : { img: 9, vid: 3, aud: 3 },
+		methods: ["omni", "frames"], officialAssets: true,
+	});
+};
+
 const DEFAULT_MODELS: ModelDef[] = [
 	// ── G-AISC 聚合网关 ──
 	def("gpt-5.5", "GPT-5.5", "text", "openai-chat", TEXT_PARAMS, 10, { channelId: CH_GAISC }),
@@ -1269,6 +1293,13 @@ const DEFAULT_MODELS: ModelDef[] = [
 	qiqi("qq933-sd2.0-720p", "QiQi·Seedance 2.0 720p", "seedace-2.0-720p", 50, QIQI_PARAMS, ["omni", "frames"]),
 	// 933 真人视频（flat 形态）：固定 15s、不支持尾帧 → 不声明 methods（客户端无「方法」下拉）
 	qiqi("qq933-sora-v3-pro", "QiQi·Sora V3 933 真人 720p", "sora-v3-933-pro", 60, QIQI_933_PARAMS),
+	// ── 官方 dreamina Seedance 六款：上游模型名逐字照抄用户文档 ────────────────
+	official("off-sd2.0", "官方·Seedance 2.0", "dreamina-seedance-2-0", false),
+	official("off-sd2.0-fast", "官方·Seedance 2.0 Fast", "dreamina-seedance-2-0-fast", false),
+	official("off-sd2.0-filter-off", "官方·Seedance 2.0 · Filter Off", "dreamina-seedance-2-0-filter-off", false),
+	official("off-sd2.0-fast-filter-off", "官方·Seedance 2.0 Fast · Filter Off", "dreamina-seedance-2-0-fast-filter-off", false),
+	official("off-sd2.5", "官方·Seedance 2.5", "dreamina-seedance-2-5", true),
+	official("off-sd2.5-filter-off", "官方·Seedance 2.5 · Filter Off", "dreamina-seedance-2-5-filter-off", true),
 	// ── 内部虚拟模型：第三方本地渠道（LibTV/即梦）手续费——echo 同步成功即扣 cost；hidden 不进 catalog，
 	//    客户端在第三方调用成功后按 id 请求一次完成扣费（管理端「模型」页可调价）。
 	def("fee-thirdparty", "第三方渠道手续费", "text", "echo", [], 5, { hidden: true }),
@@ -1384,6 +1415,18 @@ if (store.models.length === 0) {
 			}
 		}
 		store.refVideoBillVersion = 1;
+		changed = true;
+	}
+
+	// 官方六款在首版渠道补种后新增人像素材库能力：只补协议命中的存量种子，不刷新价格/参数等运营字段。
+	if ((store.officialIdentityVersion ?? 0) < 1) {
+		for (const m of store.models) {
+			if (m.protocol === "official-video" && m.officialAssets === undefined) {
+				m.officialAssets = true;
+				m.updatedAt = new Date().toISOString();
+			}
+		}
+		store.officialIdentityVersion = 1;
 		changed = true;
 	}
 

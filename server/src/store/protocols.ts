@@ -16,7 +16,7 @@ import type { Capability } from "../contract.ts";
 export const BUILTIN_PROTOCOLS = [
 	"echo", "openai-chat", "anthropic-messages",
 	"openai-image", "gemini-image",
-	"jianmeng-video", "openai-video", "volc-mediakit", "sudashui-video", "aistars-video", "aistars-image", "huaying-video", "dimensio-video", "aivide-video", "jianmengp-video", "musem-video", "jmz-video", "jmz-image", "jmt-video", "jmf-video", "overseas-video", "suanli-video", "jmh-image", "jmh-video", "yali-image", "skylee-image", "congge-image", "congge-video", "autodl-video", "qijicloud-comfy", "bys-video", "qiqi-video", "stub",
+	"jianmeng-video", "openai-video", "volc-mediakit", "sudashui-video", "aistars-video", "aistars-image", "huaying-video", "dimensio-video", "aivide-video", "jianmengp-video", "musem-video", "jmz-video", "jmz-image", "jmt-video", "jmf-video", "overseas-video", "suanli-video", "jmh-image", "jmh-video", "yali-image", "skylee-image", "congge-image", "congge-video", "autodl-video", "qijicloud-comfy", "bys-video", "qiqi-video", "official-video", "stub",
 ] as const;
 const BUILTIN_SET = new Set<string>(BUILTIN_PROTOCOLS);
 export function isBuiltinProtocol(id: string): boolean {

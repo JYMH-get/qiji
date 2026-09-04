@@ -1,14 +1,13 @@
 /**
- * upstreamText — 画布节点「上游文本胶囊」（明示上游文本入参）。
+ * upstreamText — 画布节点的上游文本映射。
  *
  * 画布主张「不做隐形提交」：图片/视频等媒体素材已在素材区明示；但节点提示词为空（或仅图例）时，
- * pluginRegistry 会**静默**把上游文本节点的输出当作输入——用户看不到。为此在提示词框显示**逐个编号**的
- * 上游文本胶囊 `【上游文本1】【上游文本2】…`（每个上游文本源一枚，青色 pill），提交时由 pluginRegistry
- * 按编号还原成对应上游节点的文本。
+ * 当节点没有自己的正文时，把上游文本全文直接映射到提示词编辑器与提交入参。
  *
- * 纯字符串工具（不依赖 store）：标记/正则/增删/展开。上游文本源的探测在 nodeMaterials.upstreamTextSources
- * （其顺序即编号顺序），提交时的展开在 pluginRegistry。
+ * `【上游文本N】` 只作为旧项目兼容标记：读取/提交时展开，不再新建或渲染胶囊。
  */
+import { PRESET_TAG_RE, presetPosition } from "@/lib/presetSchemes";
+import { splitLegendPrompt } from "@/lib/shotMaterials";
 /** 上游文本胶囊标记：【上游文本N】（N=1-based，对应第 N 个上游文本源） */
 export const upstreamTag = (n: number): string => `【上游文本${n}】`;
 /** 匹配 【上游文本N】，捕获组 1 = 编号 */
@@ -41,4 +40,32 @@ export function setUpstreamCapsules(prompt: string, count: number): string {
 export function expandUpstreamCapsules(prompt: string, texts: string[]): string {
 	if (!hasUpstreamCapsule(prompt)) return prompt;
 	return prompt.replace(new RegExp(UPSTREAM_TAG_RE.source, "g"), (_m, n: string) => texts[Number(n) - 1] ?? "");
+}
+
+function leadingPrefixPresetEnd(body: string): number {
+	let i = 0;
+	const re = /^\s*【预设:([A-Za-z0-9._-]+)】/;
+	while (true) {
+		const m = re.exec(body.slice(i));
+		if (!m || presetPosition(m[1]) !== "prefix") break;
+		i += m[0].length;
+	}
+	return i;
+}
+
+/** 把上游全文直接映射进无用户正文的节点；不写回 store，保持连线是唯一数据源。 */
+export function mapUpstreamText(prompt: string, texts: string[]): string {
+	const sourceText = texts.filter((text) => text.trim()).join("\n\n");
+	if (hasUpstreamCapsule(prompt)) return expandUpstreamCapsules(prompt, texts);
+	if (!sourceText) return prompt;
+
+	const { legend, body } = splitLegendPrompt(prompt || "");
+	const userBody = body.replace(new RegExp(PRESET_TAG_RE.source, "g"), "").trim();
+	if (userBody) return prompt;
+
+	const end = leadingPrefixPresetEnd(body);
+	const before = body.slice(0, end).replace(/\s+$/, "");
+	const after = body.slice(end).replace(/^\s+/, "");
+	const mappedBody = [before, sourceText, after].filter(Boolean).join("\n");
+	return legend ? (mappedBody ? `${legend}\n\n${mappedBody}` : legend) : mappedBody;
 }

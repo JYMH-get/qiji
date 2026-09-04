@@ -197,6 +197,11 @@ export const config = {
 		baseUrl: strip(process.env.QIQI_BASE_URL ?? "https://pidoi.com"),
 		apiKey: process.env.QIQI_API_KEY ?? "",
 	},
+	// 「官方」dreamina Seedance 2.0/2.5（kwjm.com；Bearer；异步 submit+poll）。
+	official: {
+		baseUrl: strip(process.env.OFFICIAL_BASE_URL ?? "https://kwjm.com"),
+		apiKey: process.env.OFFICIAL_API_KEY ?? "",
+	},
 	// autodl（autodl.art·ComfyUI 工作流平台）视频渠道（第234轮；异步 submit+poll，见 translators/autodl.ts）。
 	// ⚠ 鉴权=Authorization 原样 Token（**不带 Bearer 前缀**，控制台「令牌管理」创建、分组选 ComfyUI）；
 	//    Base URL 填根域（翻译器自拼 /api/v1/comfyui/comfyui_workflow/{workflow_id} 与 /result/{task_id}）。

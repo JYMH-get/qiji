@@ -69,6 +69,8 @@ export interface AssetRef {
   url?: string;
   /** 资产名字（人读，便于上游 @tag 引用与日志追踪；id 为真理、url 为公网直链） */
   name?: string;
+  /** 本次引用用途：identity=走人像/虚拟人素材库；reference=普通参考（角色图片由客户端缺省 identity）。 */
+  usage?: "reference" | "identity";
   /** 依赖某个尚未完成的任务的产物 */
   fromTask?: string;
   /** 取上游产物的哪一部分（如视频尾帧 / 末2秒） */
@@ -198,7 +200,7 @@ export interface CatalogModel {
   familyId?: string;
   /** 支持的生成「方法」（第131轮，视频模型）：omni=全能参考 / frames=首尾帧；缺省=仅全能参考 */
   methods?: string[];
-  /** 支持官方真人素材库（苏打水 gf 系）：客户端提供「真人图」多选 → params.officialAssetIndexes（0 基） */
+  /** 支持上游人像素材库：用户在图片素材卡上逐项选择，服务端完成素材验证与 asset:// 转换。 */
   officialAssets?: boolean;
   /** 参考视频按秒计费折算系数（第140轮）：计费秒数 = duration + 系数 × Σceil(每条参考视频秒)。
    *  缺省/0=不计费。服务端探测时长并实扣；本字段供客户端预估展示（预估以服务端实扣为准） */

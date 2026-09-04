@@ -6,7 +6,7 @@
  * removeUpstreamMaterial —— 删除上游连线素材（第97轮补充）：断开对应连线 + 提示词重编号。
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { renumberPromptAfterRemoval, removeUpstreamMaterial, removeNodeMaterial, listNodeMaterials, buildNodeLegend } from "./nodeMaterials";
+import { renumberPromptAfterRemoval, removeUpstreamMaterial, removeNodeMaterial, listNodeMaterials, buildNodeLegend, setNodeMaterialUsage } from "./nodeMaterials";
 import { useCanvasStore } from "@/store/canvasStore";
 import { useLibraryStore } from "@/store/libraryStore";
 import type { CanvasNode, NodeData } from "@/types";
@@ -175,6 +175,16 @@ describe("listNodeMaterials（加入顺序 + 命名）", () => {
 			["@Image1", "分镜"],
 			["@Image2", "张起天"],
 		]);
+	});
+
+	it("画布自加角色素材的人像用途可显式取消并持久化到素材引用", () => {
+		useCanvasStore.setState({
+			nodes: { t: mkN("t", { input: { images: [{ id: "C1", assetId: "char-1", url: "http://x/c1", name: "角色", usage: "identity" }] } }) },
+			edges: {},
+		});
+		expect(listNodeMaterials("t")[0]?.usage).toBe("identity");
+		setNodeMaterialUsage("t", "s:C1", "reference");
+		expect(listNodeMaterials("t")[0]?.usage).toBe("reference");
 	});
 
 	it("删除按 matOrder 排在后面的上游素材：前面自加素材的 @ 引用不动", () => {

@@ -14,6 +14,68 @@ function liveShot(epId: string, shotId: string) {
 	return ep?.shots.find((s) => s.id === shotId);
 }
 
+/** 兼容旧项目的索引标记；新项目以素材自身 usage 为准，重排/复制不会错位。 */
+export function isIdentityShotMaterial(material: ShotMaterial, imageIndex: number, legacyIndexes?: number[]): boolean {
+	if (material.usage !== undefined) return material.usage === "identity";
+	if (legacyIndexes?.includes(imageIndex)) return true;
+	return mediaOf(material) === "image" && material.kind === "character";
+}
+
+/** 资产面板分类 → 分镜素材分类；角色与群像在 ShotMaterial 中统一归 character。 */
+export function materialKindFromAssetCat(cat: unknown): ShotMaterial["kind"] | undefined {
+	if (cat === "characters" || cat === "crowds") return "character";
+	if (cat === "scenes") return "scene";
+	if (cat === "organisms") return "creature";
+	if (cat === "items") return "prop";
+	return undefined;
+}
+
+export function identityIndexesForMaterials(materials: ShotMaterial[], legacyIndexes?: number[]): number[] {
+	let imageIndex = 0;
+	const out: number[] = [];
+	for (const material of materials) {
+		if (mediaOf(material) !== "image") continue;
+		if (isIdentityShotMaterial(material, imageIndex, legacyIndexes)) out.push(imageIndex);
+		imageIndex++;
+	}
+	return out;
+}
+
+function normalizeIdentityMaterials(materials: ShotMaterial[], legacyIndexes?: number[]): ShotMaterial[] {
+	let imageIndex = 0;
+	return materials.map((material) => {
+		if (mediaOf(material) !== "image") return material;
+		const selected = isIdentityShotMaterial(material, imageIndex, legacyIndexes);
+		imageIndex++;
+		return material.usage === undefined ? { ...material, usage: selected ? "identity" as const : "reference" as const } : material;
+	});
+}
+
+function identityCompatPatch(before: StoryboardShot, materials: ShotMaterial[]): Pick<StoryboardShot, "overrides"> | Record<string, never> {
+	const hasIdentityState = before.overrides?.officialAssetIndexes !== undefined || before.materials.some((m) => m.usage !== undefined);
+	return hasIdentityState
+		? { overrides: { ...(before.overrides || {}), officialAssetIndexes: identityIndexesForMaterials(materials) } }
+		: {};
+}
+
+/** 用户在素材卡右下角切换：意图落到本分镜素材引用，同时刷新旧索引字段供旧渠道兼容。 */
+export function setShotMaterialIdentity(epId: string, shotId: string, matId: string, identity: boolean): void {
+	const sh = liveShot(epId, shotId);
+	if (!sh) return;
+	let imageIndex = 0;
+	const legacy = sh.overrides?.officialAssetIndexes;
+	const materials = sh.materials.map((material) => {
+		if (mediaOf(material) !== "image") return material;
+		const selected = material.id === matId ? identity : isIdentityShotMaterial(material, imageIndex, legacy);
+		imageIndex++;
+		return { ...material, usage: selected ? "identity" as const : "reference" as const };
+	});
+	useProjectStore.getState().updateShot(epId, shotId, {
+		materials,
+		overrides: { ...(sh.overrides || {}), officialAssetIndexes: identityIndexesForMaterials(materials) },
+	});
+}
+
 /**
  * 按当前 materials 同步分镜图例前缀（与画布模式一致，杜绝删素材后「是xxx」残留）：
  *  按项目模式把图例写进当前生效的提示词——图视同源=unifiedPrompt（含声音配对，该提示词同时喂图片与视频）、
@@ -56,7 +118,8 @@ export function resyncShotLegend(epId: string, shotId: string, removed?: { media
 export function reorderShotMaterial(epId: string, shotId: string, fromId: string, toId: string): void {
 	const sh = liveShot(epId, shotId);
 	if (!sh || fromId === toId) return;
-	const arr = [...sh.materials];
+	const hasIdentityState = sh.overrides?.officialAssetIndexes !== undefined || sh.materials.some((m) => m.usage !== undefined);
+	const arr = hasIdentityState ? normalizeIdentityMaterials(sh.materials, sh.overrides?.officialAssetIndexes) : [...sh.materials];
 	const fi = arr.findIndex((m) => m.id === fromId);
 	const ti = arr.findIndex((m) => m.id === toId);
 	if (fi < 0 || ti < 0) return;
@@ -84,6 +147,7 @@ export function reorderShotMaterial(epId: string, shotId: string, fromId: string
 		storyboardPrompt: remapped.storyboardPrompt,
 		...(remapped.unifiedPrompt || sh.unifiedPrompt !== undefined ? { unifiedPrompt: remapped.unifiedPrompt } : {}),
 		...syncShotLegend(remapped),
+		...identityCompatPatch(sh, arr),
 	});
 }
 
@@ -96,20 +160,29 @@ export function removeShotMaterial(epId: string, shotId: string, matId: string):
 	const delMat = sh.materials.find((m) => m.id === matId);
 	const mNum = tag ? Number(/(\d+)$/.exec(tag)?.[1] ?? 0) : 0;
 	const removed = delMat && mNum > 0 ? { media: mediaOf(delMat), n: mNum } : undefined;
-	const newMaterials = sh.materials.filter((m) => m.id !== matId);
-	useProjectStore.getState().updateShot(epId, shotId, { materials: newMaterials, ...syncShotLegend({ ...sh, materials: newMaterials }, removed) });
+	const hasIdentityState = sh.overrides?.officialAssetIndexes !== undefined || sh.materials.some((m) => m.usage !== undefined);
+	const normalized = hasIdentityState ? normalizeIdentityMaterials(sh.materials, sh.overrides?.officialAssetIndexes) : sh.materials;
+	const newMaterials = normalized.filter((m) => m.id !== matId);
+	useProjectStore.getState().updateShot(epId, shotId, {
+		materials: newMaterials,
+		...syncShotLegend({ ...sh, materials: newMaterials }, removed),
+		...identityCompatPatch(sh, newMaterials),
+	});
 }
 
 /** 从资产（资产助手/本地素材库/跨分镜复制）加一条垫图到分镜素材（去重：同 assetId/uri 不重复）。 */
 export function addShotMaterialFromAsset(
 	epId: string,
 	shotId: string,
-	a: { assetId?: string; uri: string; name?: string; media?: MediaKind; kind?: ShotMaterial["kind"]; voiceForAssetId?: string },
+	a: { assetId?: string; uri: string; name?: string; media?: MediaKind; kind?: ShotMaterial["kind"]; usage?: ShotMaterial["usage"]; voiceForAssetId?: string },
 ): void {
 	const sh = liveShot(epId, shotId);
 	if (!sh || !a.uri) return;
 	if (sh.materials.some((m) => (a.assetId && m.assetId === a.assetId) || (a.uri && m.uri === a.uri))) return;
-	const newMaterials = [...sh.materials, { id: `mat-${Date.now()}-${Math.floor(Math.random() * 1e6)}`, assetId: a.assetId, kind: a.kind || "local", media: a.media || "image", name: a.name || "", uri: a.uri, ...(a.voiceForAssetId ? { voiceForAssetId: a.voiceForAssetId } : {}) } as ShotMaterial];
+	const kind = a.kind || "local";
+	const media = a.media || "image";
+	const usage = a.usage ?? (kind === "character" && media === "image" ? "identity" as const : undefined);
+	const newMaterials = [...sh.materials, { id: `mat-${Date.now()}-${Math.floor(Math.random() * 1e6)}`, assetId: a.assetId, kind, media, name: a.name || "", uri: a.uri, ...(usage ? { usage } : {}), ...(a.voiceForAssetId ? { voiceForAssetId: a.voiceForAssetId } : {}) } as ShotMaterial];
 	useProjectStore.getState().updateShot(epId, shotId, { materials: newMaterials, ...syncShotLegend({ ...sh, materials: newMaterials }) });
 }
 
@@ -118,14 +191,14 @@ export function addShotMaterialFromAsset(
  * 已在本镜则复用（不重复加），返回既有 tag。找不到返回 null。
  */
 export function importAssetToShot(epId: string, shotId: string, cand: ProjectAssetCandidate): { tag: string; mat: ShotMaterial } | null {
-	addShotMaterialFromAsset(epId, shotId, { assetId: cand.assetId, uri: cand.uri, name: cand.name, media: "image" });
+	addShotMaterialFromAsset(epId, shotId, { assetId: cand.assetId, uri: cand.uri, name: cand.name, media: "image", kind: cand.kind });
 	const sh = liveShot(epId, shotId);
 	if (!sh) return null;
 	const m = sh.materials.find((x) => (cand.assetId && x.assetId === cand.assetId) || x.uri === cand.uri);
 	if (!m) return null;
 	const tag = materialTags(sh.materials)[m.id];
 	if (!tag) return null;
-	return { tag, mat: { id: m.id, kind: m.kind ?? "local", media: "image", name: m.name, uri: m.uri, assetId: m.assetId } as ShotMaterial };
+	return { tag, mat: { id: m.id, kind: m.kind ?? "local", media: "image", name: m.name, uri: m.uri, assetId: m.assetId, usage: m.usage } as ShotMaterial };
 }
 
 /**

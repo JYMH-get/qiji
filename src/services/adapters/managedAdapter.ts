@@ -14,6 +14,13 @@ import { managedClient } from "@/services/managedClient";
 import { useCatalogStore } from "@/store/catalogStore";
 import { nodeTypesForCapability } from "@/nodes/nodeSpecs";
 import { checkMaterialLimits } from "@/lib/materialLimits";
+import {
+	accelerateNyxenRequest,
+	nyxenRequestForWire,
+	shouldUseNyxenAcceleration,
+	uploadToNyxenAccelerationBucket,
+} from "@/services/nyxenAcceleration";
+import type { TaskExtra } from "./types";
 
 /**
  * 能力 → 可服务的画布节点类型（真实 catalog 模型的 nodeTypes 白名单）。
@@ -88,7 +95,7 @@ export function buildManagedAdapter(model: CatalogModel): ModelAdapter {
 				(input.variables as Record<string, string>) ||
 				(input.prompt ? { prompt: String(input.prompt) } : undefined);
 
-			const req: GenerateRequest = {
+			let req: GenerateRequest = {
 				purpose,
 				model: model.id,
 				templateId: (input.templateId as string) || (params.template as string) || undefined,
@@ -113,6 +120,19 @@ export function buildManagedAdapter(model: CatalogModel): ModelAdapter {
 			// 表格按键与画布节点共用本 submit（§11.1 唯一请求路径），一处预检覆盖全部提交入口。
 			const matErr = checkMaterialLimits(model.label, model.matLimits, req.inputs);
 			if (matErr) throw new Error(matErr);
+
+			const catalog = useCatalogStore.getState().catalog;
+			if (shouldUseNyxenAcceleration(model, catalog)) {
+				const onProgress = input._onClientProgress as
+					| ((progress: number, status: string, partialText?: string, extra?: TaskExtra) => void)
+					| undefined;
+				const acceleratedReq = await accelerateNyxenRequest(req, {
+					resolveAssetUrl: (assetId) => managedClient.resolveAssetUrl(assetId),
+					upload: uploadToNyxenAccelerationBucket,
+					onProgress,
+				});
+				req = nyxenRequestForWire(acceleratedReq);
+			}
 
 			const { taskId } = await managedClient.generate(req);
 			return { taskId };

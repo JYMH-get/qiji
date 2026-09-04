@@ -15,7 +15,6 @@ import type { ShotMaterial } from "@/services/projectFile";
 import { BADGE_BG, MENTION_TAG_RE, TAG_BADGE, mediaOf, tagToMaterial } from "@/lib/shotMaterials";
 import { PRESET_TAG_RE, presetBody, type PresetOption } from "@/lib/presetSchemes";
 import { insertPresetCapsule } from "@/lib/promptCompose";
-import { upstreamTag, UPSTREAM_TAG_RE } from "@/lib/upstreamText";
 import { computeChangedFlags, rangeChanged } from "@/lib/wordDiff";
 import { mediaFilesFromClipboard } from "@/lib/clipboardMedia";
 
@@ -106,30 +105,6 @@ function makePresetChip(tag: string, name: string): HTMLSpanElement {
     return span;
 }
 
-/** 构建「上游文本N」胶囊 span（【上游文本N】→ ▤ 上游文本N）；data-tag 保存标记，序列化时还原成它。
- *  青色区分于素材（蓝）/预设（琥珀）；提交时由 pluginRegistry 按编号还原成对应上游节点的文本。 */
-function makeUpstreamChip(n: number): HTMLSpanElement {
-    const span = document.createElement("span");
-    span.className = "qj-mention-chip qj-upstream-chip";
-    span.contentEditable = "false";
-    span.draggable = true; // 可长按拖动改变位置
-    span.dataset.tag = upstreamTag(n);
-    span.title = `上游文本${n}：提交时自动替换为第 ${n} 个上游节点输出的文本（可拖动改位置）`;
-    span.style.background = "rgba(45,212,191,0.16)";
-    span.style.border = "1px solid rgba(45,212,191,0.55)";
-    span.style.color = "#5eead4";
-    const ic = document.createElement("span");
-    ic.className = "qj-mention-at";
-    ic.textContent = "▤";
-    ic.style.color = "#5eead4";
-    span.appendChild(ic);
-    const nm = document.createElement("span");
-    nm.className = "qj-mention-name";
-    nm.textContent = `上游文本${n}`;
-    span.appendChild(nm);
-    return span;
-}
-
 /** 把 [start,end) 的文本作为节点追加，flags 标记的更改区段包成 <mark class=qj-mention-diff>（黄色高亮） */
 function appendText(frag: DocumentFragment, text: string, start: number, end: number, flags?: boolean[]) {
     if (end <= start) return;
@@ -151,9 +126,8 @@ function buildDom(root: HTMLElement, text: string, tagToMat: Map<string, ShotMat
     root.textContent = "";
     if (!text) return;
     const frag = document.createDocumentFragment();
-    // 一次扫描同时匹配 素材 @tag / 预设胶囊【预设:id】 / 上游文本胶囊【上游文本N】
-    // 组序：MENTION 无组 → PRESET 组1=id → UPSTREAM 组2=编号（m[1] 有值=预设，m[2] 有值=上游文本）
-    const re = new RegExp(`${MENTION_TAG_RE.source}|${PRESET_TAG_RE.source}|${UPSTREAM_TAG_RE.source}`, "g");
+    // 一次扫描素材 @tag / 预设胶囊【预设:id】；上游文本已在上层映射为普通文本。
+    const re = new RegExp(`${MENTION_TAG_RE.source}|${PRESET_TAG_RE.source}`, "g");
     let last = 0;
     let m: RegExpExecArray | null;
     while ((m = re.exec(text)) !== null) {
@@ -161,9 +135,7 @@ function buildDom(root: HTMLElement, text: string, tagToMat: Map<string, ShotMat
         const tag = m[0];
         const changed = rangeChanged(flags, m.index, m.index + tag.length);
         let node: Node;
-        if (m[2] !== undefined) {
-            node = makeUpstreamChip(Number(m[2]));
-        } else if (m[1] !== undefined) {
+        if (m[1] !== undefined) {
             // 预设胶囊：命中 catalog 用名字，否则用 id 兜底显示（仍是可用的胶囊）
             node = makePresetChip(tag, presetById?.get(m[1]) || m[1]);
         } else {
@@ -233,7 +205,7 @@ const PromptMentionEditor = forwardRef<PromptMentionHandle, Props>(function Prom
     const lastDiff = useRef<string | undefined>(undefined); // 上次用于高亮的基线
     const savedRange = useRef<Range | null>(null); // 进入 @ 弹层前的光标快照（点击弹层会偷走焦点、折叠选区）
     const pendingCaretEnd = useRef(false); // # 导入后素材变化会触发重建 → 标记「重建后把光标移到末尾」
-    const draggingChip = useRef<HTMLElement | null>(null); // 正在拖动的 预设/上游 胶囊（拖放改位置）
+    const draggingChip = useRef<HTMLElement | null>(null); // 正在拖动的预设胶囊（拖放改位置）
 
     const tagToMat = useMemo(() => tagToMaterial(materials), [materials]);
     const matsSig = useMemo(() => materials.map((m) => `${m.id}:${m.name}:${m.uri}:${m.media || "image"}`).join("|"), [materials]);
@@ -467,8 +439,8 @@ const PromptMentionEditor = forwardRef<PromptMentionHandle, Props>(function Prom
                 onMouseUp={saveCaret}
                 onDoubleClick={onDblClick}
                 onDragStart={(e) => {
-                    // 只接管 预设/上游 胶囊的拖动；其它（文本选区）走浏览器默认
-                    const chip = (e.target as HTMLElement | null)?.closest?.(".qj-preset-chip, .qj-upstream-chip") as HTMLElement | null;
+                    // 只接管预设胶囊的拖动；其它（文本选区）走浏览器默认
+                    const chip = (e.target as HTMLElement | null)?.closest?.(".qj-preset-chip") as HTMLElement | null;
                     if (chip && root.current?.contains(chip)) {
                         draggingChip.current = chip;
                         try { e.dataTransfer?.setData("text/plain", chip.dataset.tag || ""); if (e.dataTransfer) e.dataTransfer.effectAllowed = "move"; } catch { /* noop */ }

@@ -30,9 +30,10 @@ import { videoReqOptionsForKey, imageResolutionOptionsForKey, modelMethodsForKey
 import { PromptExpandButton } from "@/components/PromptExpandButton";
 import { listPresetSchemes, resolvePresets, countUnifiedShots, gridPresetForShotCount, presetBody, hasGridInstruction } from "@/lib/presetSchemes";
 import { ShotMaterialStrip } from "@/components/ShotMaterialStrip";
-import { importAssetToShot, addShotMaterialFromAsset, removeShotMaterial, reorderShotMaterial, resyncShotLegend } from "@/lib/shotMaterialOps";
+import { importAssetToShot, addShotMaterialFromAsset, removeShotMaterial, reorderShotMaterial, resyncShotLegend, identityIndexesForMaterials, isIdentityShotMaterial, setShotMaterialIdentity, materialKindFromAssetCat } from "@/lib/shotMaterialOps";
+import { IdentityAssetToggle } from "@/components/IdentityAssetToggle";
 import { AssetImportDropdown } from "@/components/AssetImportDropdown";
-import type { ProjectAssetCandidate } from "@/lib/projectAssets";
+import { findProjectAssetByImage, type ProjectAssetCandidate } from "@/lib/projectAssets";
 import { validateShotMaterials, type MatVerdict } from "@/lib/materialValidation";
 import { uploadMediaToCanvasAsset } from "@/canvas/nodeUpload";
 import { ensurePublicUrl as ensurePublicUrlShared } from "@/lib/publicUrl";
@@ -833,19 +834,24 @@ const Frame161195 = () => {
         // 资产/垫素材 → 按模态分组（公网 url + name），各组保序以对齐 @ImageN/@VideoN/@AudioN；服务端按名注入 @tag。
         // ⚠ 一张都不许静默丢（与服务端第118轮同尺）：图例按素材区给每条编号，丢一条=其后同模态引用整体错位——
         // 不可用素材一律明确报错、请求不发出（用户补图/删素材后重试）。
-        const images: { url: string; name?: string }[] = [];
+        const images: { id?: string; url: string; name?: string; usage?: "reference" | "identity" }[] = [];
         const videos: { url: string; name?: string }[] = [];
         const audios: { url: string; name?: string }[] = [];
         if (opt.asset) {
+            let imageIndex = 0;
             for (const m of shot.materials) {
                 if (!m.uri) { alert(`分镜${shot.index}的素材「${m.name}」没有文件（资产未出图或上传失败）。垫素材与提示词 @ 编号按位对应，缺一条会整体错位——请补图或删除该素材后重试。`); return false; }
                 const u = await ensurePublicUrl(m.uri, m.name, m.id);
                 if (!u) { alert(`分镜${shot.index}的素材「${m.name}」无法取得公网直链（原文件失效或网络异常），请重新上传该素材或删除后重试。`); return false; }
-                const ref = { url: u, name: m.name };
                 const md = mediaOf(m);
-                if (md === "video") videos.push(ref);
-                else if (md === "audio") audios.push(ref);
-                else images.push(ref);
+                const baseRef = { url: u, name: m.name, ...(m.assetId && !m.assetId.startsWith("LC-") ? { id: m.assetId } : {}) };
+                if (md === "video") videos.push(baseRef);
+                else if (md === "audio") audios.push(baseRef);
+                else {
+					const identity = isIdentityShotMaterial(m, imageIndex, ovPre.officialAssetIndexes);
+					images.push({ ...baseRef, usage: identity ? "identity" : "reference" });
+					imageIndex++;
+				}
             }
         }
         const input: Record<string, unknown> = {};
@@ -855,8 +861,8 @@ const Frame161195 = () => {
         // 单分镜覆盖优先（未设置回退全局视频设置）；「要求」三档按当前模型 catalog params 收敛（服务端控档一把尺）
         const ov = ovPre;
         const req = videoReqOptionsForKey(vModelKey);
-        const officialIdx = vModel?.officialAssets && method === "omni"
-            ? (ov.officialAssetIndexes ?? []).filter((i) => i >= 0 && i < images.length)
+        const officialIdx = vModel?.officialAssets
+            ? identityIndexesForMaterials(shot.materials, ov.officialAssetIndexes).filter((i) => i >= 0 && i < images.length)
             : [];
         startShotGeneration({
             episodeId: activeEp.id, shotId: shot.id, field: "video",
@@ -996,7 +1002,7 @@ const Frame161195 = () => {
             if (fromShot !== shot.id && activeEp) {
                 const src = activeEp.shots.find((s) => s.id === fromShot)?.materials.find((m) => m.id === matId);
                 // 跨分镜复制走统一入口（内含 assetId/uri 去重 + 图例同步）；kind/media/音色归属随行
-                if (src) addShotMaterialFromAsset(activeEp.id, shot.id, { assetId: src.assetId, uri: src.uri, name: src.name, media: mediaOf(src), kind: src.kind, voiceForAssetId: src.voiceForAssetId });
+                if (src) addShotMaterialFromAsset(activeEp.id, shot.id, { assetId: src.assetId, uri: src.uri, name: src.name, media: mediaOf(src), kind: src.kind, usage: src.usage, voiceForAssetId: src.voiceForAssetId });
             }
             return;
         }
@@ -1009,7 +1015,7 @@ const Frame161195 = () => {
                     const md: MediaKind = d?.media === "video" || d?.media === "audio" ? d.media : "image";
                     const aid: string | undefined = d?.assetId || d?.id || undefined;
                     // 统一入口（内含去重 + 图例同步）
-                    addShotMaterialFromAsset(activeEp.id, shot.id, { assetId: aid, uri: u, name: d.name || "素材", media: md });
+                    addShotMaterialFromAsset(activeEp.id, shot.id, { assetId: aid, uri: u, name: d.name || "素材", media: md, kind: materialKindFromAssetCat(d?.cat) });
                     return;
                 }
             } catch { /* 落到文件分支 */ }
@@ -1022,7 +1028,8 @@ const Frame161195 = () => {
                 const blob = useProjectStore.getState().assetBlobs[base];
                 const ref = blob?.localUri || blob?.url; // 展示优先本地 uri（CSP 安全）
                 if (ref && activeEp) {
-                    addShotMaterialFromAsset(activeEp.id, shot.id, { assetId: base, uri: ref, name: assetNameById(base) || base, media: "image" });
+                    const bound = findProjectAssetByImage(ref, base);
+                    addShotMaterialFromAsset(activeEp.id, shot.id, { assetId: bound?.assetId || base, uri: ref, name: bound?.name || assetNameById(base) || base, media: "image", kind: bound?.kind });
                     return;
                 }
             }
@@ -1648,8 +1655,6 @@ const Frame161195 = () => {
                                         const curMethods = modelMethodsForKey(curVideoModel);
                                         const curMethod = clampMethod(shot.overrides?.method || ms.videoMethod, curMethods);
                                         const curReq = videoReqOptionsForKey(curVideoModel);
-                                        const shotImgCount = Math.min(9, shot.materials.filter((m) => { const md = mediaOf(m); return md !== "video" && md !== "audio"; }).length);
-                                        const officialSel = new Set((shot.overrides?.officialAssetIndexes ?? []).filter((i) => i >= 0 && i < shotImgCount));
                                         // 图视同源：提示词区单栏（字段=unifiedPrompt），无故事板/视频切换；否则按 tab 取两段之一
                                         const promptVal = sameSource ? (shot.unifiedPrompt || "") : (tab === "storyboard" ? (shot.storyboardPrompt || "") : (shot.videoPrompt || ""));
                                         const promptBaseVal = sameSource ? shot.unifiedPromptBase : (tab === "storyboard" ? shot.storyboardPromptBase : shot.videoPromptBase);
@@ -1716,6 +1721,8 @@ const Frame161195 = () => {
                                                     <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                                                         {shot.materials.map((m) => {
                                                             const md = mediaOf(m);
+													const imageIndex = md === "image" ? shot.materials.filter((x) => mediaOf(x) === "image").findIndex((x) => x.id === m.id) : -1;
+													const identity = imageIndex >= 0 && isIdentityShotMaterial(m, imageIndex, shot.overrides?.officialAssetIndexes);
                                                             const verdict = matValid[m.id];
                                                             const bad = !matError[m.id] && !!m.uri && verdict && !verdict.ok;
                                                             return (
@@ -1740,6 +1747,9 @@ const Frame161195 = () => {
                                                                     <span style={{ position: "absolute", top: 0, left: 0, fontSize: 8, lineHeight: "12px", padding: "0 3px", borderBottomRightRadius: 4, background: BADGE_BG[md], color: "#fff", fontWeight: 700 }}>{TAG_BADGE[md]}{matTags[m.id].replace(/^@\D+/, "")}</span>
                                                                     {/* 视频角标：右下角播放小三角 */}
                                                                     {md === "video" && !matError[m.id] && <span style={{ position: "absolute", right: 1, bottom: 1, fontSize: 9, color: "#fff", textShadow: "0 0 3px #000" }}>▶</span>}
+														{curCatModel?.officialAssets && md === "image" && !matError[m.id] && (
+															<IdentityAssetToggle active={identity} onToggle={() => setShotMaterialIdentity(activeEp.id, shot.id, m.id, !identity)} />
+														)}
                                                                     {uploading[m.id] && <span style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.55)" }}><span className="sb-spin" style={{ display: "inline-block", color: "#fff", fontSize: 15 }}>↻</span></span>}
                                                                     {/* 违规红色遮罩 + ❗（悬停时由 CSS .qj-mat-cell:hover 隐藏，方便查看原素材）*/}
                                                                     {bad && <span className="qj-mat-badmask" style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(239,68,68,0.72)", color: "#fff", fontSize: 20, fontWeight: 800, pointerEvents: "none" }}>❗</span>}
@@ -1843,29 +1853,12 @@ const Frame161195 = () => {
                                                         <select title="视频分辨率（仅本分镜）" value={clampToOptions(shot.overrides?.resolution || resolution, curReq.resolutions)} onChange={(e) => setShotOverride(shot, { resolution: e.target.value })} style={miniSel}>
                                                             {curReq.resolutions.map((r) => <option key={r} value={r} style={miniOpt}>{r}</option>)}
                                                         </select>
-                                                        {/* 真人图标记（官方真人库模型 + 全能参考）：勾选素材区第 N 张图为真人图 → officialAssetIndexes */}
-                                                        {curCatModel?.officialAssets && curMethod === "omni" && shotImgCount > 0 && (
-                                                            <span title="真人图标记：点选素材区第 N 张图片为真人图像（官方真人库注册用；默认不选）" style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, color: "rgba(255,255,255,0.55)" }}>
-                                                                真人图
-                                                                {Array.from({ length: shotImgCount }, (_, i) => (
-                                                                    <button key={i}
-                                                                        onClick={() => {
-                                                                            const next = new Set(officialSel);
-                                                                            if (next.has(i)) next.delete(i); else next.add(i);
-                                                                            setShotOverride(shot, { officialAssetIndexes: [...next].sort((a, b) => a - b) });
-                                                                        }}
-                                                                        style={{ padding: "1px 6px", fontSize: 10, cursor: "pointer", borderRadius: 5, border: officialSel.has(i) ? "1px solid rgba(139,124,247,0.8)" : "1px solid rgba(255,255,255,0.18)", background: officialSel.has(i) ? "rgba(139,124,247,0.25)" : "transparent", color: officialSel.has(i) ? "#c9befd" : "rgba(255,255,255,0.6)" }}>
-                                                                        {i + 1}
-                                                                    </button>
-                                                                ))}
-                                                            </span>
-                                                        )}
                                                         {/* 放大编辑当前 tab 的提示词，置于顶栏最右，避开提示词框滚动条 */}
                                                         <PromptExpandButton
                                                             title={sameSource ? "编辑同源提示词" : tab === "storyboard" ? "编辑故事板提示词" : "编辑视频提示词"}
                                                             getValue={() => promptVal}
                                                             onSave={(v) => update(shot.id, promptPatch(v))}
-                                                            getExtra={() => <ShotMaterialStrip episodeId={activeEp.id} shotId={shot.id} />}
+                                                            getExtra={() => <ShotMaterialStrip episodeId={activeEp.id} shotId={shot.id} identityEnabled={!!curCatModel?.officialAssets} />}
                                                             getMentions={() => {
                                                                 const mats = useProjectStore.getState().episodes.find((e) => e.id === activeEp.id)?.shots.find((s) => s.id === shot.id)?.materials ?? [];
                                                                 const tg = materialTags(mats);

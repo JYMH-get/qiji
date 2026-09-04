@@ -11,7 +11,9 @@ import { getPlugin } from "@/nodes/pluginRegistry";
 import { dispatchCommand } from "@/command/dispatch";
 import { NodePromptEditor } from "./NodePromptEditor";
 import { NodeMaterialBay } from "@/nodes/NodeMaterialBay";
-import { getNodeMaterialItems, importAssetToNode } from "@/canvas/nodeMaterials";
+import { getNodeMaterialItems, importAssetToNode, setNodeMaterialUsage, upstreamTextSources } from "@/canvas/nodeMaterials";
+import { mapUpstreamText } from "@/lib/upstreamText";
+import { isCharacterProjectAsset } from "@/lib/projectAssets";
 import { matchNodeDraftAssets } from "@/lib/assetMatch";
 import { PromptExpandButton } from "@/components/PromptExpandButton";
 import { getChannelModelsForNodeType, resolveActiveModelKey, catalogFamilyOrder } from "@/services/adapters/channelAdapter";
@@ -170,9 +172,23 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 	// 方法（第131轮）：catalog 模型 methods 声明多方法才显示方法 pill；残留值收敛到支持集
 	const vMethods = modelMethods(catModel);
 	const vMethod = clampMethod(params.method, vMethods);
-	// 真人图（官方真人库模型 + 全能参考）：素材区图片（上游+自加合并序）0 基下标多选
+	// 人像素材：卡片上的 usage 是新版权威；索引只为旧协议兼容和画布请求投影。
 	const imgItems = getNodeMaterialItems(nodeId).filter((it) => it.media === "image");
+	const configuredOfficial = Array.isArray(params.officialAssetIndexes);
 	const officialSel = new Set(((params.officialAssetIndexes as number[] | undefined) ?? []).filter((i) => i >= 0 && i < imgItems.length));
+	imgItems.forEach((item, index) => {
+		if (item.usage === "identity") officialSel.add(index);
+		else if (item.usage === "reference") officialSel.delete(index);
+		else if (!configuredOfficial && isCharacterProjectAsset(item.assetId)) officialSel.add(index);
+	});
+	const toggleOfficialImage = (imageIndex: number) => {
+		const next = new Set(officialSel);
+		const identity = !next.has(imageIndex);
+		if (identity) next.add(imageIndex); else next.delete(imageIndex);
+		const item = imgItems[imageIndex];
+		if (item) setNodeMaterialUsage(nodeId, item.key, identity ? "identity" : "reference");
+		setParam({ officialAssetIndexes: [...next].sort((a, b) => a - b) });
+	};
 
 	// 家族下拉条目：每个家族一条（选中即进该家族——当前模型在家族内保持款式、否则取家族第一款）
 	const dropdownOptions: { id: string; name: string; family: FamilyGroup }[] = srcFamilies.map((f) => ({
@@ -254,7 +270,10 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 					{/* 素材区（可编辑）：上游连线素材(前) + 自加素材(后)，＋/拖入/粘贴添加；最右为提示词放大按钮 */}
 					<NodeMaterialBay
 						nodeId={nodeId}
-						rightAction={<PromptExpandButton title="编辑视频提示词" getValue={() => prompt} onSave={(v) => setParam({ prompt: v })} placeholder="输入提示词…" getExtra={() => <NodeMaterialBay nodeId={nodeId} />} getMentions={() => getNodeMaterialItems(nodeId)} onImport={(cand) => importAssetToNode(nodeId, cand)} onMatchAssets={(draft) => matchNodeDraftAssets(nodeId, draft)} />}
+						identityEnabled={!!catModel?.officialAssets}
+						identityIndexes={[...officialSel]}
+						onToggleIdentity={toggleOfficialImage}
+						rightAction={<PromptExpandButton title="编辑视频提示词" getValue={() => mapUpstreamText(prompt, upstreamTextSources(nodeId).map((source) => source.text))} onSave={(v) => setParam({ prompt: v })} placeholder="输入提示词…" getExtra={() => <NodeMaterialBay nodeId={nodeId} identityEnabled={!!catModel?.officialAssets} identityIndexes={[...officialSel]} onToggleIdentity={toggleOfficialImage} />} getMentions={() => getNodeMaterialItems(nodeId)} onImport={(cand) => importAssetToNode(nodeId, cand)} onMatchAssets={(draft) => matchNodeDraftAssets(nodeId, draft)} />}
 					/>
 
 					{/* 提示词输入区（自适应高度，超出内部滚动，不撑高面板）*/}
@@ -490,56 +509,6 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 													{k === vMethod && <span className="text-green-400 text-[10px] ml-2">✓</span>}
 												</button>
 											))}
-										</motion.div>
-									)}
-								</AnimatePresence>
-							</div>
-						)}
-
-						{/* 真人图 pill（官方真人库模型 + 全能参考）：点选素材区第 N 张图为真人图像 → params.officialAssetIndexes */}
-						{catModel?.officialAssets && vMethod === "omni" && imgItems.length > 0 && (
-							<div className="relative shrink-0">
-								<button
-									title="真人图标记：选择哪些图片素材是真人图像（官方真人库注册用；默认不选）"
-									onClick={(e) => {
-										e.stopPropagation();
-										setParamPanelExpanded(false);
-										setActivePopoverKey(activePopoverKey === "official" ? null : "official");
-									}}
-									className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-white/5 border border-white/5 text-foreground cursor-pointer whitespace-nowrap transition-colors ${activePopoverKey === "official" ? "bg-white/10 border-white/10" : "hover:bg-white/8"}`}
-								>
-									真人图{officialSel.size ? ` ${officialSel.size}` : ""}
-									<ChevronDown className="h-3 w-3 text-muted-foreground" />
-								</button>
-								<AnimatePresence>
-									{activePopoverKey === "official" && (
-										<motion.div
-											data-dropdown
-											initial={{ y: -8, opacity: 0 }}
-											animate={{ y: 0, opacity: 1 }}
-											exit={{ y: -8, opacity: 0 }}
-											transition={panelTransition}
-											style={{ position: "absolute", top: "100%", left: 0, marginTop: "6px", background: "rgba(22, 27, 38, 0.98)", border: "1px solid rgba(255, 255, 255, 0.12)", backdropFilter: "blur(20px)", boxShadow: "0 8px 32px rgba(0, 0, 0, 0.6)", zIndex: 1010 }}
-											className="rounded-xl overflow-visible min-w-[210px] py-1"
-											onClick={(e) => e.stopPropagation()}
-										>
-											{imgItems.map((it, i) => {
-												const on = officialSel.has(i);
-												return (
-													<button
-														key={`${it.tag}-${i}`}
-														onClick={() => {
-															const next = new Set(officialSel);
-															if (on) next.delete(i); else next.add(i);
-															setParam({ officialAssetIndexes: [...next].sort((a, b) => a - b) });
-														}}
-														className={`flex items-center justify-between w-full px-3.5 py-2 text-xs transition-colors cursor-pointer text-left ${on ? "bg-white/10 text-white font-medium" : "text-muted-foreground hover:bg-white/5 hover:text-foreground"}`}
-													>
-														<span className="flex-1 pr-2 truncate">{it.tag} {it.name || `图片 ${i + 1}`}</span>
-														{on && <span className="text-green-400 text-[10px] ml-2">✓</span>}
-													</button>
-												);
-											})}
 										</motion.div>
 									)}
 								</AnimatePresence>

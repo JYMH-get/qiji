@@ -180,6 +180,8 @@ export interface ShotMaterial {
   media?: "image" | "video" | "audio";
   name: string;
   uri: string;                                            // 缩略图/图片/视频/音频（公网 url 或本地 uri）
+  /** 本分镜中的引用用途；角色图片缺省 identity，用户可显式改为 reference；不改变全局资产身份。 */
+  usage?: "reference" | "identity";
   /** 该素材若是「角色声音参考」音频：指向所属角色的资产 id（用于图例配对「@ImageN的声音参考@AudioM」）。 */
   voiceForAssetId?: string;
 }
@@ -216,7 +218,7 @@ export interface ShotOverrides {
   resolution?: string;      // 视频分辨率 480p | 720p | 1080p
   /** 生成方法（第131轮）：omni=全能参考 / frames=首尾帧（仅声明了 methods 的模型有效） */
   method?: string;
-  /** 官方真人图标记（苏打水 gf 系）：素材区图片的 0 基下标 → params.officialAssetIndexes */
+  /** 旧版兼容字段：素材区图片的人像用途 0 基下标；新版以 ShotMaterial.usage 为准。 */
   officialAssetIndexes?: number[];
 }
 

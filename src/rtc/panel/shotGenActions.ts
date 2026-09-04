@@ -20,6 +20,7 @@ import { startShotGeneration } from "@/services/generationQueue";
 import { effectiveModelKey } from "@/components/ModelPicker";
 import { ensurePublicUrl } from "@/lib/publicUrl";
 import { mediaOf } from "@/lib/shotMaterials";
+import { identityIndexesForMaterials, isIdentityShotMaterial } from "@/lib/shotMaterialOps";
 import { buildAssetListVars } from "@/lib/assetVars";
 import { buildNeighborVars } from "@/lib/inferContext";
 import { resolvePresets, countUnifiedShots, gridPresetForShotCount, presetBody, hasGridInstruction } from "@/lib/presetSchemes";
@@ -158,19 +159,24 @@ export async function genShotVideo(episodeId: string, shotId: string, opts?: { s
 	// 故事板 → 整体首帧参考；素材按模态分组（公网 url + name，保序对齐 @tag）
 	let firstFrameUrl = "";
 	if (genWithStory && shot.storyboardUri) firstFrameUrl = await ensurePublicUrl(shot.storyboardUri, { name: "故事板" });
-	const images: { url: string; name?: string }[] = [];
+	const images: { id?: string; url: string; name?: string; usage?: "reference" | "identity" }[] = [];
 	const videos: { url: string; name?: string }[] = [];
 	const audios: { url: string; name?: string }[] = [];
 	if (genWithAsset) {
+		let imageIndex = 0;
 		for (const m of shot.materials) {
 			if (!m.uri) { alert(`素材「${m.name}」没有文件（资产未出图或上传失败）。垫素材与提示词 @ 编号按位对应，缺一条会整体错位——请补图或删除该素材后重试。`); return false; }
 			const u = await ensurePublicUrl(m.uri, { name: m.name });
 			if (!u) { alert(`素材「${m.name}」无法取得公网直链（原文件失效或网络异常），请重新上传该素材或删除后重试。`); return false; }
-			const ref = { url: u, name: m.name };
 			const md = mediaOf(m);
-			if (md === "video") videos.push(ref);
-			else if (md === "audio") audios.push(ref);
-			else images.push(ref);
+			const baseRef = { url: u, name: m.name, ...(m.assetId && !m.assetId.startsWith("LC-") ? { id: m.assetId } : {}) };
+			if (md === "video") videos.push(baseRef);
+			else if (md === "audio") audios.push(baseRef);
+			else {
+				const identity = isIdentityShotMaterial(m, imageIndex, ov.officialAssetIndexes);
+				images.push({ ...baseRef, usage: identity ? "identity" : "reference" });
+				imageIndex++;
+			}
 		}
 	}
 	const input: Record<string, unknown> = {};
@@ -178,8 +184,8 @@ export async function genShotVideo(episodeId: string, shotId: string, opts?: { s
 	if (videos.length) input.videos = videos;
 	if (audios.length) input.audios = audios;
 	const req = videoReqOptionsForKey(vModelKey);
-	const officialIdx = vModel?.officialAssets && method === "omni"
-		? (ov.officialAssetIndexes ?? []).filter((i) => i >= 0 && i < images.length)
+	const officialIdx = vModel?.officialAssets
+		? identityIndexesForMaterials(shot.materials, ov.officialAssetIndexes).filter((i) => i >= 0 && i < images.length)
 		: [];
 	const pendingId = startShotGeneration({
 		episodeId, shotId, field: "video",

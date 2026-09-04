@@ -24,7 +24,7 @@ import { listEnabledModels, getModelDef, modelVisibleToAgent, type ModelDef } fr
 import { getChannel } from "../store/channels.ts";
 import { listModes, modeName } from "../store/modes.ts";
 import {
-	usersByAgent, getUser, updateUser, dailySpentToday, type User,
+	usersByAgent, getUser, updateUser, deleteUser, dailySpentToday, type User,
 } from "../store/users.ts";
 import { codesByAgent, getCode, createCodes, deleteCode } from "../store/redeemCodes.ts";
 import { listLogs, getLog, exportLogs, logFacets, logSummary, logCostFor, logCodeIssue, type LogEntry, type LogMeta, type LogCostView } from "../store/logs.ts";
@@ -167,8 +167,14 @@ export async function registerAgentRoutes(app: FastifyInstance): Promise<void> {
 			}
 			return updateUser(id, patch as any)!;
 		});
-		// 批量操作名下用户（P2b 全新语义：启停 + 模式开关；删除/解绑/作废随激活码机制整体移除——
-		// 用户是自助注册的真实账号，由源站管理端删除）
+		// 删除名下用户：先按 agentId 校验归属；对范围外目标统一返回 404，避免泄露用户存在性。
+		api.delete("/agent-api/users/:id", async (req, reply) => {
+			const { id } = req.params as { id: string };
+			if (!own(req, id)) return reply.code(404).send({ error: { message: "用户不存在或不属于你" } });
+			if (!deleteUser(id)) return reply.code(404).send({ error: { message: "用户不存在或不属于你" } });
+			return { ok: true };
+		});
+		// 批量操作名下用户：启停、模式开关、删除。每个 id 都单独做归属校验。
 		api.post("/agent-api/users/batch-op", async (req, reply) => {
 			const b = (req.body ?? {}) as { ids?: string[]; op?: string; modeId?: string; feature?: string; value?: boolean };
 			const ids = Array.isArray(b.ids) ? b.ids.filter((x) => typeof x === "string") : [];
@@ -181,6 +187,7 @@ export async function registerAgentRoutes(app: FastifyInstance): Promise<void> {
 				switch (b.op) {
 					case "enable": if (updateUser(id, { enabled: true })) affected++; break;
 					case "disable": if (updateUser(id, { enabled: false })) affected++; break;
+					case "delete": if (deleteUser(id)) affected++; break;
 					case "setFeature": { // 批量开关固定模式（assetMode/canvasMode/editorMode/libtv/dreamina/comfyui）
 						if (!b.feature) break;
 						const f: Record<string, unknown> = { assetMode: true, canvasMode: true, editorMode: true, libtv: true, dreamina: true, comfyui: true, ...(u.features ?? {}) };

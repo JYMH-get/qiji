@@ -128,6 +128,8 @@ export async function runPurpose(
 	if (inp.variables) submitInput.variables = inp.variables;
 	if (inp.templateId) submitInput.templateId = inp.templateId;
 	if (inp.schemaId) submitInput.schemaId = inp.schemaId;
+	// 仅供客户端适配器上报“素材上传中/成功”等提交前阶段；不会进入服务端请求体。
+	if (inp.onProgress) submitInput._onClientProgress = inp.onProgress;
 
 	try {
 		inp.onProgress?.(10, "queued");
