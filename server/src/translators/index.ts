@@ -41,6 +41,7 @@ import { submitQijicloudVideo, pollQijicloudVideo } from "./qijicloud.ts";
 import { submitBysVideo, pollBysVideo } from "./bys.ts";
 import { submitQiqiVideo, pollQiqiVideo } from "./qiqi.ts";
 import { submitOfficialVideo, pollOfficialVideo } from "./official.ts";
+import { submitZero007Video, pollZero007Video } from "./zero007.ts";
 import { isBuiltinProtocol, getProtocolDef, type CustomProtocol } from "../store/protocols.ts";
 import { runCustomText, runCustomImmediate, customSubmit, customPoll } from "./custom.ts";
 import { resolveContentType } from "./contentType.ts";
@@ -157,6 +158,7 @@ const VIDEO_DRIVERS: Record<string, VideoDriver> = {
 	"qiqi-video": { submit: submitQiqiVideo, poll: pollQiqiVideo },
 	// 官方（kwjm.com·dreamina Seedance 2.0/2.5）：提交/查询均为 /v1/videos/generations
 	"official-video": { submit: submitOfficialVideo, poll: pollOfficialVideo },
+	"zero007-video": { submit: submitZero007Video, poll: pollZero007Video },
 };
 
 /** 内置协议轮询间隔覆盖（缺省 8s）。Aivide 文档 §4.4 明确要求 10-15s、勿高频轮询 → 12s；
@@ -168,6 +170,8 @@ const BUILTIN_POLL_INTERVALS: Record<string, number> = { "aivide-video": 12000, 
 	"bys-video": 6000,
 	// QiQi 文档 §2/§16「每隔 3～5 秒查询一次」→ 取 4s
 	"qiqi-video": 4000,
+	// 007 文档建议每 5 秒查询；初次提交与重启续轮询共用。
+	"zero007-video": 5000,
 	// 奇迹云：poll 读内存零网络，3s 让排队/派单进度更跟手（不打任何上游）
 	"qijicloud-comfy": 3000 };
 
@@ -516,6 +520,7 @@ export async function dispatchGenerate(
 		case "bys-video":
 		case "qiqi-video":
 		case "official-video":
+		case "zero007-video":
 			return createVideoPollingTask(req, up, model.protocol, VIDEO_DRIVERS[model.protocol], logId, onUpstream,
 				"video", { intervalMs: BUILTIN_POLL_INTERVALS[model.protocol] });
 		case "jmz-image":

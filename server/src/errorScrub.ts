@@ -80,6 +80,9 @@ const BRAND_TOKENS = [
 	// 官方（kwjm.com，2026-09-03）：模式名「官方」由动态模式占位符保护；协议段和域名需静态擦除。
 	"official-video",
 	"kwjm",
+	// 007 的模式名可见；上游实现标识和站方名称隐藏。
+	"INFINITE_CANVAS",
+	"Infinite Canvas",
 	// 协议 id 里的品牌段（「协议不存在或已禁用：dimensio-video」一类）
 	"dimensio",
 	"huaying",
@@ -129,6 +132,7 @@ const HOST_TOKENS = [
 	"boyesir.icu", // BYS（www.boyesir.icu）API 域（第252轮；成片直链与网页版 canvas. 子域一并吞）
 	"pidoi.com", // QiQi（pidoi.com）API 域（第255轮；成片直链 /video/task_xxx.mp4 与下载端点同域）
 	"kwjm.com", // 官方（kwjm.com）API 域；成片若同域返回也不得泄漏
+	"env-00jy6ktfybhu.dev-hz.cloudbasefunction.cn", // 007 API 域（仅此实例，不泛化到整个云服务商）
 ];
 
 function escRe(s: string): string {
@@ -168,6 +172,10 @@ export function scrubChannelInfo(msg: string): string {
 	for (const h of [...hosts].sort((a, b) => b.length - a.length)) {
 		out = out.replace(new RegExp(`[A-Za-z0-9.-]*${escRe(h)}`, "gi"), "（已隐藏）");
 	}
+
+	// 内部标识先擦除：「007」是 zero007-video / ZERO007_API_KEY 的子串，
+	// 若先保护模式名会拆开标识，导致后续品牌词规则无法命中。
+	out = out.replace(/\b(?:zero007-video|ZERO007_API_KEY|ZERO007_BASE_URL)\b/gi, "渠道");
 
 	// 3) 「当前模式名」占位符保护——模式名是用户可见的对外品牌（客户端下拉就显示它），
 	//    绝不擦；用占位符而非逐词豁免，防较短品牌词击中长模式名内部（「简梦」误伤「简梦S」）。

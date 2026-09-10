@@ -202,6 +202,11 @@ export const config = {
 		baseUrl: strip(process.env.OFFICIAL_BASE_URL ?? "https://kwjm.com"),
 		apiKey: process.env.OFFICIAL_API_KEY ?? "",
 	},
+	// 007 正版 Seedance 2.5（Bearer ic_live_）；Base URL 必须保留 /gateway。
+	zero007: {
+		baseUrl: strip(process.env.ZERO007_BASE_URL ?? "https://env-00jy6ktfybhu.dev-hz.cloudbasefunction.cn/gateway"),
+		apiKey: process.env.ZERO007_API_KEY ?? "",
+	},
 	// autodl（autodl.art·ComfyUI 工作流平台）视频渠道（第234轮；异步 submit+poll，见 translators/autodl.ts）。
 	// ⚠ 鉴权=Authorization 原样 Token（**不带 Bearer 前缀**，控制台「令牌管理」创建、分组选 ComfyUI）；
 	//    Base URL 填根域（翻译器自拼 /api/v1/comfyui/comfyui_workflow/{workflow_id} 与 /result/{task_id}）。

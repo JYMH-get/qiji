@@ -73,6 +73,7 @@ import {
 } from "../store/settings.ts";
 import { isSmtpConfigured, sendMail } from "../services/mailer.ts";
 import { isSmsConfigured } from "../services/smsAliyun.ts";
+import { transferUsers } from "../services/userTransfer.ts";
 import { isOssConfigured, ossSelfTest, ossPut, ossPresignPut, ossPublicUrl } from "../store/oss.ts";
 import { getSiteConfig, updateSiteConfig, setSiteImage, SITE_IMAGE_SLOTS } from "../store/site.ts";
 import { favoriteOwnersOverview, favoritedAssetCount, grantedBytes, addFavorite, removeFavorite } from "../store/favorites.ts";
@@ -132,6 +133,12 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			};
 		});
 		api.post("/admin-api/users", async (req) => createUser((req.body ?? {}) as any));
+		api.post("/admin-api/users/transfer", async (req, reply) => {
+			if (isRelay()) return reply.code(403).send({ error: { message: "用户归属迁移仅限源站管理员操作" } });
+			const result = transferUsers(req.body);
+			if (!result.ok) return reply.code(result.status).send({ error: result.error });
+			return result;
+		});
 		// （P2b 移除：批量生成激活码——注册体系上线后用户自助注册（可填邀请码归属渠道商）；
 		//   管理端仍可单个创建用户；存量激活码用户不受影响。）
 		// 批量操作（第130轮）：对选中的多个用户批量 启用/停用账号、启/禁模式、解绑机器、删除
@@ -152,7 +159,6 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 						if (!b.feature) break;
 						const f: Record<string, unknown> = { assetMode: true, canvasMode: true, editorMode: true, libtv: true, dreamina: true, comfyui: true, ...(u.features ?? {}) };
 						f[b.feature] = b.value !== false;
-						if (f.assetMode === false && f.canvasMode === false && f.editorMode === false) break; // 资产+画布+实时剪辑不能全关
 						if (updateUser(id, { features: f as User["features"] })) affected++;
 						break;
 					}
@@ -169,6 +175,9 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 		});
 		api.put("/admin-api/users/:id", async (req, reply) => {
 			const { id } = req.params as { id: string };
+			if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "agentId")) {
+				return reply.code(400).send({ error: { message: "请通过用户迁移功能变更归属" } });
+			}
 			const u = updateUser(id, (req.body ?? {}) as any);
 			if (!u) return reply.code(404).send({ error: { message: "用户不存在" } });
 			return u;

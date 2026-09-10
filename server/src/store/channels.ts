@@ -60,6 +60,7 @@ export const CH_QIJICLOUD = "ch-qijicloud";
 export const CH_BYS = "ch-bys";
 export const CH_QIQI = "ch-qiqi";
 export const CH_OFFICIAL = "ch-official";
+export const CH_007 = "ch-007";
 // Yali（api.yaliai.com，第229轮）：⚠ 一把 Key 绑定一种「接口类型」→ 按接口类型分两个渠道，各填各的 Key
 export const CH_YALI_OPENAI = "ch-yali-openai";
 export const CH_YALI_GEMINI = "ch-yali-gemini";
@@ -188,6 +189,11 @@ const DEFAULT_CHANNELS: ChannelDef[] = [
 	{
 		id: CH_OFFICIAL, name: "官方", baseUrl: "https://kwjm.com", apiKey: "",
 		enabled: true, note: "官方模式视频渠道（6 款 dreamina-seedance-2-0 / 2-5 系模型）；密钥填站点 API Key（Bearer 鉴权，留空走环境 OFFICIAL_API_KEY）；Base URL 填根域 https://kwjm.com 不带 /v1，翻译器自拼 /v1/videos/generations；2.0 系上限 9 图+3 视频+3 音频、4~15 秒且不可纯音频，2.5 系上限 30 图+10 视频+10 音频、4~30 秒且允许纯音频；上游模型名逐字照抄文档，价格暂为占位价，上线前须定真价；模型清单可用 GET /v1/models（需 Bearer）更新",
+		createdAt: "", updatedAt: "",
+	},
+	{
+		id: CH_007, name: "007", baseUrl: "https://env-00jy6ktfybhu.dev-hz.cloudbasefunction.cn/gateway", apiKey: "",
+		enabled: true, note: "007 视频渠道，默认接入正版 Seedance 2.5；密钥填平台签发的 ic_live_ API Key（Bearer 鉴权，留空走环境 ZERO007_API_KEY）。正版与特惠版按 Key 区分且能力不同，一把 Key 仅对应一种版本；当前模型按正版能力配置。Base URL 必须保留 /gateway，翻译器在其后拼接 /v1/videos 与 /v1/jobs/{jobId}。当前 Key 的可用模型、参数范围与价格通过 GET /v1/models（需 Bearer）核对。模型默认停用，每秒 50 积分为占位价，填正确密钥并定真价后再启用。",
 		createdAt: "", updatedAt: "",
 	},
 	{

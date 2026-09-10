@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+assert.ok(existsSync(new URL('../.qiji-user-transfer-sandbox', import.meta.url)), 'Refusing to import stores outside isolated sandbox');
+globalThis.fetch = async url => { throw new Error(`Sandbox blocks network: ${url}`); };
+const file = new URL('../data/users.json', import.meta.url);
+const before = readFileSync(file, 'utf8');
+const expected = JSON.parse(readFileSync(new URL('../.qiji-user-transfer-expected.json', import.meta.url), 'utf8'));
+const { listUsers } = await import('../src/store/users.ts');
+assert.deepEqual(JSON.parse(JSON.stringify(listUsers())), expected, 'ownership, balances, credentials and settings survive restart');
+assert.equal(readFileSync(file, 'utf8'), before, 'reloading transferred users does not rewrite user data');
+console.log('USER_TRANSFER_RESTART_PASSED 2/2');

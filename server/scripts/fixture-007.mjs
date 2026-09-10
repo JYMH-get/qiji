@@ -1,0 +1,31 @@
+// Build an existing-install fixture after legacy cold-start migrations have converged.
+import assert from 'node:assert/strict';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+const marker = new URL('../.qiji-007-sandbox', import.meta.url);
+assert.ok(existsSync(marker), 'Refusing to write fixture outside marked sandbox');
+const read = name => JSON.parse(readFileSync(new URL(`../data/${name}.json`, import.meta.url), 'utf8'));
+const write = (name, value) => writeFileSync(new URL(`../data/${name}.json`, import.meta.url), JSON.stringify(value, null, 2));
+const current = read('models');
+const videoModelIds = ['007-sd2.5', '007-sd2.0'];
+const initial = JSON.parse(readFileSync(new URL('../../first-start-data/models.json', import.meta.url), 'utf8'));
+const definitions = models => models.map(({ createdAt, updatedAt, ...definition }) => definition).sort((a, b) => a.id.localeCompare(b.id));
+assert.ok(JSON.stringify(definitions(current.models)) === JSON.stringify(definitions(initial.models)), 'Existing cold-start migrations changed model definitions');
+for (const id of videoModelIds) assert.deepEqual(current.models.find(m => m.id === id), initial.models.find(m => m.id === id), `${id} changed during legacy bootstrap`);
+const changed = Object.keys(current).filter(key => key !== 'models' && JSON.stringify(current[key]) !== JSON.stringify(initial[key]));
+assert.ok(changed.every(key => key === 'version' || key === 'deletedSeedIds' || key.endsWith('Version')), 'Unexpected cold-start store mutation');
+console.log(`007_LEGACY_BOOTSTRAP: ${changed.length} historical metadata fields initialized; legacy timestamps/order changed; model definitions and both 007 video records unchanged`);
+
+current.models = current.models.filter(model => !videoModelIds.includes(model.id));
+const existing = current.models.find(model => model.id === 'gpt-5.5');
+existing.label = 'sandbox-preserve-admin-label';
+existing.cost = 1234;
+write('models', current);
+const channels = read('channels');
+channels.channels = channels.channels.filter(channel => channel.id !== 'ch-007');
+write('channels', channels);
+const modes = read('modes');
+modes.modes = modes.modes.filter(mode => mode.id !== '007');
+modes.seedVersion = 25;
+write('modes', modes);
+writeFileSync(new URL('../.qiji-007-upgrade-models.json', import.meta.url), JSON.stringify(current.models));
+console.log('007_UPGRADE_FIXTURE_READY: channel/two video models/mode absent; prior mode seed version 25; custom model label and price');

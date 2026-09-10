@@ -664,7 +664,7 @@ function renderUsers(){
       <td><div class="ucell"><div class="avatar" style="${AVATAR_BG[i%4]}">${esc((u.name||"?").slice(0,1))}</div><div><div>${u.name&&u.name.trim()?esc(u.name):`<span class="faint">（未注册）</span>`}</div>${u.account?`<div class="sub mono">@${esc(u.account)}</div>`:u.note?`<div class="sub">${esc(u.note)}</div>`:""}</div></div></td>
       <td><span class="mono">${esc(String(u.accessKey).slice(0,10))}…</span> <button class="sm ghost icon" title="复制完整 API 密钥（身份凭证：客户端登录与 API 对接共用）" onclick="event.stopPropagation();copyText('${esc(u.accessKey)}','API 密钥已复制')"><svg><use href="#i-copy"/></svg></button></td>
       <td><label class="sw" onclick="event.stopPropagation()"><input type="checkbox" ${u.enabled?"checked":""} onchange="updUser('${u.id}','enabled',this.checked,true)"/><i></i></label></td>
-      <td><div class="modechips">${mchip("assetMode",f.asset,"资产")}${mchip("canvasMode",f.canvas,"画布")}${mchip("editorMode",f.editor,"实时剪辑")}${mchip("libtv",f.libtv,"LibTV")}${mchip("dreamina",f.dreamina,"即梦")}${mchip("comfyui",f.comfy,"ComfyUI")}</div></td>
+      <td><div class="modechips">${mchip("assetMode",f.asset,"表格视频")}${mchip("canvasMode",f.canvas,"画布")}${mchip("editorMode",f.editor,"实时剪辑")}${mchip("libtv",f.libtv,"LibTV")}${mchip("dreamina",f.dreamina,"即梦")}${mchip("comfyui",f.comfy,"ComfyUI")}</div></td>
       <td style="text-align:right">${(u.credits||0).toLocaleString()}</td>
       <td style="text-align:right"><span>${(u.dailySpent||0).toLocaleString()}</span><span class="faint"> / ${(u.totalSpent||0).toLocaleString()}</span></td>
       <td class="mono">${u.account ? esc(u.account) : `<span class="faint">未注册</span>`}</td>
@@ -681,11 +681,12 @@ function renderUserBatchbar(){
   const bb = $("#u_batchbar"); if(!bb) return;
   if(uSel.size===0){ bb.style.display="none"; bb.innerHTML=""; return; }
   /* 第228轮：批量模式只留功能形式四项——渠道形式模式的管控走「模式管理」全局启停/渠道商整商硬闸 */
-  const modeOpts = `<option value="f:assetMode">资产</option><option value="f:canvasMode">画布</option><option value="f:editorMode">实时剪辑</option><option value="f:libtv">LibTV</option><option value="f:dreamina">即梦</option><option value="f:comfyui">ComfyUI</option>`;
+  const modeOpts = `<option value="f:assetMode">表格视频</option><option value="f:canvasMode">画布</option><option value="f:editorMode">实时剪辑</option><option value="f:libtv">LibTV</option><option value="f:dreamina">即梦</option><option value="f:comfyui">ComfyUI</option>`;
   bb.style.display="flex";
   bb.innerHTML = `<b>已选 ${uSel.size} 个</b>
     <button class="sm" onclick="batchAccount(true)">启用账号</button>
     <button class="sm" onclick="batchAccount(false)">停用账号</button>
+    ${IS_RELAY ? "" : `<button class="sm" onclick="openUserTransferDlg([...uSel])">迁移用户</button>`}
     <button class="sm danger" onclick="batchDelete()">删除</button>
     <span style="width:12px"></span><span class="faint">模式：</span>
     <select id="u_batchmode">${modeOpts}</select>
@@ -700,6 +701,50 @@ async function batchOp(body, okTpl){
 }
 function batchAccount(on){ batchOp({op:on?"enable":"disable"}, on?"已启用 {n} 个账号":"已停用 {n} 个账号"); }
 function batchDelete(){ confirmDo({title:"批量删除用户",text:`即将删除选中 <b>${uSel.size}</b> 个用户，其账号立即失效、客户端掉线；请求记录保留。不可撤销。`,okLabel:"确认删除",onOk:()=>batchOp({op:"delete"},"已删除 {n} 个")}); }
+/* 迁移只提交身份与目标归属，积分由服务端保留当前值。 */
+let USER_TRANSFER_IDS = [];
+let userTransferSaving = false;
+const userCompanyName = id => id ? ((uAgentsCache||[]).find(a=>a.id===id)?.name || id) : "源站（平台直属）";
+async function openUserTransferDlg(ids){
+  if (IS_RELAY || userTransferSaving) return;
+  const selected = [...new Set(ids)].map(id=>USERS.find(u=>u.id===id)).filter(Boolean);
+  if (!selected.length) return;
+  try { uAgentsCache = (await api("/admin-api/agents")).items || []; }
+  catch(e){ toast("无法加载迁移目标："+e.message,"bad"); return; }
+  USER_TRANSFER_IDS = selected.map(u=>u.id);
+  const targets = [{id:"",name:"源站（平台直属）"}, ...uAgentsCache.filter(a=>a.enabled).map(a=>({id:a.id,name:a.name}))];
+  $("#dlgTitle").textContent = "迁移用户";
+  $("#dlgBody").innerHTML = `
+    <p class="mut" style="margin:0 0 12px">将选中的 <b>${selected.length}</b> 个用户转到指定归属。现有积分、登录账号和团队关系保留，后续模型、价格和功能权限按目标归属生效。</p>
+    <div class="tblwrap" style="max-height:240px;overflow:auto;margin-bottom:14px"><table>
+      <thead><tr><th>用户</th><th>当前归属</th><th style="text-align:right">现有积分</th></tr></thead>
+      <tbody>${selected.map(u=>`<tr><td>${esc(dispName(u))}</td><td>${esc(userCompanyName(u.agentId))}</td><td style="text-align:right">${(u.credits||0).toLocaleString()}</td></tr>`).join("")}</tbody>
+    </table></div>
+    <div class="frow"><label for="ut_target">迁移到</label><select id="ut_target" style="flex:1">
+      <option value="__choose" selected disabled>请选择目标归属</option>
+      ${targets.map(a=>`<option value="${esc(a.id)}" ${selected.every(u=>(u.agentId||"")===a.id)?"disabled":""}>${esc(a.name)}</option>`).join("")}
+    </select></div>
+    <p class="faint" style="font-size:12px">已属于目标归属的用户会跳过。列表中的积分仅供核对，迁移保留提交时的实际余额。</p>
+    <p id="ut_err" class="bad-t" role="alert" style="font-size:12.5px;margin:6px 0"></p>
+    <div style="display:flex;justify-content:flex-end;gap:9px;margin-top:14px"><button onclick="dlg.close()">取消</button><button id="ut_submit" class="pri" onclick="saveUserTransfer()">确认迁移</button></div>`;
+  dlg.classList.remove("wide"); dlg.showModal(); $("#ut_target").focus();
+}
+async function saveUserTransfer(){
+  if (userTransferSaving) return;
+  const target = $("#ut_target").value;
+  const err = $("#ut_err"), button = $("#ut_submit");
+  err.textContent = "";
+  if (target==="__choose"){ err.textContent = "请选择目标归属"; return; }
+  userTransferSaving = true; button.disabled = true; button.textContent = "迁移中…";
+  try {
+    const r = await api("/admin-api/users/transfer",{method:"POST",body:JSON.stringify({ids:USER_TRANSFER_IDS.slice(),targetAgentId:target||null})});
+    dlg.close(); closeDrawer();
+    uAgentId = target || "platform"; uSearch = ""; uChip = "all";
+    toast(`已迁移 ${r.affected} 个用户至${userCompanyName(target)}，积分保持不变${r.unchanged?`（${r.unchanged} 个已在目标归属）`:""}`);
+    await loadUsers();
+  } catch(e){ err.textContent = e.message; }
+  finally { userTransferSaving = false; button.disabled = false; button.textContent = "确认迁移"; }
+}
 function batchSetMode(on){
   const v = ($("#u_batchmode")||{}).value; if(!v) return;
   const k = v.split(":")[1];
@@ -719,12 +764,11 @@ async function updUser(id, k, v, rerender){
     if (rerender) renderUsers();
   } catch(e){ toast(e.message, "bad"); if (rerender) renderUsers(); }
 }
-/* 可用模式开关：资产/画布/实时剪辑至少留一个（LibTV/即梦/ComfyUI 是附加入口可单独关） */
+/* 表格生图始终可用；表格视频与其它能力分别开关。 */
 async function toggleFeat(id, k){
   const u = USERS.find(x=>x.id===id); if(!u) return;
   const f = Object.assign({assetMode:true,canvasMode:true,editorMode:true,libtv:true,dreamina:true,comfyui:true}, u.features||{});
   f[k] = f[k]===false;
-  if (f.assetMode===false && f.canvasMode===false && f.editorMode===false){ toast("资产、画布与实时剪辑模式至少保留一个", "bad"); return; }
   try {
     await api("/admin-api/users/"+id, { method:"PUT", body: JSON.stringify({ features: f }) });
     u.features = f;
@@ -756,15 +800,16 @@ function renderUserDrawer(){
         <div class="t">基 本 信 息</div>
         <div class="frow"><label>用户名</label><input type="text" value="${esc(u.name)}" onchange="updUser('${u.id}','name',this.value,true)" /></div>
         <div class="frow"><label>备注</label><input type="text" value="${esc(u.note||"")}" onchange="updUser('${u.id}','note',this.value,true)" /></div>
+        ${IS_RELAY ? "" : `<div class="frow"><label>归属</label><span class="val">${esc(userCompanyName(u.agentId))}</span><button class="sm" onclick="openUserTransferDlg(['${u.id}'])">迁移用户</button></div>`}
         <div class="frow"><label>积分</label><input type="number" value="${u.credits||0}" style="width:140px" onchange="updUser('${u.id}','credits',Number(this.value),true)" /><span class="faint" style="font-size:11.5px">改完即生效</span></div>
         <div class="frow"><label>设备上限</label><input type="number" min="0" max="100" value="${u.deviceLimit??""}" placeholder="默认" style="width:140px" onchange="updUser('${u.id}','deviceLimit',this.value===''?null:Number(this.value),true)" /><span class="faint" style="font-size:11.5px" title="同账号同时在线设备数（登录抢占制）；留空=跟随「注册与安全」页全局默认，0=不限">留空=全局默认 · 0=不限</span></div>
         <div class="frow"><label>启用</label><label class="sw"><input type="checkbox" ${u.enabled?"checked":""} onchange="updUser('${u.id}','enabled',this.checked,true);renderUserDrawer()"/><i></i></label></div>
       </div>
       <div class="dsec">
         <div class="t">可 用 模 式（心跳 ≤30s 生效）</div>
-        ${swrow("assetMode",f.asset,"资产模式","表格创作五类资产界面；三个主模式至少留一个")}
-        ${swrow("canvasMode",f.canvas,"画布模式","节点画布；三个主模式至少留一个")}
-        ${swrow("editorMode",f.editor,"实时剪辑模式","实时剪辑；三个主模式至少留一个")}
+        ${swrow("assetMode",f.asset,"表格视频","控制表格视频区、视频生成与视频选择；资产和故事板生图始终可用")}
+        ${swrow("canvasMode",f.canvas,"画布模式","节点画布")}
+        ${swrow("editorMode",f.editor,"实时剪辑模式","实时剪辑")}
         ${swrow("libtv",f.libtv,"LibTV 授权入口","用户自有账号生成，不经管理端不扣积分")}
         ${swrow("dreamina",f.dreamina,"即梦授权入口","用户自有即梦账号生成，不经管理端不扣积分")}
         ${swrow("comfyui",f.comfy,"ComfyUI 直连入口","用户绑定自有 ComfyUI 地址本地直连生成，不经管理端仅按次手续费")}
@@ -1021,7 +1066,7 @@ function delChannel(id,name){
 }
 
 /* ════════════════ 模型管理 ════════════════ */
-const PROTOCOLS = ["echo","openai-chat","anthropic-messages","openai-image","gemini-image","jianmeng-video","openai-video","volc-mediakit","sudashui-video","aistars-video","aistars-image","huaying-video","dimensio-video","aivide-video","jianmengp-video","musem-video","jmz-video","jmz-image","jmt-video","jmf-video","overseas-video","suanli-video","jmh-image","jmh-video","skylee-image","yali-image","congge-image","congge-video","autodl-video","qijicloud-comfy","bys-video","qiqi-video","official-video","stub"];
+const PROTOCOLS = ["echo","openai-chat","anthropic-messages","openai-image","gemini-image","jianmeng-video","openai-video","volc-mediakit","sudashui-video","aistars-video","aistars-image","huaying-video","dimensio-video","aivide-video","jianmengp-video","musem-video","jmz-video","jmz-image","jmt-video","jmf-video","overseas-video","suanli-video","jmh-image","jmh-video","skylee-image","yali-image","congge-image","congge-video","autodl-video","qijicloud-comfy","bys-video","qiqi-video","official-video","zero007-video","stub"];
 const CAPS = ["text","image","video","audio","video-enhance","video-erase"];
 /* ── 模式（第130轮）：动态注册表，模型归属 + 用户/渠道商开关。全局缓存 MODES（null=未加载） ── */
 let MODES=null, mGroup='channel', mChip='on'; // mChip=模型状态筛选（on=启用/off=已禁用/all=全部）；默认只看启用——禁用的收进「已禁用」页签，防列表过长
@@ -2810,7 +2855,7 @@ async function sharedFolderPreview(fid, name){
 }
 /* 渠道商共享素材库开关（「对允许的渠道商开放」）：关=该商门户不可建/管共享库 */
 /* 渠道商级可用模式（第121轮整商硬闸）：与用户级 features 同项（含实时剪辑/ComfyUI）；商关=名下用户一律不可用（AND 合成下发） */
-const AGENT_FEATURES = [["assetMode","资产模式"],["canvasMode","画布模式"],["editorMode","实时剪辑模式"],["libtv","LibTV"],["dreamina","即梦"],["comfyui","ComfyUI"]];
+const AGENT_FEATURES = [["assetMode","表格视频"],["canvasMode","画布模式"],["editorMode","实时剪辑模式"],["libtv","LibTV"],["dreamina","即梦"],["comfyui","ComfyUI"]];
 async function toggleAgentFeature(id, key, on){
   const a = AGENTS.find(x=>x.id===id); if(!a) return;
   const f = Object.assign({assetMode:true,canvasMode:true,editorMode:true,libtv:true,dreamina:true,comfyui:true}, a.features||{});
@@ -2882,7 +2927,7 @@ async function renderAgentDetailConfig(a){
     </div>
     <div style="background:var(--panel2);border:1px solid var(--line);border-radius:var(--r-md);padding:12px 16px;margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <b style="font-size:12.5px;color:var(--acc)">可用模式（整商硬闸）</b>
-      <span class="faint" style="font-size:11.5px">关=该商<b>全部名下用户</b>不可用该模式（用户自身开关失效）；开=按用户自身设置。心跳 ≤30s 生效；资产/画布/实时剪辑不能全关。</span>
+      <span class="faint" style="font-size:11.5px">关=该商<b>全部名下用户</b>不可用该模式（用户自身开关失效）；开=按用户自身设置。心跳 ≤30s 生效。表格视频只控制视频区与视频选择，表格资产和故事板生图始终可用。</span>
       ${AGENT_FEATURES.map(([k,lb])=>{ const on = !(a.features && a.features[k]===false);
         return `<button class="sm ${on?"pri":""}" onclick="toggleAgentFeature('${a.id}','${k}',${on?"false":"true"})">${lb}：${on?"开":"已禁用"}</button>`; }).join("")}
       ${(MODES||[]).map(m=>{ const on = !(a.features && a.features.modes && a.features.modes[m.id]===false);

@@ -36,7 +36,7 @@ export interface User {
 	passwordSalt?: string;
 	/** scrypt(password, passwordSalt) 十六进制 */
 	passwordHash?: string;
-	/** 功能开关（字段缺省=开）：控制客户端可用模式，随登录/心跳下发；仅单模式时客户端隐藏切换交互键。
+	/** 功能开关（字段缺省=开），随登录/心跳下发。assetMode 只控制表格模式视频区与视频生成选项，表格图片创作入口始终开放。
 	 *  libtv：LibTV 授权入口；dreamina：即梦授权入口（均为个人中心连接 + Seedance 2.0 本地 CLI 生成，生成不经管理端不扣积分）。
 	 *  comfyui：ComfyUI 直连入口（个人中心绑定地址 + 本地直连生成，生成不经管理端不扣生成积分、仅按次手续费）。
 	 *  modes（第130轮）：动态视频模式开关 modeId→bool（缺省/字段缺省=开）；关=该模式下模型客户端隐藏 + generate/batch 403。 */
@@ -328,6 +328,32 @@ export function updateUser(id: string, patch: Partial<Omit<User, "id" | "created
 	Object.assign(u, patch, { updatedAt: new Date().toISOString() });
 	persist();
 	return u;
+}
+
+/** 管理端迁移的唯一落盘步骤：整批一次原子写，余额、登录身份及其余字段原样保留。
+ * 调用方先同步校验权限与目标；写盘成功才更新现有对象，失败不污染内存。
+ * 保留对象引用，保证已鉴权的请求能观察到归属变化并重新校验。 */
+export function transferUsersToAgent(ids: readonly string[], agentId: string | undefined): number {
+	const selected = new Set(ids);
+	if ([...selected].some((id) => !getUser(id))) throw new Error("迁移用户不存在");
+	const now = new Date().toISOString();
+	const changes = users.filter((u) => selected.has(u.id) && (u.agentId || undefined) !== agentId);
+	if (!changes.length) return 0;
+	const changing = new Set(changes.map((u) => u.id));
+	const next = users.map((u) => {
+		if (!changing.has(u.id)) return u;
+		const copy = { ...u, updatedAt: now };
+		if (agentId) copy.agentId = agentId;
+		else delete copy.agentId;
+		return copy;
+	});
+	saveJson(FILE, next);
+	for (const u of changes) {
+		if (agentId) u.agentId = agentId;
+		else delete u.agentId;
+		u.updatedAt = now;
+	}
+	return changes.length;
 }
 
 export function deleteUser(id: string): boolean {

@@ -5,7 +5,7 @@
  * 管理端可自定义加载第三方模型、查看/编辑翻译格式。改动后 bump catalog 版本。
  */
 import { loadJson, saveJson } from "./db.ts";
-import { CH_GAISC, CH_JIANMENG, CH_VOLC, CH_SUDASHUI, CH_AISTARS, CH_HUAYING, CH_DIMENSIO, CH_AIVIDE, CH_JIANMENGP, CH_MUSEM, CH_JMZ, CH_JMH, CH_YUNWU, CH_JMT, CH_JMF, CH_OVERSEAS, CH_SUANLI, CH_YALI_OPENAI, CH_YALI_GEMINI, CH_SKYLEE, CH_CONGGE, CH_AUTODL, CH_QIJICLOUD, CH_BYS, CH_QIQI, CH_OFFICIAL } from "./channels.ts";
+import { CH_GAISC, CH_JIANMENG, CH_VOLC, CH_SUDASHUI, CH_AISTARS, CH_HUAYING, CH_DIMENSIO, CH_AIVIDE, CH_JIANMENGP, CH_MUSEM, CH_JMZ, CH_JMH, CH_YUNWU, CH_JMT, CH_JMF, CH_OVERSEAS, CH_SUANLI, CH_YALI_OPENAI, CH_YALI_GEMINI, CH_SKYLEE, CH_CONGGE, CH_AUTODL, CH_QIJICLOUD, CH_BYS, CH_QIQI, CH_OFFICIAL, CH_007 } from "./channels.ts";
 import { audienceChain, agentModelBlocked, audienceGroupId } from "./agents.ts";
 import { normMatLimits, type MatLimits } from "../materialLimits.ts";
 import type { ParamField, Capability } from "../contract.ts";
@@ -45,6 +45,7 @@ export type Protocol =
 	| "bys-video"
 	| "qiqi-video"
 	| "official-video"
+	| "zero007-video"
 	| "stub";
 
 /**
@@ -933,6 +934,26 @@ const official = (id: string, label: string, upstream: string, is25: boolean): M
 	});
 };
 
+// 007 正版 Seedance 2.5（2026-09-07 用户文档）；实际能力与价格以当前 Key 的 GET /v1/models 为准。
+// 占位每秒 50 积分，缺省停用；配置正版密钥并定真价后由管理端启用。
+const ZERO007_PARAMS: ParamField[] = [
+	{ key: "duration", label: "时长", type: "enum", options: Array.from({ length: 27 }, (_, i) => String(i + 4)), default: "5", unit: "s" },
+	{ key: "aspect_ratio", label: "宽高比", type: "enum", options: ["1:1", "3:4", "4:3", "9:16", "16:9", "21:9"], default: "16:9" },
+	{ key: "resolution", label: "分辨率", type: "enum", options: ["480p", "720p"], default: "720p" },
+	{ key: "generate_audio", label: "生成音频", type: "enum", options: ["true", "false"], default: "true" },
+	{ key: "watermark", label: "添加水印", type: "enum", options: ["false", "true"], default: "false" },
+];
+
+// 007 Seedance 2.0（2026-09-07 当前 Key 实时目录）：至少一份图片或视频参考，按次计费。
+// 上游积分尚未折算为 Qiji 售价；固定 750 积分仅作占位，缺省停用。
+const ZERO007_SD20_PARAMS: ParamField[] = [
+	{ key: "duration", label: "时长", type: "enum", options: Array.from({ length: 12 }, (_, i) => String(i + 4)), default: "5", unit: "s" },
+	{ key: "aspect_ratio", label: "宽高比", type: "enum", options: ["1:1", "3:4", "4:3", "9:16", "16:9", "21:9", "adaptive"], default: "16:9" },
+	{ key: "resolution", label: "分辨率", type: "enum", options: ["480p", "720p", "1080p", "4k"], default: "720p" },
+	{ key: "generate_audio", label: "生成音频", type: "enum", options: ["true", "false"], default: "true" },
+	{ key: "watermark", label: "添加水印", type: "enum", options: ["false", "true"], default: "false" },
+];
+
 const DEFAULT_MODELS: ModelDef[] = [
 	// ── G-AISC 聚合网关 ──
 	def("gpt-5.5", "GPT-5.5", "text", "openai-chat", TEXT_PARAMS, 10, { channelId: CH_GAISC }),
@@ -1300,6 +1321,17 @@ const DEFAULT_MODELS: ModelDef[] = [
 	official("off-sd2.0-fast-filter-off", "官方·Seedance 2.0 Fast · Filter Off", "dreamina-seedance-2-0-fast-filter-off", false),
 	official("off-sd2.5", "官方·Seedance 2.5", "dreamina-seedance-2-5", true),
 	official("off-sd2.5-filter-off", "官方·Seedance 2.5 · Filter Off", "dreamina-seedance-2-5-filter-off", true),
+	// ── 007 正版 Seedance 2.5：独立协议与凭据，不使用官方人像素材库 ──────────
+	def("007-sd2.5", "007·Seedance 2.5", "video", "zero007-video", ZERO007_PARAMS, 1500, {
+		channelId: CH_007, upstreamModel: "seedance-2.5", modeId: "007", familyId: "fam-seedance",
+		costField: "duration", costPerUnit: 50, matLimits: { img: 30, vid: 10, aud: 10 },
+		methods: ["omni"], enabled: false,
+	}),
+	def("007-sd2.0", "007·Seedance 2.0", "video", "zero007-video", ZERO007_SD20_PARAMS, 750, {
+		channelId: CH_007, upstreamModel: "seedance-2.0", modeId: "007", familyId: "fam-seedance",
+		matLimits: { img: 9, vid: 3, aud: 3 }, methods: ["omni"], enabled: false,
+		note: "至少添加一张图片或一段视频作为参考。",
+	}),
 	// ── 内部虚拟模型：第三方本地渠道（LibTV/即梦）手续费——echo 同步成功即扣 cost；hidden 不进 catalog，
 	//    客户端在第三方调用成功后按 id 请求一次完成扣费（管理端「模型」页可调价）。
 	def("fee-thirdparty", "第三方渠道手续费", "text", "echo", [], 5, { hidden: true }),

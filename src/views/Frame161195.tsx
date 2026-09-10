@@ -14,7 +14,7 @@ import { saveRemoteAsset } from "@/services/assetPersist";
 import ModelPicker, { effectiveModelKey, useEffectiveModelKey, useCapModelOptions, useFamilyOrder } from "@/components/ModelPicker";
 import TemplatePicker from "@/components/TemplatePicker";
 import { useCatalogStore } from "@/store/catalogStore";
-import { useModeFeatures } from "@/store/connectionStore";
+import { getAssetVideoFeature, useAssetVideoFeature, useModeFeatures } from "@/store/connectionStore";
 import { useScrollSnapshot } from "@/hooks/useScrollSnapshot";
 import type { Capability } from "@/contract";
 import type { ShotMaterial, StoryboardShot, MediaSettings, VideoDerivedRecord } from "@/services/projectFile";
@@ -130,6 +130,7 @@ const Frame161195 = () => {
     const [renameEpVal, setRenameEpVal] = useState("");
     // 模式开关（服务端按用户下发）：画布模式被关时隐藏「同步本集到画布」
     const { canvasMode: canvasModeEnabled } = useModeFeatures();
+    const assetVideoEnabled = useAssetVideoFeature();
     // 「同步本集到画布」反馈态（仅视频界面：选中分集 → 手动投影资产 + 本集到画布，不自动同步）
     const [canvasSynced, setCanvasSynced] = useState(false);
 
@@ -198,7 +199,9 @@ const Frame161195 = () => {
 
     // ── 表格列宽 / 行高（全局持久化，跨分集/项目；拖动即固定，内容不再自动撑开）──
     const tableLayout = useSettingsStore((s) => s.videoTableLayout);
-    const colWidths = tableLayout.colWidths;
+    // 只投影可见列，不改持久化布局；重新启用后视频列宽与历史内容保持原状。
+    const colWidths = assetVideoEnabled ? tableLayout.colWidths : tableLayout.colWidths.slice(0, -1);
+    const colLabels = assetVideoEnabled ? COL_LABELS : COL_LABELS.slice(0, -1);
     const rowHeight = tableLayout.rowHeight;
     const gridCols = colWidths.map((w) => `${w}px`).join(" ");
     const tableMinW = colWidths.reduce((a, b) => a + b, 0);
@@ -294,6 +297,15 @@ const Frame161195 = () => {
     // 全屏对比弹窗（对比原图/原视频）
     const [compareData, setCompareData] = useState<{ media: "image" | "video"; beforeUri: string; afterUri: string; afterLabel: string; title: string } | null>(null);
     const [mediaBusy, setMediaBusy] = useState("");                            // 帧提取/裁剪/上传中的全局遮罩文案
+    useEffect(() => {
+        if (assetVideoEnabled) return;
+        setGenVideoMenu(false);
+        setMediaMenu((menu) => menu?.kind === "video" ? null : menu);
+        setClipModal(null);
+        setProcModal((modal) => modal?.mode !== "imageUpscale" ? null : modal);
+        setDerivedMenu((menu) => menu?.field === "video" ? null : menu);
+        setCompareData((data) => data?.media === "video" ? null : data);
+    }, [assetVideoEnabled]);
     // 单分镜「视频模型」覆盖下拉：与 ModelPicker 同一数据源（启用子集过滤 + LibTV 注入），
     // 修「设置里停用的模型仍出现在提示词区、LibTV 只在视频设置可选」的下拉源分裂
     const videoModels = useCapModelOptions("video");
@@ -470,7 +482,7 @@ const Frame161195 = () => {
                 </button>
             );
         });
-    const tabOf = (id: string): PromptTab => promptTab[id] || "storyboard";
+    const tabOf = (id: string): PromptTab => assetVideoEnabled ? (promptTab[id] || "storyboard") : "storyboard";
 
     const update = (shotId: string, patch: Partial<StoryboardShot>) => {
         if (!activeEp) return;
@@ -806,7 +818,7 @@ const Frame161195 = () => {
 
     // ── 生成视频（带资产/带故事板可选；持久化在途 → 切页/重启可找回；本地直显 + 历史记录）──
     const genVideo = async (shot: StoryboardShot): Promise<boolean> => {
-        if (!activeEp) return false;
+        if (!activeEp || !getAssetVideoFeature()) return false;
         const opt = { asset: genWithAsset, story: genWithStory };
         // 提交前展开预设胶囊（同源提示词也可能含预设胶囊——它同时喂图片与视频）
         const prompt = resolvePresets((sameSource ? shot.unifiedPrompt : shot.videoPrompt) || shot.scriptSegment || "");
@@ -864,6 +876,7 @@ const Frame161195 = () => {
         const officialIdx = vModel?.officialAssets
             ? identityIndexesForMaterials(shot.materials, ov.officialAssetIndexes).filter((i) => i >= 0 && i < images.length)
             : [];
+        if (!getAssetVideoFeature()) return false;
         startShotGeneration({
             episodeId: activeEp.id, shotId: shot.id, field: "video",
             purpose: "video.generate",
@@ -893,12 +906,15 @@ const Frame161195 = () => {
     // #13 一键生成视频：全部 / 奇数位（第1、3、5…镜）
     const handleGenAllVideos = async (mode: "all" | "odd") => {
         setGenVideoMenu(false);
-        if (!activeEp) return;
+        if (!activeEp || !getAssetVideoFeature()) return;
         const shots = useProjectStore.getState().episodes.find((e) => e.id === activeEp.id)?.shots || [];
         const targets = mode === "odd" ? shots.filter((_, i) => i % 2 === 0) : shots;
         if (targets.length === 0) { alert(mode === "odd" ? "没有奇数位分镜可生成。" : "当前分集没有分镜可生成。"); return; }
         if (!(await confirmDialog(`将提交 ${targets.length} 个视频生成任务（${mode === "odd" ? "仅奇数位分镜" : "全部分镜"}），确定？`))) return;
-        for (const s of targets) await genVideo(s);
+        for (const s of targets) {
+            if (!getAssetVideoFeature()) break;
+            await genVideo(s);
+        }
     };
 
     // ── 导出所有视频（先已落本地，按序复制到目标文件夹）──
@@ -1188,6 +1204,7 @@ const Frame161195 = () => {
     const doProcessVideo = (spec: VideoProcessSpec) => {
         if (!procModal || !activeEp) return;
         const { idx, uri, mode } = procModal;
+        if (mode !== "imageUpscale" && !getAssetVideoFeature()) return;
         const epId = activeEp.id;
         setProcModal(null);
         const shots = useProjectStore.getState().episodes.find((e) => e.id === epId)?.shots || [];
@@ -1286,6 +1303,7 @@ const Frame161195 = () => {
             try {
                 const publicUrl = await ensurePublicUrl(inputUri, `${sh.title || "分镜"}·${srcLabel}`);
                 if (!publicUrl) { markFail("源视频公网化失败（上传 OSS 未成功），请重试"); return; }
+                if (!getAssetVideoFeature()) { markFail("表格视频权限已关闭，未提交处理任务"); return; }
                 const blob = useProjectStore.getState().blobByUri(inputUri);
                 startDerivedGeneration({
                     episodeId: epId,
@@ -1401,7 +1419,7 @@ const Frame161195 = () => {
                             </button>
                             <button style={{ ...ghostBtn, alignSelf: "center" }} disabled={!activeEp} onClick={handleMatchAll}>一键提取资产</button>
                             <button style={{ ...ghostBtn, alignSelf: "center" }} disabled={!activeEp} onClick={() => runAll(genStoryboard)}>一键故事板</button>
-                            <div style={{ position: "relative", alignSelf: "center" }}>
+                            {assetVideoEnabled && <div style={{ position: "relative", alignSelf: "center" }}>
                                 <button style={{ ...ghostBtn, alignSelf: "center" }} disabled={!activeEp} onClick={() => setGenVideoMenu((v) => !v)}>一键视频 ▾</button>
                                 {genVideoMenu && (
                                     <>
@@ -1414,7 +1432,7 @@ const Frame161195 = () => {
                                         </div>
                                     </>
                                 )}
-                            </div>
+                            </div>}
                             {canvasModeEnabled && (
                                 <button
                                     style={{ ...ghostBtn, alignSelf: "center", ...(canvasSynced ? { background: "rgba(34,197,94,0.14)", color: "#22c55e", borderColor: "rgba(34,197,94,0.5)" } : {}) }}
@@ -1431,10 +1449,12 @@ const Frame161195 = () => {
                                 <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}><b style={{ color: "#c4b5fd", fontWeight: 600 }}>{modelLabel("text")}</b></span>
                                 <span style={{ color: "rgba(255,255,255,0.15)" }}>·</span>
                                 <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}><b style={{ color: "#c4b5fd", fontWeight: 600 }}>{modelLabel("image")}</b><span style={{ color: "rgba(255,255,255,0.4)" }}> {imageAspect} {QUALITY_LABEL[imageQuality] || imageQuality}</span></span>
+                                {assetVideoEnabled && <>
                                 <span style={{ color: "rgba(255,255,255,0.15)" }}>·</span>
                                 <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}><b style={{ color: "#c4b5fd", fontWeight: 600 }}>{modelLabel("video")}</b><span style={{ color: "rgba(255,255,255,0.4)" }}> {aspect} {resolution}</span></span>
                                 <span style={{ color: "rgba(255,255,255,0.15)" }}>·</span>
                                 <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}><b style={{ color: "#c4b5fd", fontWeight: 600 }}>{matFormLabel}</b></span>
+                                </>}
                             </div>
 
                             {videoTableTemplates.length > 0 && (
@@ -1451,7 +1471,7 @@ const Frame161195 = () => {
                                 </select>
                             )}
                             <div style={{ position: "relative", alignSelf: "center" }}>
-                                <button style={{ ...ghostBtn, alignSelf: "center" }} onClick={() => setVidSettingsOpen((v) => !v)}>视频设置 ▾</button>
+                                <button style={{ ...ghostBtn, alignSelf: "center" }} onClick={() => setVidSettingsOpen((v) => !v)}>{assetVideoEnabled ? "视频设置" : "生成设置"} ▾</button>
                                 {vidSettingsOpen && (
                                     <>
                                         {/* 点击遮罩关闭 */}
@@ -1522,6 +1542,7 @@ const Frame161195 = () => {
                                             </label>
 
                                             <div style={{ height: 1, background: "rgba(255,255,255,0.08)" }} />
+                                            {assetVideoEnabled && <>
                                             <div style={{ fontSize: 12, fontWeight: 600, color: "#fff" }}>视频</div>
                                             <ModelPicker cap="video" label="视频模型" style={rowPicker} />
                                             {vidMethods.length > 1 && (
@@ -1557,6 +1578,7 @@ const Frame161195 = () => {
                                             </div>
 
                                             <div style={{ height: 1, background: "rgba(255,255,255,0.08)" }} />
+                                            </>}
                                             <div style={{ fontSize: 12, fontWeight: 600, color: "#fff" }}>表格布局</div>
                                             <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", lineHeight: 1.5 }}>拖动表头右边界改列宽、拖动每行下边界改行高；为全局设置，跨分集/项目通用，改一次长期生效。</div>
                                             {/* #6 表格样式模板：保存当前布局为命名模板，可一键切换 */}
@@ -1580,7 +1602,7 @@ const Frame161195 = () => {
                                     </>
                                 )}
                             </div>
-                            <button style={{ ...ghostBtn, alignSelf: "center", borderColor: "rgba(139,92,246,0.5)" }} disabled={!activeEp} onClick={handleExportAll}>导出所有视频</button>
+                            {assetVideoEnabled && <button style={{ ...ghostBtn, alignSelf: "center", borderColor: "rgba(139,92,246,0.5)" }} disabled={!activeEp} onClick={handleExportAll}>导出所有视频</button>}
                         </div>
 
                         {/* 表格主体（表头与表体同处一个横向滚动容器，列宽对齐 + 横向同步滚动）*/}
@@ -1626,7 +1648,7 @@ const Frame161195 = () => {
                                 <div style={{ minWidth: tableMinW }}>
                                     {/* 粘性表头：每列右边界可拖动改列宽（全局记忆）*/}
                                     <div style={{ display: "grid", gridTemplateColumns: gridCols, position: "sticky", top: 0, zIndex: 5, background: "#101218", borderBottom: "1px solid rgba(255,255,255,0.12)" }}>
-                                        {COL_LABELS.map((label, ci) => (
+                                        {colLabels.map((label, ci) => (
                                             <div key={label} style={{ ...headCell, position: "relative", userSelect: "none" }}>
                                                 {label}
                                                 <div
@@ -1800,7 +1822,7 @@ const Frame161195 = () => {
                                                             <div style={{ display: "inline-flex", alignItems: "center", padding: "4px 10px", fontSize: 11, borderRadius: 6, border: "1px solid rgba(139,92,246,0.4)", background: "rgba(139,92,246,0.18)", color: "#c9b8ff", width: "fit-content" }} title="图视同源：图片与视频共用同一段提示词">同源提示词</div>
                                                         ) : (
                                                             <div style={{ display: "inline-flex", borderRadius: 6, overflow: "hidden", border: "1px solid rgba(255,255,255,0.12)", width: "fit-content" }}>
-                                                                {(["storyboard", "video"] as PromptTab[]).map((t) => (
+                                                                {(assetVideoEnabled ? ["storyboard", "video"] as PromptTab[] : ["storyboard"] as PromptTab[]).map((t) => (
                                                                     <button key={t} onClick={() => setPromptTab((p) => ({ ...p, [shot.id]: t }))}
                                                                         style={{ padding: "4px 10px", fontSize: 11, cursor: "pointer", border: "none", background: tab === t ? "rgba(139,92,246,0.35)" : "transparent", color: "#fff" }}>
                                                                         {t === "storyboard" ? "故事板提示词" : "视频提示词"}
@@ -1821,6 +1843,7 @@ const Frame161195 = () => {
                                                     </div>
                                                     {/* 第二行：家族 → 渠道/线路 → 模型 → 时长/比例/分辨率 → 放大（第163轮，与画布一致的 家族|线路|模型|要求） */}
                                                     <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                                                        {assetVideoEnabled && <>
                                                         {/* 家族（模型种类：Seedance 2.0 / Sora2 / Grok…） */}
                                                         <select title="模型家族（模型种类，仅本分镜）" value={curFamGrp ? `f:${curFamGrp.familyId}` : ""} onChange={(e) => { if (e.target.value) setShotVideoModel(shot, modelForFamily(e.target.value.slice(2), curVideoModel, videoFamilies)); }} style={miniSel}>
                                                             {!curFamGrp && <option value="" style={miniOpt}>未选模型</option>}
@@ -1853,6 +1876,7 @@ const Frame161195 = () => {
                                                         <select title="视频分辨率（仅本分镜）" value={clampToOptions(shot.overrides?.resolution || resolution, curReq.resolutions)} onChange={(e) => setShotOverride(shot, { resolution: e.target.value })} style={miniSel}>
                                                             {curReq.resolutions.map((r) => <option key={r} value={r} style={miniOpt}>{r}</option>)}
                                                         </select>
+                                                        </>}
                                                         {/* 放大编辑当前 tab 的提示词，置于顶栏最右，避开提示词框滚动条 */}
                                                         <PromptExpandButton
                                                             title={sameSource ? "编辑同源提示词" : tab === "storyboard" ? "编辑故事板提示词" : "编辑视频提示词"}
@@ -1994,7 +2018,7 @@ const Frame161195 = () => {
                                                 </div>
 
                                                 {/* 6. 视频区（主视频撑满 + 历史记录 + 生成）*/}
-                                                <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+                                                {assetVideoEnabled && <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
                                                     <div style={{ flex: 1, minHeight: 120, borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.25)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
                                                         {shot.videoUri ? (
                                                             <video src={shot.videoUri} controls title="双击放大 / 右键菜单（导出、首尾帧、片段到下一镜）"
@@ -2050,7 +2074,7 @@ const Frame161195 = () => {
                                                         </div>
                                                         <button style={{ ...colBtn, width: "auto", whiteSpace: "nowrap" }} onClick={() => genVideo(shot)}>生成</button>
                                                     </div>
-                                                </div>
+                                                </div>}
 
                                                 {/* 行高拖动手柄（拖下边界 → 统一改所有行高，全局记忆）*/}
                                                 <div

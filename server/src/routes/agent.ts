@@ -192,7 +192,6 @@ export async function registerAgentRoutes(app: FastifyInstance): Promise<void> {
 						if (!b.feature) break;
 						const f: Record<string, unknown> = { assetMode: true, canvasMode: true, editorMode: true, libtv: true, dreamina: true, comfyui: true, ...(u.features ?? {}) };
 						f[b.feature] = b.value !== false;
-						if (f.assetMode === false && f.canvasMode === false && f.editorMode === false) { skipped++; break; } // 资产+画布+实时剪辑不能全关
 						if (updateUser(id, { features: f as User["features"] })) affected++;
 						break;
 					}

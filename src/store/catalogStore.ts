@@ -20,6 +20,7 @@ import { managedClient } from "@/services/managedClient";
  */
 
 const LS_KEY = "Qiji:catalog";
+let syncRequestId = 0;
 
 function loadCache(): Catalog | null {
 	try {
@@ -72,10 +73,13 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
 	error: null,
 
 	syncCatalog: async () => {
+		const requestId = ++syncRequestId;
 		set({ loading: true, error: null });
 		try {
 			const current = get().catalog?.version;
 			const fresh = await managedClient.fetchCatalog(current);
+			// 切换用户/渠道后，旧请求即使更晚返回也不得覆盖新归属的目录或缓存。
+			if (requestId !== syncRequestId) return;
 			// 无更新：304 时 client 返回空对象（无 version/models），保留本地缓存
 			if (fresh && fresh.version && fresh.version !== current) {
 				saveCache(fresh);
@@ -86,11 +90,12 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
 			}
 			// 目录变化后，重新注册模型适配器
 			const { syncManagedAdapters } = await import("@/services/adapters/managedAdapter");
+			if (requestId !== syncRequestId) return;
 			syncManagedAdapters();
 		} catch (err) {
-			set({ error: (err as Error).message });
+			if (requestId === syncRequestId) set({ error: (err as Error).message });
 		} finally {
-			set({ loading: false });
+			if (requestId === syncRequestId) set({ loading: false });
 		}
 	},
 

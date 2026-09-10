@@ -74,6 +74,8 @@ export function resolveUpstream(m: ModelDef, req?: GenerateRequest): Upstream {
 																					? { baseUrl: config.qiqi.baseUrl, apiKey: config.qiqi.apiKey }
 																				: m.protocol === "official-video"
 																					? { baseUrl: config.official.baseUrl, apiKey: config.official.apiKey }
+																				: m.protocol === "zero007-video"
+																					? { baseUrl: config.zero007.baseUrl, apiKey: config.zero007.apiKey }
 																				: { baseUrl: config.gateway.baseUrl, apiKey: config.gateway.apiKey };
 
 	const baseUrl = m.baseUrl || ch?.baseUrl || fallback.baseUrl;

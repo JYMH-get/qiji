@@ -297,6 +297,7 @@ const REHOST_ALLOW_SUFFIXES = [
 	"pidoi.com",
 	".kwjm.com", // 官方（kwjm.com）API 域；content.video_url 若同站托管则允许转存
 	"kwjm.com",
+	"env-00jy6ktfybhu.dev-hz.cloudbasefunction.cn", // 007 API 实例；真实成片 OSS 域待真单后核对，勿放行整个 cloudbasefunction.cn
 	// ⚠ 官方渠道成片 CDN 域未知；小额真单后据请求记录 ④ 段 content.video_url 回补。
 	// ⚠ BYS 成片的实际 CDN 域未知（文档只写「https://.../xxx.mp4」占位、且明言保留 48 小时）——
 	//    真单转存失败时到请求记录 ④ 段看 result.videos[0] 实际域名并在此增补后缀。
@@ -404,7 +405,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 		registerDeviceOnLogin(user, body.deviceId || body.machineCode || deviceIdOf(req));
 		// 回传 accessKey：账号登录时客户端据此拿到真凭证并存储
 		const tv = sessionTeamView(user);
-		return { ok: true, accessKey: user.accessKey, user: { id: user.id, name: user.name, credits: tv.credits, team: tv.team, membership: activeMembershipOf(user), features: applyAgentFeatureGate(user.agentId, user.features) } };
+		return { ok: true, accessKey: user.accessKey, user: { id: user.id, name: user.name, credits: tv.credits, team: tv.team, membership: activeMembershipOf(user), features: applyAgentFeatureGate(user.agentId, user.features), catalogAudience: audienceOf(user.agentId) } };
 	});
 
 	// （P2b 移除：激活码注册端点 /v1/register——激活码机制整体退役，注册一律走 /v1/register/account）
@@ -492,7 +493,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 		if (!bound.ok) return reply.code(400).send({ error: { message: bound.error } }); // 竞态兜底（send-code 后被抢注）
 		registerDeviceOnLogin(user, body.deviceId || body.machineCode || deviceIdOf(req));
 		const tv = sessionTeamView(user);
-		return { ok: true, accessKey: user.accessKey, user: { id: user.id, name: user.name, credits: tv.credits, team: tv.team, features: applyAgentFeatureGate(user.agentId, user.features) } };
+		return { ok: true, accessKey: user.accessKey, user: { id: user.id, name: user.name, credits: tv.credits, team: tv.team, features: applyAgentFeatureGate(user.agentId, user.features), catalogAudience: audienceOf(user.agentId) } };
 	});
 
 	// 找回密码——发验证码：目标不存在也返回 ok（不暴露账号存在性），只是不真正发送
@@ -582,7 +583,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			// 第121轮：先过渠道商级闸门（商关的模式对其名下用户硬禁，AND 合成）
 			// 第172轮：team 随心跳下发（共享积分模式的团员 credits=团队池余额，见 sessionTeamView）
 			const tv = sessionTeamView(u);
-			return { ok: true, user: { id: u.id, name: u.name, credits: tv.credits, team: tv.team, membership: activeMembershipOf(u), features: applyAgentFeatureGate(u.agentId, u.features) } };
+			return { ok: true, user: { id: u.id, name: u.name, credits: tv.credits, team: tv.team, membership: activeMembershipOf(u), features: applyAgentFeatureGate(u.agentId, u.features), catalogAudience: audienceOf(u.agentId) } };
 		});
 
 		// P3 渠道节点自身状态：节点管理端「源站连接」卡显示池余额/连通性用（仅 ank- 凭证可达）
@@ -602,6 +603,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 				inviteCode: ensureUserInviteCode(u),
 				invitedCount: invitedCountOf(u.id),
 				membership: activeMembershipOf(u),
+				catalogAudience: audienceOf(u.agentId),
 			};
 		});
 
@@ -866,6 +868,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
 			// 额度前置校验：不足则拒绝、不下单
 			const user = req.user!;
+			const requestAgentId = user.agentId;
 			const md = getModelDef(body.model);
 			// 模型可用性校验：开放范围（第110轮 shareScope）+ 渠道商禁用清单（第121轮）双闸，任一不过直接拒绝，不下单不记账
 			if (md && !modelAllowedForAgent(md, user.agentId)) {
@@ -893,6 +896,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			// 参考视频按秒计费（第140轮）：模型声明 refVideoSecondsWeight 时，服务端探测每条参考视频时长
 			// （不足1秒算1秒）折算进计费秒数——读不出时长明确拒单（不下单不扣费；发上游的 params 不受影响）
 			const rb = await refVideoBillingParams(md, body.params as Record<string, unknown> | undefined, body.inputs);
+			// 用户迁移会原位更新 user；探测期间归属变化后，旧权限检查不能继续用于新归属扣费/记账。
+			if (user.agentId !== requestAgentId) {
+				return reply.code(409).send({ error: { message: "账号归属已变更，请刷新模型列表后重试" } });
+			}
 			if (rb.error) {
 				return reply.code(400).send({ error: { message: rb.error } });
 			}
@@ -1051,9 +1058,15 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			}
 
 			const user = req.user!;
+			const requestAgentId = user.agentId;
 			const taskIds: string[] = [];
 			const effModes = applyAgentFeatureGate(user.agentId, user.features)?.modes; // 模式门禁（第130轮）：整批同一用户，算一次
 			for (const t of body.tasks) {
+				// 已受理项保留原计费快照；迁移后的未受理项失败，避免继续使用旧归属的整批门禁。
+				if (user.agentId !== requestAgentId) {
+					taskIds.push(createCompletedTask("text", "failed", undefined, "账号归属已变更，请刷新模型列表后重试", t.clientTaskId).taskId);
+					continue;
+				}
 				// 逐任务校验：模型未开放/模式已禁/任一侧额度不足 → 记一条 failed 任务、跳过下单
 				const tmd = getModelDef(t.model);
 				if (tmd && !modelAllowedForAgent(tmd, user.agentId)) {
@@ -1079,6 +1092,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 				}
 				// 参考视频按秒计费（第140轮，与 /v1/generate 同尺）：读不出时长 → 记 failed 任务、跳过下单
 				const rb = await refVideoBillingParams(tmd, t.params as Record<string, unknown> | undefined, t.inputs);
+				if (user.agentId !== requestAgentId) {
+					taskIds.push(createCompletedTask("text", "failed", undefined, "账号归属已变更，请刷新模型列表后重试", t.clientTaskId).taskId);
+					continue;
+				}
 				if (rb.error) {
 					taskIds.push(createCompletedTask("text", "failed", undefined, rb.error, t.clientTaskId).taskId);
 					continue;

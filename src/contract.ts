@@ -714,7 +714,7 @@ export interface UserLogDetail extends UserLogItem {
 
 /** 用户功能开关（服务端按用户控制客户端可用模式；字段缺省=开）。管理端用户表可编辑，随登录/心跳下发。 */
 export interface UserFeatures {
-  /** 资产（表格）模式：剧本编辑/五类资产页/视频表格工作台 */
+  /** 表格模式视频区：关闭时隐藏视频生成区与视频选择，剧本、五类资产及故事板生图仍开放 */
   assetMode?: boolean;
   /** 画布模式：/frame-canvas 节点编辑器 */
   canvasMode?: boolean;
@@ -756,6 +756,8 @@ export interface MembershipPlanInfo {
 export interface SessionUser {
   id: string;
   name: string;
+  /** 当前目录归属（源站为 platform）；迁移后心跳改变此值，客户端据此刷新模型目录 */
+  catalogAudience?: string;
   /** 积分余额。⚠ 共享积分模式的团员这里=团队池余额（=团长余额），显示/预检与服务端实扣天然一致 */
   credits: number;
   /** 团队概要（第172轮；不在团队则缺省） */

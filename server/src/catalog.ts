@@ -19,7 +19,7 @@ import { listModes, modesVersion } from "./store/modes.ts";
 import { listFamilies, familiesVersion } from "./store/families.ts";
 import { listEnabledTemplatesForAgent, templatesVersion } from "./store/templates.ts";
 import { listEnabledPresets, presetsVersion } from "./store/presets.ts";
-import { chainPricingVersion, agentModelLabel } from "./store/agents.ts";
+import { chainPricingVersion, agentModelLabel, audienceOf } from "./store/agents.ts";
 
 /** 模板由 store/templates.ts 数据化构建；按用户归属渠道商下发（平台模板 + 该渠道商自营模板） */
 function buildTemplates(agentId?: string): CatalogTemplate[] {
@@ -240,7 +240,8 @@ export function buildCatalog(agentId?: string): Catalog {
 		// 第131轮再并入模式注册表版本（管理端改模式名/增删模式 → 客户端下拉分组名热更）；
 		// 第163轮再并入家族注册表版本（改家族名/增删家族/模型改家族经 models version 或 .f 段热更）；
 		// 第174轮再并入预设库版本（预设拆为独立存储后改预设不再 bump 模板版本，须自带热更段）
-		version: `${catalogVersion()}.t${templatesVersion()}${pv ? `.p${pv}` : ""}.m${modesVersion()}.f${familiesVersion()}.ps${presetsVersion()}`,
+		// 同版本的不同受众也可能有不同模型/模板；用户迁移后必须拉取目标受众目录，不能误回 304。
+		version: `${catalogVersion()}.t${templatesVersion()}${pv ? `.p${pv}` : ""}.m${modesVersion()}.f${familiesVersion()}.ps${presetsVersion()}.a${encodeURIComponent(audienceOf(agentId))}`,
 		// 第165轮：全局停用的模式/家族不下发（客户端隐藏）；两表本就按 order 排序=管理端拖动排序直达客户端
 		modes: modeList.filter((m) => m.enabled !== false).map((m) => ({ id: m.id, name: m.name })),
 		families: listFamilies().filter((f) => f.enabled !== false).map((f) => ({ id: f.id, name: f.name, capability: f.capability })),

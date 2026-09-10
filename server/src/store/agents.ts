@@ -151,6 +151,7 @@ export function setPlatformGroup(groupId: string | null): { ok: boolean; error?:
  * 无论自身 features 如何一律不可用（下发时 AND 合成）；商开=按用户自身设置。
  */
 export interface AgentFeatures {
+	/** 表格视频区与视频生成入口；表格资产/故事板生图始终可用。 */
 	assetMode?: boolean;
 	canvasMode?: boolean;
 	editorMode?: boolean;
@@ -419,10 +420,7 @@ export function updateAgent(id: string, patch: {
 	if (patch.allowSharedLib !== undefined) a.allowSharedLib = patch.allowSharedLib;
 	if (patch.features !== undefined) {
 		const f = patch.features ?? {};
-		// 与用户级同一约束：资产/画布/实时剪辑三个主模式不允许全关（整商全关=名下用户无界面可用）
-		if (f.assetMode === false && f.canvasMode === false && f.editorMode === false) {
-			return { ok: false, error: "资产、画布与实时剪辑模式不能全部关闭" };
-		}
+		// 表格生图入口始终保留，视频/画布/实时剪辑可以各自独立关闭。
 		a.features = {
 			assetMode: f.assetMode !== false,
 			canvasMode: f.canvasMode !== false,
@@ -527,8 +525,7 @@ export function setAgentModelLabel(agentId: string, modelId: string, label: stri
 /**
  * 用户 features 过商级闸门后的**生效 features**（登录/心跳下发用）：
  * 商未设/字段缺省=开 → 按用户自身；商关=硬禁（AND 合成，用户开关失效）。
- * 主模式（资产/画布/实时剪辑）合成后全关（如 用户只开画布 × 商只开资产）时以**商的设定**为准——
- * updateAgent 已保证商侧至少开一个，避免客户端「都关回退仅资产」把商明令禁止的模式放出来。
+ * 表格生图入口始终可用，全部能力关闭时也严格保留 AND 结果，不能兜底重新放开视频。
  */
 export function applyAgentFeatureGate(agentId: string | undefined, userFeatures?: AgentFeatures): AgentFeatures | undefined {
 	const on = (v?: boolean) => v !== false; // 缺省=开
@@ -545,11 +542,6 @@ export function applyAgentFeatureGate(agentId: string | undefined, userFeatures?
 			comfyui: on(af.comfyui) && on(features?.comfyui),
 			modes: composeModes(features?.modes, af.modes),
 		};
-		if (!merged.assetMode && !merged.canvasMode && !merged.editorMode) {
-			merged.assetMode = on(af.assetMode);
-			merged.canvasMode = on(af.canvasMode);
-			merged.editorMode = on(af.editorMode);
-		}
 		features = merged;
 	}
 	return features;

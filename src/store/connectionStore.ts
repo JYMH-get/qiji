@@ -81,6 +81,8 @@ export function getDeviceId(): string {
 interface SessionUser {
 	id: string;
 	name: string;
+	/** 登录/心跳的目录归属标记；迁移保留 accessKey 时仍能触发目录刷新 */
+	catalogAudience?: string;
 	credits: number;
 	/** 功能开关（服务端按用户下发；字段缺省=开）：控制可用模式，见 useModeFeatures；libtv/dreamina 见对应 hook；
 	 *  modes=动态视频模式门禁（第130轮，modeId→bool，缺省=开）：关=模型下拉隐藏该模式（服务端 403 亦拦） */
@@ -133,31 +135,38 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
 	setCredits: (credits) => set((s) => (s.user ? { user: { ...s.user, credits } } : {})),
 }));
 
-/** 模式开关（归一后）：字段缺省=开；三个全关视为配置错误，保底回退「仅资产模式」 */
+/** 主模式入口：资产（表格）模式始终开放，原 assetMode 权限仅控制其中的视频区。 */
 export interface ModeFeatures {
 	assetMode: boolean;
 	canvasMode: boolean;
 	editorMode: boolean;
 }
 
-function normalizeModeFeatures(asset: boolean, canvas: boolean, editor: boolean): ModeFeatures {
-	return asset || canvas || editor
-		? { assetMode: asset, canvasMode: canvas, editorMode: editor }
-		: { assetMode: true, canvasMode: false, editorMode: false };
+function normalizeModeFeatures(canvas: boolean, editor: boolean): ModeFeatures {
+	return { assetMode: true, canvasMode: canvas, editorMode: editor };
 }
 
 /** 非 hook：读当前用户的模式开关（登录/心跳下发；未登录=全开，登录页等场景不受限） */
 export function getModeFeatures(): ModeFeatures {
 	const f = useConnectionStore.getState().user?.features;
-	return normalizeModeFeatures(f?.assetMode !== false, f?.canvasMode !== false, f?.editorMode !== false);
+	return normalizeModeFeatures(f?.canvasMode !== false, f?.editorMode !== false);
 }
 
 /** hook：订阅模式开关（管理端改开关 → 心跳刷新 user → 界面即时隐藏/恢复模式交互键） */
 export function useModeFeatures(): ModeFeatures {
-	const asset = useConnectionStore((s) => s.user?.features?.assetMode !== false);
 	const canvas = useConnectionStore((s) => s.user?.features?.canvasMode !== false);
 	const editor = useConnectionStore((s) => s.user?.features?.editorMode !== false);
-	return normalizeModeFeatures(asset, canvas, editor);
+	return normalizeModeFeatures(canvas, editor);
+}
+
+/** 表格视频权限：沿用服务端 assetMode 字段及用户/渠道商合并规则，缺省为开。 */
+export function getAssetVideoFeature(): boolean {
+	return useConnectionStore.getState().user?.features?.assetMode !== false;
+}
+
+/** 心跳更新权限后即时隐藏/恢复表格视频区，图片与资产入口始终保留。 */
+export function useAssetVideoFeature(): boolean {
+	return useConnectionStore((s) => s.user?.features?.assetMode !== false);
 }
 
 /** 非 hook：LibTV 授权入口开关（缺省=开；管理端可按用户关闭，心跳 ≤30s 生效） */

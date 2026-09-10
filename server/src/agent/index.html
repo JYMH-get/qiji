@@ -653,7 +653,7 @@ function renderUsers(){
       <td><div class="ucell"><div class="avatar" style="${AVATAR_BG[i%4]}">${esc((dispUName(u)).slice(0,1))}</div><div><div>${esc(dispUName(u))}</div>${u.note?`<div class="sub">${esc(u.note)}</div>`:""}</div></div></td>
       <td class="mono">${esc(u.account||"—")}</td>
       <td><label class="sw" onclick="event.stopPropagation()"><input type="checkbox" ${u.enabled?"checked":""} onchange="updUser('${u.id}','enabled',this.checked,true)"/><i></i></label></td>
-      <td><div class="modechips">${[["assetMode",f.asset,"资产"],["canvasMode",f.canvas,"画布"],["editorMode",f.editor,"实时剪辑"],["libtv",f.libtv,"LibTV"],["dreamina",f.dreamina,"即梦"],["comfyui",f.comfy,"ComfyUI"]].filter(x=>agFeatOn(x[0])).map(x=>mchip(x[0],x[1],x[2])).join("")}</div></td>
+      <td><div class="modechips">${[["assetMode",f.asset,"表格视频"],["canvasMode",f.canvas,"画布"],["editorMode",f.editor,"实时剪辑"],["libtv",f.libtv,"LibTV"],["dreamina",f.dreamina,"即梦"],["comfyui",f.comfy,"ComfyUI"]].filter(x=>agFeatOn(x[0])).map(x=>mchip(x[0],x[1],x[2])).join("")}</div></td>
       <td style="text-align:right">${(u.credits||0).toLocaleString()}</td>
       <td style="text-align:right"><span>${(u.dailySpent||0).toLocaleString()}</span><span class="faint"> / ${(u.totalSpent||0).toLocaleString()}</span></td>
       <td class="mut">${u.lastSeenAt ? relTime(u.lastSeenAt) : "—"}</td>
@@ -669,7 +669,7 @@ function toggleSelAll(on){ if(on) U_SHOWN.forEach(id=>uSel.add(id)); else U_SHOW
 function renderUserBatchbar(){
   const bb = $("#u_batchbar"); if(!bb) return;
   if(uSel.size===0){ bb.style.display="none"; bb.innerHTML=""; return; }
-  const modeOpts = [["f:assetMode","资产"],["f:canvasMode","画布"],["f:editorMode","实时剪辑"],["f:libtv","LibTV"],["f:dreamina","即梦"],["f:comfyui","ComfyUI"]].filter(x=>agFeatOn(x[0].slice(2)))
+  const modeOpts = [["f:assetMode","表格视频"],["f:canvasMode","画布"],["f:editorMode","实时剪辑"],["f:libtv","LibTV"],["f:dreamina","即梦"],["f:comfyui","ComfyUI"]].filter(x=>agFeatOn(x[0].slice(2)))
     .map(x=>`<option value="${x[0]}">${x[1]}</option>`).join("");
   bb.style.display="flex";
   bb.innerHTML = `<b>已选 ${uSel.size} 个</b>
@@ -713,7 +713,6 @@ async function toggleFeat(id,k){
   const u = USERS.find(x=>x.id===id); if(!u) return;
   const f = Object.assign({assetMode:true,canvasMode:true,editorMode:true,libtv:true,dreamina:true,comfyui:true}, u.features||{});
   f[k] = f[k]===false;
-  if (f.assetMode===false && f.canvasMode===false && f.editorMode===false){ toast("资产、画布与实时剪辑模式至少保留一个","bad"); return; }
   try { await api("/agent-api/users/"+id,{method:"PUT",body:JSON.stringify({features:f})}); u.features=f; toast(`${f[k]!==false?"已开启":"已关闭"}，心跳 ≤30s 生效`); renderUsers(); if(DRAWER_UID===id)renderUserDrawer(); }
   catch(e){ toast(e.message,"bad"); }
 }
@@ -735,9 +734,9 @@ function renderUserDrawer(){
         <div class="frow"><label>启用</label><label class="sw"><input type="checkbox" ${u.enabled?"checked":""} onchange="updUser('${u.id}','enabled',this.checked,true);renderUserDrawer()"/><i></i></label></div>
       </div>
       <div class="dsec"><div class="t">可 用 模 式（心跳 ≤30s 生效）</div>
-        ${agFeatOn("assetMode")?swrow("assetMode",f.asset,"资产模式","表格创作五类资产界面"):""}
-        ${agFeatOn("canvasMode")?swrow("canvasMode",f.canvas,"画布模式","节点画布；三个主模式至少留一个"):""}
-        ${agFeatOn("editorMode")?swrow("editorMode",f.editor,"实时剪辑模式","实时剪辑；三个主模式至少留一个"):""}
+        ${agFeatOn("assetMode")?swrow("assetMode",f.asset,"表格视频","控制表格视频区、视频生成与视频选择；资产和故事板生图始终可用"):""}
+        ${agFeatOn("canvasMode")?swrow("canvasMode",f.canvas,"画布模式","节点画布"):""}
+        ${agFeatOn("editorMode")?swrow("editorMode",f.editor,"实时剪辑模式","实时剪辑"):""}
         ${agFeatOn("libtv")?swrow("libtv",f.libtv,"LibTV 授权入口","用户自有账号生成"):""}
         ${agFeatOn("dreamina")?swrow("dreamina",f.dreamina,"即梦授权入口","用户自有即梦账号生成"):""}
         ${agFeatOn("comfyui")?swrow("comfyui",f.comfy,"ComfyUI 直连入口","用户绑定自有 ComfyUI 地址本地直连生成"):""}

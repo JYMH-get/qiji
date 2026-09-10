@@ -182,6 +182,14 @@ export default function App() {
 			document.body.classList.remove("dark");
 		}
 
+		// 先订阅，避免初始化期间渠道归属改变漏掉刷新；迁移保留 accessKey，靠心跳的目录归属识别。
+		const unsubConnection = useConnectionStore.subscribe((s, prev) => {
+			const changed = s.serverUrl !== prev.serverUrl || s.accessKey !== prev.accessKey
+				|| s.user?.catalogAudience !== prev.user?.catalogAudience
+				|| (s.loggedIn && !prev.loggedIn);
+			if (changed && s.loggedIn && s.isConfigured()) void useCatalogStore.getState().syncCatalog();
+		});
+
 		// 从管理端拉取 catalog（模型/模板/出图模板/变体前缀），并据此注册 ManagedAdapter。
 		// 启动先用本地缓存秒开，后台增量同步；未配置服务器时静默跳过（仅本地 mock 可用）。
 		if (useConnectionStore.getState().isConfigured()) {
@@ -205,15 +213,6 @@ export default function App() {
 			const { registerComfyuiAdapter } = await import("@/services/adapters/comfyuiAdapter");
 			registerComfyuiAdapter();
 		}
-		// 管理端连接配置变更后，自动重新拉取 catalog
-		const unsubConnection = useConnectionStore.subscribe(
-			(s, prev) => {
-				if ((s.serverUrl !== prev.serverUrl || s.accessKey !== prev.accessKey) && s.isConfigured()) {
-					useCatalogStore.getState().syncCatalog();
-				}
-			},
-		);
-
 		// Subscribe to settings theme changes globally
 		const unsubTheme = useSettingsStore.subscribe(
 			(s) => {
