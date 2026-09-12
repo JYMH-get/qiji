@@ -28,7 +28,7 @@
  * 图片（第162轮，协议 aistars-image）：POST /generation/create/image（body 与视频同构：channel/model/
  * prompt/aspectRatio/quality/n + inputImages；无 duration/mode）→ 同一 GET /generation/status 轮询
  * （outputs[0]=图 URL，poll 直接复用 pollAistarsVideo）。质量档（1K/2K/4K）钉在模型编码/routes（价随档变，
- * 与视频质量档同款）；比例=客户端 params.size（比例串/像素尺寸）就近映射线路 aspects。
+ * 与视频质量档同款）；比例由管理端公共参数转换成 params.size 后映射线路 aspects。
  * 2026-07-26 官方测试线实锤：channel=test/model=test-image 零扣费全链路通（submit→status→outputs）。
  */
 import { buildPrompt } from "./prompt.ts";
@@ -303,7 +303,7 @@ export async function submitAistarsImage(req: GenerateRequest, up: Upstream, onU
 	prompt = injectReferenceTags(prompt, { images: imgs });
 	if (prompt.length > 5000) prompt = prompt.slice(0, 5000);
 
-	// 比例：客户端 params.size（比例串/像素尺寸）就近映射线路 aspects；未知线路原样透传（解析得出才发）
+	// 比例：管理端转换后的 params.size 就近映射线路 aspects；未知线路原样透传（解析得出才发）
 	const sizeRaw = String(req.params?.size ?? "");
 	const aspectRatio = cap
 		? nearestAspect(sizeRaw, cap.aspects)

@@ -1,3 +1,5 @@
+import { InferenceStrategyPicker, StoryGuidanceButton } from '@/components/InferenceStrategyPicker';
+import { inferenceDurationLimit, inferenceDurationRangeError, normalInferenceStrategy, resolveSplitTemplate, resolveStrategyTemplate, type InferenceStrategy } from '@/lib/inferenceStrategy';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import EditorHeader from "@/components/EditorHeader";
 import EditorSidebar from "@/components/EditorSidebar";
@@ -12,7 +14,6 @@ import MediaCompareModal from "@/components/MediaCompareModal";
 import { managedClient } from "@/services/managedClient";
 import { saveRemoteAsset } from "@/services/assetPersist";
 import ModelPicker, { effectiveModelKey, useEffectiveModelKey, useCapModelOptions, useFamilyOrder } from "@/components/ModelPicker";
-import TemplatePicker from "@/components/TemplatePicker";
 import { useCatalogStore } from "@/store/catalogStore";
 import { getAssetVideoFeature, useAssetVideoFeature, useModeFeatures } from "@/store/connectionStore";
 import { useScrollSnapshot } from "@/hooks/useScrollSnapshot";
@@ -22,7 +23,7 @@ import { BADGE_BG, TAG_BADGE, materialTags, mediaFromMime, mediaOf, buildLegend,
 import { buildAssetListVars } from "@/lib/assetVars";
 import { reindexShots } from "@/lib/shotReindex";
 import { aspectFromName } from "@/lib/templateAspect";
-import { clampDuration, clampImageResolution, resolveSize, IMAGE_ASPECTS, IMAGE_QUALITIES } from "@/lib/genParams";
+import { clampImageResolution, buildImageParams, IMAGE_ASPECTS, IMAGE_QUALITIES } from "@/lib/genParams";
 import { METHOD_LABELS, ASPECT_LABELS, clampMethod, clampToOptions, clampDurationTo } from "@/lib/videoMethods";
 // ⚠ 按模型 key 取档位一律走 modelOptions（catalog 查不到时回退本地渠道适配器 mode.paramsSchema）——
 // 直接 `models.find(m => m.id === key)` 会让 ComfyUI/LibTV/即梦这类本地模型掉回内置三档（第251轮修的就是这个）
@@ -43,9 +44,8 @@ import PromptMentionEditor from "@/components/PromptMentionEditor";
 import type { PromptMentionHandle } from "@/components/PromptMentionEditor";
 import HighlightEditable from "@/components/HighlightEditable";
 import { openLightbox } from "@/store/lightboxStore";
-import { useAssetFormStore } from "@/store/assetFormStore";
 import { captureFromUri, probeVideoDuration } from "@/canvas/videoCapture";
-import { makeTermMatcher, stripLegendForMatch } from "@/lib/assetMatch";
+import { aliasTerms, matchAssetsInText, stripLegendForMatch } from "@/lib/assetMatch";
 import { saveUriToLocal } from "@/lib/saveMedia";
 // 本地 CLI 模型（LibTV/即梦，非 catalog）在标题栏显示实名（清单与模型下拉注入同源）
 import { LOCAL_MODEL_LABELS, sourceValueOf, modelForSource, modelFamilies, familyOf, modelForFamily, channelOf } from "@/services/adapters/localChannels";
@@ -62,21 +62,6 @@ const KIND_LABEL: Record<string, string> = {
     character: "角色", scene: "场景", creature: "生物", prop: "道具", local: "本地",
 };
 
-// 从资产名解析「匹配候选」（含别名）：按 / ／ 、 | ， 分隔，括号（…）内也作别名。
-// 例「陈瞎子/陈满楼」→ ["陈瞎子/陈满楼","陈瞎子","陈满楼"]；「陈瞎子（陈满楼）」→ ["…","陈瞎子","陈满楼"]。
-function aliasTerms(name: string): string[] {
-    const base = String(name || "").trim();
-    if (!base) return [];
-    const set = new Set<string>([base]);
-    const parens = base.match(/[（(]([^（）()]+)[)）]/g) || [];
-    const core = base.replace(/[（(][^（）()]*[)）]/g, "/"); // 去括号留分隔
-    for (const part of core.split(/[/／、|，,]/)) { const t = part.trim(); if (t) set.add(t); }
-    for (const p of parens) {
-        const inner = p.replace(/[（()）]/g, "").trim();
-        for (const part of inner.split(/[/／、|，,]/)) { const t = part.trim(); if (t) set.add(t); }
-    }
-    return [...set].filter(Boolean);
-}
 // 素材模态/编号/图例工具已抽到 @/lib/shotMaterials（视图与提示词编辑器、generationQueue 共用）。
 
 // 列序：操作 / 原文分段 / 素材 / 提示词 / 故事板 / 视频。
@@ -87,8 +72,7 @@ const MIN_ROW = 120;  // 行最小高（px）
 
 type PromptTab = "storyboard" | "video";
 
-// 图像「比例 × 分辨率」→ 出图 size：走 @/lib/genParams 的 resolveSize（全客户端唯一一份 SIZE_MAP，
-// 第251轮去重——本文件原有的 IMG_SIZE 副本已删，勿再抄表；resolveSize 对档位大小写不敏感）。
+// 图像请求统一发送比例 + 分辨率 + 质量；上游尺寸由服务端在选定实际模型后转换。
 // 画质档只是显示名映射（值集恒取 IMAGE_QUALITIES）
 const QUALITY_LABELS: Record<string, string> = { low: "低", medium: "中", high: "高", auto: "自动" };
 
@@ -145,7 +129,7 @@ const Frame161195 = () => {
     const genWithStory = ms.genWithStory ?? false;
     const imageAspect = ms.imageAspect ?? "16:9";
     // 分辨率档由服务端按当前生效图像模型下发（catalog params.resolution 枚举，管理端可改），
-    // 已存选择不在开放集时归一到第一档（本文件历史用大写档名 "2K"，resolveSize/clampImageResolution 均大小写不敏感）
+    // 已存选择不在开放集时归一到第一档（本文件历史用大写档名 "2K"，clampImageResolution 大小写不敏感）
     const sbImgModelKey = useEffectiveModelKey("image");
     // ⚠ sbModels 订阅保留：modelOptions 内部读 getState()（非响应式），靠本订阅在 catalog 热更时重渲染取到新档位
     const sbModels = useCatalogStore((s) => s.catalog?.models);
@@ -157,22 +141,27 @@ const Frame161195 = () => {
     const vidMethod = clampMethod(ms.videoMethod, vidMethods);
     const vidReq = videoReqOptionsForKey(vidModelKey);
     const imageQuality = ms.imageQuality ?? "high";
-    const inferTplId = ms.inferTplId ?? ""; // 智能推理提示词模板（多卡；空=多分镜默认）
-    const singleTplId = ms.singleTplId ?? ""; // 单卡推理提示词模板（空=单卡默认）——单镜按键/一键单卡用
-    // 图视同源：开启后故事板/视频共用一段「同源提示词」，提示词区单栏、图片与视频共用该栏；推理走同源模板
+    const inferTplId = ms.inferTplId ?? ""; // 旧项目的推理方案选择
+    // 图视同源决定结果字段和请求输出格式，不切换创作方案。
     const sameSource = ms.imgVideoSameSource ?? false;
-    const unifiedTplId = ms.unifiedTplId ?? "";       // 同源·多卡 模板（空=同源多卡默认）
-    const unifiedSingleTplId = ms.unifiedSingleTplId ?? ""; // 同源·单卡 模板（空=同源单卡默认）——单镜/一键单卡用
-    const imageSize = resolveSize(imageAspect, imageResolution);
+    const unifiedTplId = ms.unifiedTplId ?? "";
     // 第243轮：选中名称带比例标记的推理模板（如「同源推理9:16」）→ 图像/视频比例自动跟随模板比例
     // （用户定稿「优先提示词内比例」；写入即生效、下拉如实显示，之后仍可在下方单独改回=最高优先）
     const catTemplates = useCatalogStore((s) => s.catalog?.templates);
+    const strategy: InferenceStrategy = normalInferenceStrategy(ms.inferenceStrategy ?? { templateId: inferTplId || unifiedTplId || ms.singleTplId || ms.unifiedSingleTplId }, catTemplates ?? []);
+    const strategyTemplate = resolveStrategyTemplate(catTemplates ?? [], strategy.templateId);
+    const setStrategy = (value: InferenceStrategy) => pickInferTpl({ inferenceStrategy: value }, value.templateId ?? '');
+    const validStrategy = () => {
+        if (strategy.source === 'skill' ? !strategy.skillText?.trim() : !strategyTemplate) { alert(strategy.source === 'skill' ? '请先导入或填写外部 Skills 内容' : '请选择可用的推理方案'); return false; }
+        return true;
+    };
+    const inferenceInput = (guidance?: string, duration = maxDuration) => ({ source: strategy.source ?? 'template' as const, skillText: strategy.skillText, skillName: strategy.skillName, guidance: [strategy.guidance, guidance].filter(Boolean).join('\n\n'), durationLimit: inferenceDurationLimit(duration) });
     const pickInferTpl = (patch: Partial<MediaSettings>, tplId: string) => {
         const a = aspectFromName(catTemplates?.find((t) => t.id === tplId)?.name);
         setMS(a ? { ...patch, imageAspect: a, aspect: a } : patch);
     };
     // 当前已选（显式）推理模板的内嵌比例——有则在设置面板给出提示
-    const inferAspectTag = aspectFromName(catTemplates?.find((t) => t.id === (sameSource ? unifiedTplId : inferTplId))?.name);
+    const inferAspectTag = aspectFromName(catTemplates?.find((t) => t.id === strategyTemplate?.id)?.name);
     // 切换模型（或 catalog 热更改档）后，把**已显式选过**的「要求」收敛到新模型档位并落库：
     // 显示层与提交层本就各自 clamp，但存的仍是旧值（换回时会带回越档值、与所见不一致）——这里一次性自愈。
     // 只动显式设过的键（未设的走缺省，不凭空落值）；收敛结果恒在档内 → 不会反复触发。
@@ -181,7 +170,7 @@ const Frame161195 = () => {
         const patch: Partial<MediaSettings> = {};
         if (ms.resolution) { const v = clampToOptions(ms.resolution, vidReq.resolutions); if (v !== ms.resolution) patch.resolution = v; }
         if (ms.aspect) { const v = clampToOptions(ms.aspect, vidReq.aspects); if (v !== ms.aspect) patch.aspect = v; }
-        if (ms.maxDuration != null) { const v = clampDurationTo(clampDuration(ms.maxDuration), vidReq.durations); if (v !== ms.maxDuration) patch.maxDuration = v; }
+        if (ms.maxDuration != null) { const v = clampDurationTo(ms.maxDuration, vidReq.durations); if (v !== ms.maxDuration) patch.maxDuration = v; }
         if (ms.videoMethod && vidMethod !== ms.videoMethod) patch.videoMethod = vidMethod;
         if (ms.imageResolution) {
             const v = clampImageResolution(ms.imageResolution, sbResOptions).toUpperCase();
@@ -276,7 +265,7 @@ const Frame161195 = () => {
     // 出图预设方案（服务端「预设方案」模板 + 本地自定义，随 catalog/设置刷新）——供分镜提示词插入胶囊/渲染 pill
     const presetCatalogVer = useCatalogStore((s) => s.catalog?.version);
     const customPresets = useSettingsStore((s) => s.customPresets);
-    const presetSchemes = useMemo(() => listPresetSchemes(), [presetCatalogVer, customPresets]);
+    const presetSchemeSets = useMemo(() => ({ image: listPresetSchemes("image"), video: listPresetSchemes("video") }), [presetCatalogVer, customPresets]);
     const promptRefs = useRef<Record<string, PromptMentionHandle | null>>({}); // 各分镜提示词编辑器句柄（按 shotId 定位光标插入）
     const [promptTab, setPromptTab] = useState<Record<string, PromptTab>>(snapVideo?.promptTab ?? {});
     const [uploading, setUploading] = useState<Record<string, boolean>>({}); // 素材上传中（缩略图转圈）
@@ -434,9 +423,7 @@ const Frame161195 = () => {
     // 智能拆分（整集）「拆分中」状态
     const epSplitting = (epId?: string): boolean => !!epId && inferTasks.some((t) => t.episodeId === epId && t.mode === "split" && t.status === "running");
     const epSplitError = (epId?: string): string | undefined => inferTasks.find((t) => !!epId && t.episodeId === epId && t.mode === "split" && t.status === "failed")?.error;
-    // 本集正在推理中的单镜头数（一键推理所有单镜头的防呆与进度）
-    const epShotInferringCount = (epId?: string): number => inferTasks.filter((t) => !!epId && t.episodeId === epId && t.mode === "single" && t.status === "running").length;
-    // 整集级互斥锁：智能推理 / 智能拆分 任一在跑 → 两者及一键推理都锁住（防并发覆盖同一集）
+    // 整集级互斥锁：智能推理 / 智能拆分 任一在跑 → 两者都锁住（防并发覆盖同一集）
     const epLocked = (epId?: string): boolean => epInferring(epId) || epSplitting(epId);
     // 整集级当前忙碌文案：拆分中 / 推理中（两按钮同步显示同一状态，视觉上一起锁住）
     // 服务端排队（如奇迹云 FIFO）时带上位次——「排队第3」比恒久不动的「推理中…」有信息量
@@ -523,9 +510,9 @@ const Frame161195 = () => {
         const patch: Partial<NonNullable<StoryboardShot["overrides"]>> = { videoModelKey };
         if (ov.resolution) patch.resolution = clampToOptions(ov.resolution, req.resolutions);
         if (ov.aspect) patch.aspect = clampToOptions(ov.aspect, req.aspects);
-        if (ov.duration) patch.duration = clampDurationTo(clampDuration(ov.duration), req.durations);
+        if (ov.duration) patch.duration = clampDurationTo(ov.duration, req.durations);
         if (ov.method) patch.method = clampMethod(ov.method, modelMethodsForKey(videoModelKey));
-        const nextDur = shot.durationSec != null ? clampDurationTo(clampDuration(shot.durationSec), req.durations) : undefined;
+        const nextDur = shot.durationSec != null ? clampDurationTo(shot.durationSec, req.durations) : undefined;
         update(shot.id, {
             overrides: { ...ov, ...patch },
             ...(nextDur != null && nextDur !== shot.durationSec ? { durationSec: nextDur } : {}),
@@ -585,40 +572,25 @@ const Frame161195 = () => {
         if (renameEpId === ep.id) setRenameEpId(null);
     };
 
-    // 智能拆分（整集）：本集原文 → 仅拆出镜头行（原文分段，不含提示词）。提示词模板留服务端配置
-    // （templateId `storyboard.split.smart`，缺失则回退 purpose 默认 / 原文兜底）。持久化运行（可找回）+ 锁定防呆。
-    const SMART_SPLIT_TPL = "storyboard.split.smart";
+    // 仅拆分使用当前账号可见的拆分方案；检查成功后才替换已有分镜。
     const handleSplit = async () => {
         if (!activeEp) { alert("请先在左侧选择或新建分集"); return; }
         if (!activeEp.scriptText.trim()) { alert("请先填写本集剧本内容（在「原文拆分」区粘贴本集剧本）"); return; }
         if (epLocked(activeEp.id)) return; // 智能推理/智能拆分任一在跑 → 锁定
-        if (activeEp.shots.length > 0 && !(await confirmDialog("当前分集已有分镜，智能拆分将删除并重新拆分。继续？"))) return;
+        const available = useCatalogStore.getState().catalog?.templates ?? [];
+        const splitTemplate = resolveSplitTemplate(available, ms.splitTplId) ?? resolveSplitTemplate(available);
+        if (!splitTemplate) { alert("当前没有可用的拆分方案"); return; }
+        const outputPurpose = sameSource ? 'storyboard.unified' : 'storyboard.toVideoPrompt';
+        if (!available.some(t => t.id === `output.${outputPurpose}` && t.purpose === outputPurpose && t.category === '输出提示词')) { alert("当前输出格式不可用"); return; }
+        const durationRange = { min: 4, max: maxDuration };
+        const durationError = inferenceDurationRangeError(durationRange);
+        if (durationError) { alert(durationError); return; }
+        if (activeEp.shots.length > 0 && !(await confirmDialog("当前分集已有分镜，重新拆分将删除现有分镜并重新生成。继续？"))) return;
         const epId = activeEp.id;
         const scriptText = activeEp.scriptText;
-        useProjectStore.getState().setEpisodeShots(epId, []); // 覆盖：清空整集（拆分中 → 视图自动切到分镜表格，边出边填）
         const { startInfer } = await import("@/services/inferRun");
-        startInfer({ episodeId: epId, mode: "split", templateId: SMART_SPLIT_TPL, variables: { 原文: scriptText, 视觉风格: useProjectStore.getState().visualStyle || "", ...buildAssetListVars() }, modelKey: effectiveModelKey("text") || undefined });
-    };
-
-    // 一键推理所有单镜头：对本集每个镜头逐个走「智能推理（单镜头）」模式（smart.infer.single），各自独立锁定/可找回。
-    // 覆盖：先清空各镜两段提示词。防呆：本集有单镜在推理时禁用（按钮显示进度）。
-    const inferAllShots = async () => {
-        if (!activeEp) return;
-        if (epShotInferringCount(activeEp.id) > 0 || epLocked(activeEp.id)) return; // 已有单镜在推理 / 整集推理拆分中 → 锁定
-        const targets = activeEp.shots.filter((s) => (s.scriptSegment || s.prompt || "").trim());
-        if (targets.length === 0) { alert("没有可推理的镜头。请先「智能拆分」或填写各镜头原文。"); return; }
-        if (!(await confirmDialog(`将对 ${targets.length} 个镜头逐个单卡推理（删除并覆盖各镜头当前提示词）。继续？`))) return;
-        const epId = activeEp.id;
-        // 覆盖：清空该镜提示词（同源清 unifiedPrompt，否则清故事板/视频两段）
-        targets.forEach((s) => update(s.id, sameSource ? { unifiedPrompt: "" } : { storyboardPrompt: "", videoPrompt: "" }));
-        const { SMART_INFER_SINGLE_TPL, SMART_INFER_UNIFIED_SINGLE_TPL } = await import("@/lib/smartInferPrompts");
-        const { startInfer, buildNeighborVars } = await import("@/services/inferRun");
-        const assetVars = buildAssetListVars();
-        // 邻镜上下文（{{上上一分镜}}{{上一分镜}}{{下一分镜}}）取当前集最新分镜（结果已清空 → 邻镜多回退原文）
-        const freshShots = useProjectStore.getState().episodes.find((e) => e.id === epId)?.shots ?? [];
-        // 单卡模板：视频设置所选（逐项目持久化），空=单卡默认；同源模式用同源·单卡模板
-        const stpl = sameSource ? (unifiedSingleTplId || SMART_INFER_UNIFIED_SINGLE_TPL) : (singleTplId || SMART_INFER_SINGLE_TPL);
-        targets.forEach((s) => startInfer({ episodeId: epId, mode: "single", sameSource, shotId: s.id, templateId: stpl, variables: { 原文: (s.scriptSegment || s.prompt || "").trim(), ...assetVars, ...buildNeighborVars(freshShots, s.id, sameSource) }, modelKey: effectiveModelKey("text") || undefined }));
+        useProjectStore.getState().setEpisodeShots(epId, []); // 覆盖：清空整集（拆分中 → 视图自动切到分镜表格，边出边填）
+        startInfer({ episodeId: epId, mode: "split", sameSource, templateId: splitTemplate.id, inference: { source: 'template', outputMode: sameSource ? 'unified' : 'storyboard', durationRange, guidance: strategy.guidance }, variables: { 原文: scriptText, 视觉风格: useProjectStore.getState().visualStyle || "", ...buildAssetListVars() }, modelKey: effectiveModelKey("text") || undefined });
     };
 
     // 智能推理（多镜）：本集原文 → 一次产出每卡的 原文 + 故事板提示词 + 视频提示词（流式增量——出一卡显示一卡）。
@@ -627,32 +599,32 @@ const Frame161195 = () => {
         if (!activeEp) { alert("请先在左侧选择或新建分集"); return; }
         if (!activeEp.scriptText.trim()) { alert("请先填写本集剧本内容（在「原文拆分」区粘贴本集剧本）"); return; }
         if (epLocked(activeEp.id)) return; // 智能推理/智能拆分任一在跑 → 锁定，禁止二次点击（防并发冲突）
+        if (!validStrategy()) return;
         if (activeEp.shots.length > 0 && !(await confirmDialog("当前分集已有分镜，智能推理将删除当前提示词并覆盖。继续？"))) return;
         const epId = activeEp.id;
         const scriptText = activeEp.scriptText;
         useProjectStore.getState().setEpisodeShots(epId, []); // 覆盖：清空整集（推理中 → 视图自动切到分镜表格，边出边填）
-        const { SMART_INFER_MULTI_TPL, SMART_INFER_UNIFIED_TPL } = await import("@/lib/smartInferPrompts");
         const { startInfer } = await import("@/services/inferRun");
-        // 提示词模板：视频设置/底部下拉所选（逐项目持久化），空=多分镜默认；同源模式用同源·多卡模板
-        const mtpl = sameSource ? (unifiedTplId || SMART_INFER_UNIFIED_TPL) : (inferTplId || SMART_INFER_MULTI_TPL);
-        startInfer({ episodeId: epId, mode: "multi", sameSource, templateId: mtpl, variables: { 原文: scriptText, 视觉风格: useProjectStore.getState().visualStyle || "", ...buildAssetListVars() }, modelKey: effectiveModelKey("text") || undefined });
+        // 创作方案独立于输出模式；本集入口固定多卡。
+        const mtpl = strategy.source === 'skill' ? '' : strategyTemplate!.id;
+        startInfer({ episodeId: epId, mode: "multi", sameSource, templateId: mtpl, inference: inferenceInput(), variables: { 原文: scriptText, 视觉风格: useProjectStore.getState().visualStyle || "", ...buildAssetListVars() }, modelKey: effectiveModelKey("text") || undefined });
     };
 
-    // ① 单卡智能推理：对**单个分镜**用 smart.infer.single 模板，一次产出本镜的 故事板提示词 + 视频提示词。
+    // ① 单卡智能推理：对单个分镜使用当前创作方案，按同源开关产出对应提示词。
     //    覆盖：先清空该镜两段提示词；original_script 单卡模式原样保留（不覆盖 scriptSegment）。同样走持久化运行（可找回）。
     const inferShot = async (shot: StoryboardShot) => {
         if (!activeEp) return;
         const text = (shot.scriptSegment || shot.prompt || "").trim();
         if (!text) { alert("该分镜没有原文，无法推理。请先在原文区填写本镜内容。"); return; }
         if (shotInferring(shot.id)) return; // 已在推理中 → 锁定
+        if (!validStrategy()) return;
         update(shot.id, sameSource ? { unifiedPrompt: "" } : { storyboardPrompt: "", videoPrompt: "" }); // 覆盖：清空提示词
-        const { SMART_INFER_SINGLE_TPL, SMART_INFER_UNIFIED_SINGLE_TPL } = await import("@/lib/smartInferPrompts");
         const { startInfer, buildNeighborVars } = await import("@/services/inferRun");
         // 邻镜上下文（{{上上一分镜}}{{上一分镜}}{{下一分镜}}）取最新分镜（上一镜若已推理即拼其结果，保持连贯）
         const freshShots = useProjectStore.getState().episodes.find((e) => e.id === activeEp.id)?.shots ?? [];
-        // 单卡模板：视频设置所选（逐项目持久化），空=单卡默认；同源模式用同源·单卡模板
-        const stpl = sameSource ? (unifiedSingleTplId || SMART_INFER_UNIFIED_SINGLE_TPL) : (singleTplId || SMART_INFER_SINGLE_TPL);
-        startInfer({ episodeId: activeEp.id, mode: "single", sameSource, shotId: shot.id, templateId: stpl, variables: { 原文: text, ...buildAssetListVars(), ...buildNeighborVars(freshShots, shot.id, sameSource) }, modelKey: effectiveModelKey("text") || undefined });
+        // 逐镜入口固定单卡，复用相同的创作方案。
+        const stpl = strategy.source === 'skill' ? '' : strategyTemplate!.id;
+        startInfer({ episodeId: activeEp.id, mode: "single", sameSource, shotId: shot.id, templateId: stpl, inference: inferenceInput(shot.plotGuidance, shot.overrides?.duration ?? shot.durationSec ?? maxDuration), variables: { 原文: text, 视觉风格: useProjectStore.getState().visualStyle || "", ...buildAssetListVars(), ...buildNeighborVars(freshShots, shot.id, sameSource) }, modelKey: effectiveModelKey("text") || undefined });
     };
 
     // ── 向上/下拆（按换行行在相邻大分镜间迁移）──
@@ -709,10 +681,10 @@ const Frame161195 = () => {
         return patch;
     };
 
-    // ── 提取（匹配）资产：扫 原文 + 故事板/视频提示词 → 角色/群像/场景/生物/物品命中（场景不做低阈值保底）──
+    // ── 提取（匹配）资产：扫 原文 + 故事板/视频提示词 → 角色/群像/场景/生物/物品命中──
     // 匹配范围（第86轮扩大）：不只原文——智能推理产出的提示词里同样点名资产（{角色:名} 公式等），一并扫描；
     // 提示词先剥掉「【素材图例】」前缀行（那是上一轮提取写入的资产名清单，参与匹配会自我循环）。
-    // 命中标准：归一化精确子串 或 相似度 ≥80%（makeTermMatcher，与画布匹配同一把尺）。
+    // 命中标准：共享 matchAssetsInText 统一处理对白排除、最长文本唯一占用、精确/80%模糊匹配。
     // draftOv：提示词放大弹窗的「匹配资产」——以弹窗草稿代替该 tab 的已存提示词参与匹配与图例写入
     // （草稿尚未保存，落盘值可能滞后；弹窗保存时再落一次同值幂等）。
     const matchAssets = (shot: StoryboardShot, draftOv?: { tab: PromptTab | "unified"; text: string }): boolean => {
@@ -726,29 +698,20 @@ const Frame161195 = () => {
             stripLegendForMatch(uniPrompt),
             shot.prompt,
         ].filter(Boolean).join("\n");
-        const matches = makeTermMatcher(text);
         // 去重：同一张图片（同 assetId 或同 uri）只允许一条；音频同理按 assetId/uri 判重。
         const matched: ShotMaterial[] = [];
         const has = (assetId?: string, uri?: string) => matched.some((m) => (!!assetId && m.assetId === assetId) || (!!uri && m.uri === uri));
         // 先折叠已有素材里的重复（清理历史遗留的重复条目）。浅拷贝——后面可能就地回填 uri，不得变异 store 里的旧对象
         for (const m of shot.materials) { if (!has(m.assetId, m.uri)) matched.push({ ...m }); }
-        const selFormMap = useAssetFormStore.getState().selForm;
-        const add = (a: PoolItem) => {
-            // 用哪个造型的图：原文点名的造型 > 资产助手当前选中造型 > 基础形象 > 第一个有图造型
-            const hitForm = a.forms.find((f) => f.variantId !== null && f.terms.some((t) => t && matches(t)));
-            const sel = selFormMap[a.assetId];
-            const selForm = sel !== undefined ? a.forms.find((f) => f.variantId === sel) : undefined;
-            const form = hitForm ?? selForm ?? a.forms.find((f) => f.variantId === null) ?? a.forms[0];
-            const uri = form?.uri || a.uri;
-            // 素材名：原文点名的造型用造型名（便于上游按名注 @tag）；否则用资产名（原文里出现的是它）
-            const name = hitForm ? hitForm.name : a.name;
+        const add = (a: ReturnType<typeof matchAssetsInText>[number]) => {
+            const uri = a.image || "";
             const exist = matched.find((m) => (!!a.assetId && m.assetId === a.assetId) || (!!uri && m.uri === uri));
             if (exist) {
                 // 此前无图时提取进来的素材（uri 空）：资产出图后再提取 → 回填新图，不再永久空占编号
                 if (!exist.uri && uri) exist.uri = uri;
             } else if (uri) {
                 // ⚠ 无图资产不推入素材：空 uri 素材会占用图例 @ 编号、提交时又无图可发 → 编号一一对应被破坏（勿回退）
-                matched.push({ id: `mat-${Date.now()}-${Math.floor(Math.random() * 1e6)}`, assetId: a.assetId, kind: a.kind, media: "image", name, uri });
+                matched.push({ id: `mat-${Date.now()}-${Math.floor(Math.random() * 1e6)}`, assetId: a.assetId, kind: a.kind === "crowd" ? "character" : a.kind, media: "image", name: a.name, uri });
             }
             // 角色绑定了音色 → 自动把声音参考（音频）也加入素材区，标记归属角色供图例配对「@角色N的声音参考@音频M」。
             // ⚠ 必须独立于上面的图片判重：此前「图已在素材区就提前 return」把音色代码短路——
@@ -757,10 +720,8 @@ const Frame161195 = () => {
                 matched.push({ id: `mat-${Date.now()}-${Math.floor(Math.random() * 1e6)}`, assetId: a.voiceAssetId, kind: "local", media: "audio", name: a.voiceName || `${a.name}的声音`, uri: a.voiceUri, voiceForAssetId: a.assetId });
             }
         };
-        // 全部五类（角色/群像/场景/生物/物品）：名称、别名或造型名命中即匹配
-        for (const a of assetPool) {
-            if (a.terms.some((t) => t && matches(t))) add(a);
-        }
+        // 全部五类（角色/群像/场景/生物/物品）统一走共享匹配核心，避免三种客户端入口规则漂移。
+        for (const a of matchAssetsInText(text)) add(a);
         if (matched.length === 0) return false; // 无素材可用 → 无可提取/无图例
         // 加入新素材（若有）+ 刷新图例前缀（每次提取按当前素材重建，不重复堆叠）；
         // 有草稿覆盖时图例基于草稿文本重建（该 tab 的新提示词=草稿+图例，随 update 落盘）
@@ -809,7 +770,7 @@ const Frame161195 = () => {
             episodeId: activeEp.id, shotId: shot.id, field: "storyboard",
             purpose: "asset.scene.image",
             prompt, // → variables.prompt（视觉风格由 queue 注入）
-            params: { size: imageSize, quality: imageQuality },
+			params: buildImageParams({ aspect: imageAspect, resolution: imageResolution, quality: imageQuality }),
             input: imgs.length ? { images: imgs } : undefined,
             modelKey: effectiveModelKey("image") || undefined,
             label: `${shot.title || "分镜"}·故事板`,
@@ -882,7 +843,7 @@ const Frame161195 = () => {
             purpose: "video.generate",
             prompt,
             params: {
-                duration: clampDurationTo(clampDuration(ov.duration || shot.durationSec || maxDuration), req.durations),
+                duration: clampDurationTo(ov.duration || shot.durationSec || maxDuration, req.durations),
                 resolution: clampToOptions(ov.resolution || resolution, req.resolutions),
                 aspect_ratio: clampToOptions(ov.aspect || aspect, req.aspects),
                 ...(firstFrameUrl ? { firstFrameUrl } : {}),
@@ -1411,12 +1372,10 @@ const Frame161195 = () => {
                             </button>
                             {epInferError(activeEp?.id) && <span style={{ fontSize: 12, color: "#f8c8c8", alignSelf: "center" }} title={epInferError(activeEp?.id)}>推理失败，请重试</span>}
                             <button style={{ ...ghostBtn, alignSelf: "center", ...lockedStyle(activeEp?.id) }} disabled={!activeEp || epLocked(activeEp?.id)} onClick={handleSplit}>
-                                {epBusyLabel(activeEp?.id) ?? "智能拆分"}
+                                {epBusyLabel(activeEp?.id) ?? (activeEp?.shots.length ? "重新拆分" : "仅拆分")}
                             </button>
                             {epSplitError(activeEp?.id) && <span style={{ fontSize: 12, color: "#f8c8c8", alignSelf: "center" }} title={epSplitError(activeEp?.id)}>拆分失败，请重试</span>}
-                            <button style={{ ...ghostBtn, alignSelf: "center" }} disabled={!activeEp || epShotInferringCount(activeEp?.id) > 0 || epLocked(activeEp?.id)} onClick={inferAllShots}>
-                                {epShotInferringCount(activeEp?.id) > 0 ? `推理中…(${epShotInferringCount(activeEp?.id)})` : "一键推理"}
-                            </button>
+                            <InferenceStrategyPicker value={strategy} onChange={setStrategy} />
                             <button style={{ ...ghostBtn, alignSelf: "center" }} disabled={!activeEp} onClick={handleMatchAll}>一键提取资产</button>
                             <button style={{ ...ghostBtn, alignSelf: "center" }} disabled={!activeEp} onClick={() => runAll(genStoryboard)}>一键故事板</button>
                             {assetVideoEnabled && <div style={{ position: "relative", alignSelf: "center" }}>
@@ -1487,17 +1446,7 @@ const Frame161195 = () => {
                                                     <input type="checkbox" checked={sameSource} onChange={(e) => setMS({ imgVideoSameSource: e.target.checked })} />图片与视频共用提示词
                                                 </label>
                                             </div>
-                                            {sameSource ? (
-                                                <>
-                                                    <TemplatePicker purpose="storyboard.unified" value={unifiedTplId} onChange={(id) => pickInferTpl({ unifiedTplId: id }, id)} label="同源推理（多卡）" style={rowPicker} />
-                                                    <TemplatePicker purpose="storyboard.unifiedShot" value={unifiedSingleTplId} onChange={(id) => pickInferTpl({ unifiedSingleTplId: id }, id)} label="同源单卡模板" style={rowPicker} />
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <TemplatePicker purpose="storyboard.toVideoPrompt" value={inferTplId} onChange={(id) => pickInferTpl({ inferTplId: id }, id)} label="推理提示词（多卡）" style={rowPicker} />
-                                                    <TemplatePicker purpose="storyboard.singleShot" value={singleTplId} onChange={(id) => pickInferTpl({ singleTplId: id }, id)} label="单卡推理模板" style={rowPicker} />
-                                                </>
-                                            )}
+                                            <InferenceStrategyPicker value={strategy} onChange={setStrategy} />
                                             {inferAspectTag && (
                                                 <div style={{ fontSize: 11, color: "#c4b5fd", lineHeight: 1.5 }}>
                                                     {`所选推理模板指定比例 ${inferAspectTag}——图像/视频比例已跟随（可在下方单独改）`}
@@ -1506,7 +1455,7 @@ const Frame161195 = () => {
                                             <label style={rowSt}>
                                                 <span style={rowLb}>单镜时长(秒)</span>
                                                 {/* 时长档同样按当前生效视频模型下发（enum 模型如 5/10/15 只出三档），勿回退静态 4-15 全档 */}
-                                                <select value={clampDurationTo(clampDuration(maxDuration), vidReq.durations)} onChange={(e) => setMS({ maxDuration: Number(e.target.value) })} style={rowCtl}>
+                                                <select value={clampDurationTo(maxDuration, vidReq.durations)} onChange={(e) => setMS({ maxDuration: Number(e.target.value) })} style={rowCtl}>
                                                     {vidReq.durations.map((d) => <option key={d} value={d} style={{ background: "#1f1f2e" }}>{d} 秒</option>)}
                                                 </select>
                                             </label>
@@ -1534,7 +1483,7 @@ const Frame161195 = () => {
                                                 </select>
                                             </label>
                                             <label style={rowSt}>
-                                                <span style={rowLb}>画质 <span style={{ color: "rgba(255,255,255,0.35)" }}>（size {imageSize}）</span></span>
+												<span style={rowLb}>画质 <span style={{ color: "rgba(255,255,255,0.35)" }}>（{imageAspect} · {imageResolution}）</span></span>
                                                 {/* 画质档取共享常量 IMAGE_QUALITIES（与资产模式/画布同一份，勿再写死） */}
                                                 <select value={imageQuality} onChange={(e) => setMS({ imageQuality: e.target.value })} style={rowCtl}>
                                                     {IMAGE_QUALITIES.map((q) => <option key={q} value={q} style={{ background: "#1f1f2e" }}>{QUALITY_LABELS[q] || q}</option>)}
@@ -1614,7 +1563,7 @@ const Frame161195 = () => {
                                 <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10, minHeight: "100%", boxSizing: "border-box" }}>
                                     <span style={{ fontWeight: 600, fontSize: 14 }}>本集剧本原文</span>
                                     <textarea
-                                        placeholder="粘贴/输入本集剧本内容，然后点下方「智能推理」一次生成分镜 + 故事板提示词 + 视频提示词；或「智能拆分」仅拆出镜头再逐镜推理"
+                                        placeholder="粘贴/输入本集剧本内容，然后点下方「智能推理」一次生成分镜 + 故事板提示词 + 视频提示词；或「仅拆分」仅拆出镜头再逐镜推理"
                                         value={activeEp.scriptText || ""}
                                         onChange={(e) => useProjectStore.getState().updateEpisode(activeEp.id, { scriptText: e.target.value })}
                                         style={{ flex: 1, width: "100%", boxSizing: "border-box", minHeight: 320, resize: "none", background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, color: "#fff", fontSize: 13, padding: 12, outline: "none", lineHeight: 1.7 }}
@@ -1626,9 +1575,7 @@ const Frame161195 = () => {
                                             <ModelPicker cap="text" label="文本模型" />
                                         </div>
                                         <div style={{ minWidth: 200 }}>
-                                            {sameSource
-                                                ? <TemplatePicker purpose="storyboard.unified" value={unifiedTplId} onChange={(id) => pickInferTpl({ unifiedTplId: id }, id)} label="同源推理" />
-                                                : <TemplatePicker purpose="storyboard.toVideoPrompt" value={inferTplId} onChange={(id) => pickInferTpl({ inferTplId: id }, id)} label="推理提示词" />}
+                                            <InferenceStrategyPicker value={strategy} onChange={setStrategy} />
                                         </div>
                                         <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", color: "rgba(255,255,255,0.8)", fontSize: 12, alignSelf: "flex-end", paddingBottom: 8 }} title="图片与视频共用同一段提示词（同源）">
                                             <input type="checkbox" checked={sameSource} onChange={(e) => setMS({ imgVideoSameSource: e.target.checked })} />图视同源
@@ -1637,12 +1584,12 @@ const Frame161195 = () => {
                                             {epBusyLabel(activeEp.id) ?? "智能推理"}
                                         </button>
                                         <button style={{ ...ghostBtn, alignSelf: "flex-end", ...lockedStyle(activeEp.id) }} disabled={epLocked(activeEp.id)} onClick={handleSplit}>
-                                            {epBusyLabel(activeEp.id) ?? "智能拆分"}
+                                            {epBusyLabel(activeEp.id) ?? (activeEp.shots.length ? "重新拆分" : "仅拆分")}
                                         </button>
                                     </div>
                                     {epInferError(activeEp.id) && <span style={{ fontSize: 12, color: "#f8c8c8" }}>上次推理失败：{epInferError(activeEp.id)}</span>}
                                     {epSplitError(activeEp.id) && <span style={{ fontSize: 12, color: "#f8c8c8" }}>上次拆分失败：{epSplitError(activeEp.id)}</span>}
-                                    <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>提示：智能推理一次出分镜 + 故事板提示词 + 视频提示词；智能拆分仅拆镜头（提示词在服务端配置），再用「一键推理」逐镜补提示词。</span>
+                                    <span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>提示：智能推理一次出分镜 + 故事板提示词 + 视频提示词；仅拆分只拆镜头（提示词在服务端配置）。</span>
                                 </div>
                             ) : (
                                 <div style={{ minWidth: tableMinW }}>
@@ -1662,7 +1609,7 @@ const Frame161195 = () => {
                                     </div>
                                     {activeEp.shots.length === 0 && (epInferring(activeEp.id) || epSplitting(activeEp.id)) && (
                                         <div style={{ padding: 40, textAlign: "center", color: "var(--muted-foreground)", fontSize: 13 }}>
-                                            {epSplitting(activeEp.id) ? "智能拆分中，镜头将陆续出现…" : "智能推理中，分镜将陆续出现，可边出边审核…"}
+                                            {epSplitting(activeEp.id) ? "拆分中，镜头将陆续出现…" : "智能推理中，分镜将陆续出现，可边出边审核…"}
                                         </div>
                                     )}
                                     {activeEp.shots.map((shot, idx) => {
@@ -1678,6 +1625,7 @@ const Frame161195 = () => {
                                         const curMethod = clampMethod(shot.overrides?.method || ms.videoMethod, curMethods);
                                         const curReq = videoReqOptionsForKey(curVideoModel);
                                         // 图视同源：提示词区单栏（字段=unifiedPrompt），无故事板/视频切换；否则按 tab 取两段之一
+                                        const presetSchemes = presetSchemeSets[!sameSource && tab === "video" ? "video" : "image"];
                                         const promptVal = sameSource ? (shot.unifiedPrompt || "") : (tab === "storyboard" ? (shot.storyboardPrompt || "") : (shot.videoPrompt || ""));
                                         const promptBaseVal = sameSource ? shot.unifiedPromptBase : (tab === "storyboard" ? shot.storyboardPromptBase : shot.videoPromptBase);
                                         const promptTabKey: PromptTab | "unified" = sameSource ? "unified" : tab;
@@ -1707,6 +1655,7 @@ const Frame161195 = () => {
                                                     </div>
                                                     <button style={colBtn} onClick={() => handleMatchOne(shot)}>提取资产</button>
                                                     <button style={colBtn} title="对本分镜单卡推理：一次产出本镜的 故事板提示词 + 视频提示词" disabled={shotInferring(shot.id)} onClick={() => inferShot(shot)}>{shotInferring(shot.id) ? "推理中…" : "智能推理"}</button>
+                                                    <StoryGuidanceButton key={shot.id} value={shot.plotGuidance} onChange={plotGuidance => update(shot.id, { plotGuidance })} disabled={shotInferring(shot.id)} />
                                                     <button style={{ ...colBtn, color: "#f8c8c8", marginTop: "auto" }} onClick={() => { void (async () => { if (await confirmDialog(`删除${shot.title || "本分镜"}？`)) commitShots(activeEp.shots.filter((x) => x.id !== shot.id)); })(); }}>删除分镜</button>
                                                 </div>
 
@@ -1814,9 +1763,9 @@ const Frame161195 = () => {
 
                                                 {/* 4. 提示词区（切换：故事板 / 视频；宽高撑满；@素材插入引用）*/}
                                                 <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6, minWidth: 0, position: "relative" }}>
-                                                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                                                  <div style={{ display: "flex", flexDirection: assetVideoEnabled ? "column" : "row", gap: 6 }}>
                                                     {/* 第一行：提示词类型 + 预设方案 + 补镜头 */}
-                                                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                                                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", flex: assetVideoEnabled ? undefined : 1, minWidth: 0 }}>
                                                         {sameSource ? (
                                                             // 图视同源：单栏（图片与视频共用），无切换 tab
                                                             <div style={{ display: "inline-flex", alignItems: "center", padding: "4px 10px", fontSize: 11, borderRadius: 6, border: "1px solid rgba(139,92,246,0.4)", background: "rgba(139,92,246,0.18)", color: "#c9b8ff", width: "fit-content" }} title="图视同源：图片与视频共用同一段提示词">同源提示词</div>
@@ -1851,12 +1800,12 @@ const Frame161195 = () => {
                                                         </select>
                                                         {/* 渠道/线路（家族内的源：模式名 / LibTV / 即梦） */}
                                                         {curFamGrp && (
-                                                            <select title="渠道/线路（仅本分镜）" value={curSrcCh ? sourceValueOf(curVideoModel, curFamChs) : ""} onChange={(e) => setShotVideoModel(shot, modelForSource(e.target.value, curVideoModel, curFamChs))} style={miniSel}>
+                                                            <select title="线路（仅本分镜）" value={curSrcCh ? sourceValueOf(curVideoModel, curFamChs) : ""} onChange={(e) => setShotVideoModel(shot, modelForSource(e.target.value, curVideoModel, curFamChs))} style={miniSel}>
                                                                 {curFamChs.map((ch) => <option key={ch.channel} value={`src:${ch.channel}`} style={miniOpt}>{ch.channel}</option>)}
                                                             </select>
                                                         )}
                                                         {/* 模型（本线路内的款式） */}
-                                                        {curSrcCh && (
+                                                        {curSrcCh && !curVideoModel.startsWith("route:") && (
                                                             <select title="模型（本线路款式，仅本分镜）" value={curVideoModel} onChange={(e) => setShotVideoModel(shot, e.target.value)} style={miniSel}>
                                                                 {curSrcCh.choices.map((v) => <option key={v.id} value={v.id} style={miniOpt}>{v.variantLabel}</option>)}
                                                             </select>
@@ -1867,7 +1816,7 @@ const Frame161195 = () => {
                                                                 {curMethods.map((k) => <option key={k} value={k} style={miniOpt}>{METHOD_LABELS[k]}</option>)}
                                                             </select>
                                                         )}
-                                                        <select title="视频时长(秒，仅本分镜)" value={clampDurationTo(clampDuration(shot.durationSec ?? maxDuration), curReq.durations)} onChange={(e) => update(shot.id, { durationSec: Number(e.target.value) })} style={miniSel}>
+                                                        <select title="视频时长(秒，仅本分镜)" value={clampDurationTo(shot.durationSec ?? maxDuration, curReq.durations)} onChange={(e) => update(shot.id, { durationSec: Number(e.target.value) })} style={miniSel}>
                                                             {curReq.durations.map((d) => <option key={d} value={d} style={miniOpt}>{d}秒</option>)}
                                                         </select>
                                                         <select title="视频比例（仅本分镜）" value={clampToOptions(shot.overrides?.aspect || aspect, curReq.aspects)} onChange={(e) => setShotOverride(shot, { aspect: e.target.value })} style={miniSel}>

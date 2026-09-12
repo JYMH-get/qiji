@@ -24,7 +24,7 @@ interface UiState {
 	settingsOpen: boolean;
 	/** 打开设置弹窗时要定位到的页签（openModelSettings 写入，SettingsModal 消费后清空）。
 	 *  第132轮删「模型」页：openModelSettings 改定位「管理端」页（无可用模型=没连管理端/目录未拉取）。 */
-	settingsTab: "connection" | "preferences" | "keymap" | "webdav" | null;
+	settingsTab: "connection" | "presets" | "videoPresets" | "preferences" | "keymap" | "webdav" | null;
 	personalCenterOpen: boolean;
 	imageEditNodeId: string | null;
 	nodeInfoNodeId: string | null;
@@ -36,6 +36,15 @@ interface UiState {
 	stackMerge: { targetId: string; armed: boolean } | null;
 	/** 吸附对齐参考线（拖动吸附命中时显示，标出对齐到的节点；画布坐标） */
 	snapGuides: { axis: "x" | "y"; value: number; from: number; to: number }[] | null;
+	/** 画布临时交互：选参考素材 / 选择和绘制标记。 */
+	canvasMode:
+		| { type: "asset-pick"; targetNodeId: string; materialGroupId: string | null }
+		| { type: "canvas-draw"; tool: "select" | "text" | "arrow" | "rect" | "ellipse"; color: string; fontSize: number; highlight: boolean }
+		| null;
+	/** 节点素材栏发起的资产助手单选；选中一项即清空。 */
+	assetLibraryTargetNodeId: string | null;
+	/** 只有新建或显式点击编辑时，文字标记才挂载输入框。 */
+	editingMarkerId: string | null;
 
 	// 导航与登录状态
 	currentScreen: "login" | "dashboard" | "canvas";
@@ -62,6 +71,9 @@ interface UiState {
 	setStackDrawerNodeId: (id: string | null) => void;
 	setStackMerge: (m: UiState["stackMerge"]) => void;
 	setSnapGuides: (g: UiState["snapGuides"]) => void;
+	setCanvasMode: (mode: UiState["canvasMode"]) => void;
+	setAssetLibraryTargetNodeId: (id: string | null) => void;
+	setEditingMarkerId: (id: string | null) => void;
 
 	setScreen: (screen: "login" | "dashboard" | "canvas") => void;
 	setCurrentUser: (user: string | null) => void;
@@ -93,6 +105,8 @@ export const useUiStore = create<UiState>((set, get) => ({
 	stackDrawerNodeId: null,
 	stackMerge: null,
 	snapGuides: null,
+	canvasMode: null,
+	assetLibraryTargetNodeId: null,
 
 	currentScreen: initialUser ? "dashboard" : "login",
 	currentUser: initialUser,
@@ -120,6 +134,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setStackDrawerNodeId: (id) => set({ stackDrawerNodeId: id }),
 	setStackMerge: (m) => set({ stackMerge: m }),
 	setSnapGuides: (g) => set({ snapGuides: g }),
+	setCanvasMode: (canvasMode) => set({ canvasMode, editingMarkerId: null }),
+	editingMarkerId: null,
+	setEditingMarkerId: (editingMarkerId) => set({ editingMarkerId }),
+	setAssetLibraryTargetNodeId: (assetLibraryTargetNodeId) => set({ assetLibraryTargetNodeId }),
 
 	setScreen: (currentScreen) => set({ currentScreen }),
 	setCurrentUser: (currentUser) => {

@@ -8,7 +8,7 @@ import {
   CheckCircle, XCircle, RefreshCw, Server, Keyboard,
   LayoutGrid, Plus, Trash2,
 } from "lucide-react";
-import { PRESET_CATEGORY } from "@/lib/presetSchemes";
+import { listPresetSchemes, type PresetTarget } from "@/lib/presetSchemes";
 import { versionLabel } from "@/lib/appVersion";
 import {
   KEYMAP_ACTIONS, FIXED_KEYS, RESERVED_COMBOS,
@@ -17,11 +17,12 @@ import {
 
 // 第132轮删「模型」页（用户定）：模型全量默认可用、无勾选子集、无全局默认模型
 //（未显式选择时自动取该能力第一个可用模型，选择在各生成界面的模型下拉里做、随项目落盘）。
-type TabKey = "connection" | "presets" | "preferences" | "keymap" | "webdav";
+type TabKey = "connection" | "presets" | "videoPresets" | "preferences" | "keymap" | "webdav";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "connection", label: "管理端" },
-  { key: "presets", label: "预设方案" },
+  { key: "presets", label: "图片预设" },
+  { key: "videoPresets", label: "视频预设" },
   { key: "preferences", label: "生成偏好" },
   { key: "keymap", label: "快捷键" },
   { key: "webdav", label: "WebDAV" },
@@ -133,7 +134,8 @@ export function SettingsModal() {
         {/* Content */}
         <div className="flex-1 overflow-y-auto px-6 py-5 Qiji-scroll-thin text-[11px]">
           {activeTab === "connection" && <ConnectionTab />}
-          {activeTab === "presets" && <PresetsTab />}
+          {activeTab === "presets" && <PresetsTab key="image" target="image" />}
+          {activeTab === "videoPresets" && <PresetsTab key="video" target="video" />}
           {activeTab === "preferences" && (
             <PreferencesTab
               activeDir={activeDir}
@@ -262,19 +264,20 @@ function ConnectionTab() {
 }
 
 // ═══════════════════════════════════════════
-// Tab: 预设方案（自定义出图预设——本地，与服务端预设并列出现在图片节点预设下拉/胶囊）
+// 图片/视频预设独立管理，表单交互一致，数据按 target 隔离。
 // ═══════════════════════════════════════════
 
-function PresetsTab() {
-  const customPresets = useSettingsStore((s) => s.customPresets);
+function PresetsTab({ target }: { target: PresetTarget }) {
+  const allCustomPresets = useSettingsStore((s) => s.customPresets);
+  const customPresets = allCustomPresets.filter((p) => (p.target ?? "image") === target);
+  const mediaLabel = target === "video" ? "视频" : "图片";
   const addCustomPreset = useSettingsStore((s) => s.addCustomPreset);
   const updateCustomPreset = useSettingsStore((s) => s.updateCustomPreset);
   const removeCustomPreset = useSettingsStore((s) => s.removeCustomPreset);
   // 服务端「预设方案」模板（只读展示，由管理端维护）
-  const catalogVersion = useCatalogStore((s) => s.catalog?.version);
-  const serverPresets = catalogVersion
-    ? useCatalogStore.getState().templatesByCategory(PRESET_CATEGORY).filter((t) => (t.body ?? t.bodyPreview ?? "").trim())
-    : [];
+  useCatalogStore((s) => s.catalog?.version);
+  const customIds = new Set(allCustomPresets.map((p) => p.id));
+  const serverPresets = listPresetSchemes(target).filter((p) => !customIds.has(p.id));
 
   const [name, setName] = useState("");
   const [body, setBody] = useState("");
@@ -282,7 +285,7 @@ function PresetsTab() {
   const [position, setPosition] = useState<"prefix" | "suffix">("prefix");
   const add = () => {
     if (!body.trim()) return;
-    addCustomPreset(name, body, group, position);
+    addCustomPreset(name, body, group, position, target);
     setName("");
     setBody("");
     setGroup("");
@@ -293,12 +296,12 @@ function PresetsTab() {
     <div className="flex flex-col gap-4">
       <div className="bg-secondary/30 border border-border/30 rounded-lg p-3">
         <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground mb-1">
-          <LayoutGrid className="h-3.5 w-3.5 text-primary" /> 出图预设方案
+          <LayoutGrid className="h-3.5 w-3.5 text-primary" /> {mediaLabel}预设方案
         </div>
         <div className="text-[10px] text-muted-foreground leading-relaxed">
-          在画布图片节点的功能栏「▦ 预设方案」下拉里插入预设胶囊，提交时替换为完整预设词；<b>双击胶囊</b>可就地展开为可编辑正文。
+          在{mediaLabel}节点的功能栏或提示词放大窗口中，通过「▦ 预设方案」插入预设胶囊，提交时替换为完整预设词；<b>双击胶囊</b>可就地展开为可编辑正文。
           下方可添加你自己的常用预设（保存在本地），与管理端下发的预设一同出现。
-          <br />可给预设设「互斥组」——同组预设不能同时出现（内置 <b>4/6/9 宫格</b>已互斥，插入其一会移除同组另一个）。
+          <br />{mediaLabel}预设独立管理。可设「互斥组」，同组方案插入其一时会替换另一项。
         </div>
       </div>
 
@@ -309,7 +312,7 @@ function PresetsTab() {
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="预设名称（如：6宫格电影故事板）"
+          placeholder={target === "video" ? "预设名称（如：缓慢推进镜头）" : "预设名称（如：6宫格电影故事板）"}
           className="bg-secondary/60 border border-border/40 rounded-lg px-3 py-2 text-foreground text-[11px] focus:outline-none focus:border-primary w-full"
         />
         <textarea
@@ -325,7 +328,7 @@ function PresetsTab() {
             type="text"
             value={group}
             onChange={(e) => setGroup(e.target.value)}
-            placeholder="留空=无互斥；填「宫格」= 与 4/6/9 宫格预设互斥（同组只能存在一个）"
+            placeholder={target === "video" ? "留空=无互斥；如「运镜」（同组只能存在一个）" : "留空=无互斥；填「宫格」= 与 4/6/9 宫格预设互斥"}
             className="flex-1 min-w-0 bg-secondary/60 border border-border/40 rounded-lg px-3 py-1.5 text-foreground text-[10px] focus:outline-none focus:border-primary"
           />
         </div>
@@ -388,7 +391,7 @@ function PresetsTab() {
                   type="text"
                   value={p.group ?? ""}
                   onChange={(e) => updateCustomPreset(p.id, { group: e.target.value })}
-                  placeholder="留空=无互斥；「宫格」= 与宫格预设互斥"
+                  placeholder={target === "video" ? "留空=无互斥；如「运镜」" : "留空=无互斥；「宫格」= 与宫格预设互斥"}
                   className="flex-1 min-w-0 bg-secondary/60 border border-border/40 rounded-md px-2 py-1 text-foreground text-[10px] focus:outline-none focus:border-primary"
                 />
                 <span className="text-[10px] text-muted-foreground shrink-0">位置</span>
@@ -412,7 +415,7 @@ function PresetsTab() {
           <div className="text-[10px] font-semibold text-muted-foreground">管理端预设（只读，共 {serverPresets.length}）</div>
           <div className="flex flex-wrap gap-1.5">
             {serverPresets.map((t) => (
-              <span key={t.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-400/15 border border-amber-400/40 text-[10px] text-amber-200" title={t.body ?? t.bodyPreview ?? ""}>
+              <span key={t.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-400/15 border border-amber-400/40 text-[10px] text-amber-200" title={t.body}>
                 ▦ {t.name}
               </span>
             ))}

@@ -366,9 +366,11 @@
       <div class="grp">接 入</div>
       <a data-tab="channels" onclick="switchTab('channels')"><svg><use href="#i-route"/></svg><span class="n">渠道管理</span><span class="cnt" id="cnt-channels"></span></a>
       <a data-tab="qijicloud" onclick="switchTab('qijicloud')"><svg><use href="#i-box"/></svg><span class="n">云实例</span><span class="cnt" id="cnt-qijicloud"></span></a>
+      <a data-tab="routing" onclick="switchTab('routing')"><svg><use href="#i-box"/></svg><span class="n">自动路由</span></a>
+      <a data-tab="availability" onclick="switchTab('availability')"><svg><use href="#i-box"/></svg><span class="n">渠道可用性</span></a>
       <a data-tab="models" onclick="switchTab('models')"><svg><use href="#i-box"/></svg><span class="n">模型管理</span><span class="cnt" id="cnt-models"></span></a>
-      <a data-tab="templates" onclick="switchTab('templates')"><svg><use href="#i-file"/></svg><span class="n">提示词模板</span><span class="cnt" id="cnt-templates"></span></a>
-      <a data-tab="presets" onclick="switchTab('presets')"><svg><use href="#i-file"/></svg><span class="n">预设管理</span><span class="cnt" id="cnt-presets"></span></a>
+      <a data-tab="templates" onclick="switchTab('templates')"><svg><use href="#i-file"/></svg><span class="n">提示词</span><span class="cnt" id="cnt-templates"></span></a>
+      <span id="cnt-presets" hidden></span>
       <div class="grp">下 游</div>
       <a data-tab="agents" onclick="switchTab('agents')"><svg><use href="#i-agent"/></svg><span class="n">渠道商</span><span class="cnt" id="cnt-agents"></span></a>
       <div class="grp">系 统</div>
@@ -397,6 +399,8 @@
       <section id="tab-sharedlibs" class="hide"></section>
       <section id="tab-channels" class="hide"></section>
       <section id="tab-qijicloud" class="hide"></section>
+      <section id="tab-routing" class="hide"></section>
+      <section id="tab-availability" class="hide"></section>
       <section id="tab-models" class="hide"></section>
       <section id="tab-templates" class="hide"></section>
       <section id="tab-presets" class="hide"></section>
@@ -462,7 +466,7 @@ function copyText(s, msg){ navigator.clipboard.writeText(s); toast(msg || "已�
 
 /* ── 登录 ── */
 function showLogin(){ $("#login").classList.remove("hide"); $("#app").classList.add("hide"); }
-function showApp(){ $("#login").classList.add("hide"); $("#app").classList.remove("hide"); checkHealth(); applyRelayMode(); switchTab("users"); }
+function showApp(){ $("#login").classList.add("hide"); $("#app").classList.remove("hide"); checkHealth(); applyRelayMode(); switchTab(location.hash.startsWith("#routing/")?"routing":location.hash.startsWith("#channels/")?"channels":"users"); }
 
 /* ── P3 渠道节点（relay）模式：隐藏源站专属页 + 顶部「源站连接」状态条 ──
    角色由服务端注入 window.__NODE_ROLE__；源站专属端点在服务端也已 403（这里只是观感收敛）。 */
@@ -533,7 +537,7 @@ function scopeSelect(id, cur, onchange, title){
 function scopeName(cur){ return cur==="__all"?"全部（源站 + 各渠道商）":cur==="platform"?"源站（平台直属）":((SCOPE_AGENTS||[]).find(a=>a.id===cur)?.name||cur); }
 function isAgentScope(cur){ return cur!=="__all" && cur!=="platform"; }
 
-const TAB_TITLES = { users:"用户管理", redeem:"兑换码", membership:"会员", teams:"团队", quota:"收藏与配额", stats:"统计", sharedlibs:"共享素材", channels:"渠道管理", qijicloud:"云实例", models:"模型管理", templates:"提示词模板", presets:"预设管理", agents:"渠道商", logs:"请求记录", downloads:"批量下载", site:"网页管理", register:"注册与安全", oss:"存储" };
+const TAB_TITLES = { availability:"渠道可用性", routing:"自动路由", users:"用户管理", redeem:"兑换码", membership:"会员", teams:"团队", quota:"收藏与配额", stats:"统计", sharedlibs:"共享素材", channels:"渠道管理", qijicloud:"云实例", models:"模型管理", templates:"提示词", presets:"预设管理", agents:"渠道商", logs:"请求记录", downloads:"批量下载", site:"网页管理", register:"注册与安全", oss:"存储" };
 let CUR_TAB = "users";
 function switchTab(t){
   CUR_TAB = t;
@@ -548,7 +552,9 @@ function switchTab(t){
   if (t==="sharedlibs") loadSharedLibs();
   if (t==="channels") loadChannels();
   if (t==="qijicloud") loadQijicloud();
-  if (t==="models") loadModels();
+  if (t==="models") return loadModels();
+  if (t==="routing") loadRouting();
+  if (t==="availability") loadAvailability();
   if (t==="templates") loadTemplates();
   if (t==="presets") loadPresets();
   if (t==="agents") loadAgents();
@@ -680,7 +686,7 @@ function toggleSelAll(on){ if(on) U_SHOWN.forEach(id=>uSel.add(id)); else U_SHOW
 function renderUserBatchbar(){
   const bb = $("#u_batchbar"); if(!bb) return;
   if(uSel.size===0){ bb.style.display="none"; bb.innerHTML=""; return; }
-  /* 第228轮：批量模式只留功能形式四项——渠道形式模式的管控走「模式管理」全局启停/渠道商整商硬闸 */
+  /* 第228轮：批量模式只留功能形式四项——渠道形式模式的管控走「自动路由」全局启停/渠道商整商硬闸 */
   const modeOpts = `<option value="f:assetMode">表格视频</option><option value="f:canvasMode">画布</option><option value="f:editorMode">实时剪辑</option><option value="f:libtv">LibTV</option><option value="f:dreamina">即梦</option><option value="f:comfyui">ComfyUI</option>`;
   bb.style.display="flex";
   bb.innerHTML = `<b>已选 ${uSel.size} 个</b>
@@ -777,7 +783,7 @@ async function toggleFeat(id, k){
     if (DRAWER_UID===id) renderUserDrawer();
   } catch(e){ toast(e.message, "bad"); }
 }
-/* 用户级动态模式开关已退役（第228轮）：渠道形式模式的管控走「模式管理」全局启停/渠道商详情整商硬闸 */
+/* 用户级动态模式开关已退役（第228轮）：渠道形式模式的管控走「自动路由」全局启停/渠道商详情整商硬闸 */
 
 /* ── 用户详情抽屉 ── */
 let DRAWER_UID = null;
@@ -813,7 +819,7 @@ function renderUserDrawer(){
         ${swrow("libtv",f.libtv,"LibTV 授权入口","用户自有账号生成，不经管理端不扣积分")}
         ${swrow("dreamina",f.dreamina,"即梦授权入口","用户自有即梦账号生成，不经管理端不扣积分")}
         ${swrow("comfyui",f.comfy,"ComfyUI 直连入口","用户绑定自有 ComfyUI 地址本地直连生成，不经管理端仅按次手续费")}
-        <div class="faint" style="font-size:11.5px;padding:4px 0">渠道形式的模式不再按用户开关——整体停用走「模型管理 → 模式管理」，按渠道商停用走「渠道商详情 → 可用模式」。</div>
+        <div class="faint" style="font-size:11.5px;padding:4px 0">线路整体开放与渠道分配在「自动路由」设置；按渠道商开放在线路权限中设置。</div>
       </div>
       <div class="dsec">
         <div class="t">账 号 与 凭 证</div>
@@ -969,66 +975,7 @@ function exportStatsCsv(){
 }
 
 /* ════════════════ 渠道管理（上游凭据组）════════════════ */
-async function loadChannels(){
-  const el = $("#tab-channels");
-  el.innerHTML = `<div class="chpage">
-    <div class="card" style="margin:0"><div class="hd"><h3>渠道管理</h3><span class="mut" style="font-size:12px">渠道 = 一组上游凭据（地址 + 密钥），模型归属某渠道即共用其凭据。<b>拖住 ⠿ 排序</b>（仅管理端显示顺序——客户端不感知渠道）；开关 = 启停；密钥留空 = 不修改；「＋」占位卡 = 新增。</span><span class="bad-t" id="c_err" style="font-size:12px"></span></div>
-      <div class="bd"><div id="chs_list"></div></div>
-    </div>
-    <div class="card" style="margin:0"><div class="hd"><h3>模式管理</h3><span class="mut" style="font-size:12px">模式 = 模型分组 + 开关。<b>拖 ⠿ 上下排序</b>（客户端下拉源顺序跟随）；开关 = 全局启停（停用后客户端隐藏其模型、调用 403——区别于按用户/渠道商的门禁开关）。无模式的模型 = 默认模式常开；末尾「＋」= 新增。</span></div>
-      <div class="bd"><div class="mfcol"><div id="modes_list"></div></div></div>
-    </div>
-    <div class="card" style="margin:0"><div class="hd"><h3>家族管理</h3><span class="mut" style="font-size:12px">家族 = 底层模型的<b>种类</b>（客户端一级筛选，纯展示分组：不动门禁/计费）。<b>竖列拖 ⠿ 排序</b>（客户端一级筛选顺序跟随）；停用 = 客户端不显示该家族、其模型归入「其他」。各列「＋」= 新增对应能力的家族。</span></div>
-      <div class="bd">
-        <div class="mfcols">
-          <div class="mfcol"><div class="mfcol-h">图片 <span class="cntb" id="fams_cnt_i"></span></div><div id="fams_list_i"></div></div>
-          <div class="mfcol"><div class="mfcol-h">视频 <span class="cntb" id="fams_cnt_v"></span></div><div id="fams_list_v"></div></div>
-        </div>
-      </div>
-    </div>
-  </div>`;
-  try {
-    await fetchChannels();
-    await ensureModes(); // 模式管理面板（第131轮从「模型」页移入）
-    await ensureFams(); // 家族管理面板（第163轮）
-    $("#cnt-channels").textContent = CHANNELS.length;
-    let modelsByCh = {};
-    try { const { items } = await api("/admin-api/models"); window.__models = items; items.forEach(m=>{ const k=m.channelId||""; modelsByCh[k]=(modelsByCh[k]||0)+1; }); } catch {}
-    window.__modelsByCh = modelsByCh;
-    renderModesList();
-    renderFamsList();
-    renderChannelCards();
-  } catch(e){ $("#c_err").textContent = e.message; }
-}
-/* ── 渠道卡片（第165轮：与模式/家族同套卡片交互；排序仅影响管理端显示——渠道不下发客户端）── */
-function chCard(c, idx){
-  const off = !c.enabled;
-  const total = (window.__models||[]).filter(m=>(m.channelId||"")===c.id).length;
-  const cnt = capBreakdown(m=>(m.channelId||"")===c.id);
-  return `<div class="mfcard chcard${off?' off':''}" data-id="${esc(c.id)}">
-    <div class="top">
-      <span class="grip" title="拖动排序（仅影响管理端显示顺序）">⠿</span>
-      <input type="text" value="${esc(c.name)}" onchange="updChannel('${c.id}','name',this.value)"/>
-      <label class="sw" title="启用/停用该渠道"><input type="checkbox" ${c.enabled?"checked":""} onchange="toggleChannelEnabled('${c.id}',this.checked)"/><i></i></label>
-    </div>
-    <div class="frow"><span>地址</span><input type="text" value="${esc(c.baseUrl||'')}" placeholder="默认网关" onchange="updChannel('${c.id}','baseUrl',this.value)"/></div>
-    <div class="frow"><span>密钥</span><input type="password" placeholder="${c.apiKeySet?esc(c.apiKey)+'（留空=不变）':'未设置（走环境/默认网关密钥）'}" onchange="updChannel('${c.id}','apiKey',this.value)"/></div>
-    <div class="frow"><span>备注</span><input type="text" value="${esc(c.note||'')}" title="${esc(c.note||'')}" onchange="updChannel('${c.id}','note',this.value)"/></div>
-    <div class="ft">
-      <span class="ord">#${idx+1}</span>
-      <span class="cnt" style="font-size:11.5px;color:var(--mut)" title="共 ${total} 个模型">${cnt}</span>
-      ${c.apiKeySet?`<span class="chip" style="pointer-events:none;padding:1px 8px;font-size:11px">密钥已设</span>`:`<span class="offbadge" title="未设密钥：走环境变量或默认网关密钥">密钥未设</span>`}
-      ${off?'<span class="offbadge">已停用</span>':''}
-      <span class="sp" style="flex:1"></span>
-      <button class="sm danger" onclick="delChannel('${c.id}','${esc(c.name)}')">删除</button>
-    </div>
-  </div>`;
-}
-function renderChannelCards(){
-  const el = $("#chs_list"); if(!el) return;
-  el.innerHTML = `<div class="mfgrid wide" id="chs_grid">${CHANNELS.map((c,i)=>chCard(c,i)).join("")}${draftCard('ch')}</div>`;
-  wireMfSort("chs_grid", saveChannelOrder);
-}
+// Channel pages and model parameter summaries are loaded from channels.js.
 async function saveChannelOrder(ids){
   try{
     const r = await api("/admin-api/channels/reorder",{method:"POST",body:JSON.stringify({ids})});
@@ -1051,12 +998,12 @@ async function addChannel(){
     await api("/admin-api/channels",{method:"POST",body:JSON.stringify({
       name, baseUrl:$("#nc_base").value.trim(),
       apiKey:$("#nc_key").value.trim()||undefined, note:$("#nc_note").value.trim()||undefined })});
-    MF_DRAFT.ch = false; toast("渠道已创建"); loadChannels();
+    MF_DRAFT.ch = false; toast("渠道已创建"); await fetchChannels(); CH_SELECTED=CHANNELS.at(-1)?.id || CH_SELECTED; history.replaceState(null,"","#channels/"+encodeURIComponent(CH_SELECTED)); loadChannels();
   } catch(e){ $("#nc_err").textContent = e.message; }
 }
 async function updChannel(id,k,v){
   if (k==="apiKey" && v==="") return; // 留空 = 不修改
-  try { await api("/admin-api/channels/"+id,{method:"PUT",body:JSON.stringify({[k]: (v===""&&k!=="apiKey")?null:v})}); toast("已保存"); }
+  try { await api("/admin-api/channels/"+id,{method:"PUT",body:JSON.stringify({[k]: (v===""&&k!=="apiKey")?null:v})}); await fetchChannels(); renderChannelNav(); toast("已保存"); }
   catch(e){ toast(e.message,"bad"); }
 }
 function delChannel(id,name){
@@ -1097,15 +1044,16 @@ function channelSelect(onchange, cur){
 let mScope = "__all";  // 模型无「创建方」维度——范围=按可用性看：某渠道商实际能用哪些模型
 function setModelScope(v){ mScope = v; loadModels(); }
 async function loadModels(){
+  if(CUR_TAB === "channels") return loadChannels();
   const el = $("#tab-models");
   await ensureScopeAgents();
   await fetchChannels();
   await fetchProtocols(); // 协议下拉含已启用自定义协议
-  await ensureModes(); // 模式下拉/分组/模式管理需要
+  await ensureModes(); // 模式下拉/分组/自动路由需要
   await ensureFams(); // 家族下拉/分组需要（第163轮）
   const chOpts = CHANNELS.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
   el.innerHTML = `
-    <div class="card"><div class="hd"><h3>新建模型</h3><span class="mut" style="font-size:12px">翻译格式 = 协议 + 上游模型名 + 渠道凭据；模型 baseUrl/apiKey 覆盖优先于渠道；「重定向」按请求参数选用不同真实上游模型。模式管理在「渠道」页。</span></div>
+    <div class="card"><div class="hd"><h3>新建模型</h3><span class="mut" style="font-size:12px">翻译格式 = 协议 + 上游模型名 + 渠道凭据；模型 baseUrl/apiKey 覆盖优先于渠道；「重定向」按请求参数选用不同真实上游模型。用户线路在「自动路由」页配置。</span></div>
       <div class="bd">
         <div class="fgrid">
           <div class="fld"><span>逻辑 id</span><input id="nm_id" type="text" placeholder="如 gpt-5.5 / my-model"/></div>
@@ -1113,7 +1061,7 @@ async function loadModels(){
           <div class="fld"><span>能力</span><select id="nm_cap" onchange="syncBillMode()">${CAPS.map(c=>`<option>${c}</option>`).join("")}</select></div>
           <div class="fld"><span>协议</span><select id="nm_proto">${protoOptions()}</select></div>
           <div class="fld"><span>渠道</span><select id="nm_channel"><option value="">默认网关</option>${chOpts}</select></div>
-          <div class="fld"><span>模式</span><select id="nm_mode">${modeOptions()}</select></div>
+
           <div class="fld"><span>家族（模型种类）</span><select id="nm_fam"><option value="__auto">自动识别（按名称）</option>${famOptions()}</select></div>
           <div class="fld"><span>上游模型名（默认=id）</span><input id="nm_up" type="text"/></div>
           <div class="fld"><span>计费方式</span><select id="nm_billmode" disabled title="仅视频生成模型支持按秒计费"><option value="">按次</option><option value="duration">按秒</option></select></div>
@@ -1134,8 +1082,7 @@ async function loadModels(){
     renderModels();
   } catch(e){ $("#m_err").textContent = e.message; }
 }
-/* ── 模式管理（第165轮：卡片式 + 拖动排序 + 全局启停）── */
-function modelsInMode(id){ return (window.__models||[]).filter(m=>m.modeId===id).length; }
+/* ── 自动路由（第165轮：卡片式 + 拖动排序 + 全局启停）── */
 /* 卡片底部模型数按能力细分（第165轮补充6）：如「2文本/3图像/2视频」；无模型=「0 个模型」 */
 const CAP_LABELS = { text:"文本", image:"图像", video:"视频", audio:"音频", "video-enhance":"超分", "video-erase":"去字幕", "image-enhance":"图超分" };
 const CAP_ORDER = ["text","image","video","audio","video-enhance","video-erase","image-enhance"];
@@ -1177,23 +1124,18 @@ function wireMfSort(gridId, onCommit){
   });
 }
 /* ── 新增占位卡/草稿卡（第165轮补充：新增表单收进网格末尾——点「＋」占位变空白卡填写）──
-   占位/草稿卡无 data-id、无 ⠿：不参与拖动排序与排序提交。草稿输入 id 沿用旧表单（addMode/addFamily/addChannel 零改动读取）。 */
-const MF_DRAFT = { mode:false, fam:false, ch:false }; // fam 存 'video'|'image'（草稿所在列/预选能力）|false
-function mfRerender(k){ (k==='mode'?renderModesList:k==='fam'?renderFamsList:renderChannelCards)(); }
+   占位/草稿卡无 data-id、无 ⠿：不参与拖动排序与排序提交。草稿输入 id 沿用旧表单（addFamily/addChannel 零改动读取）。 */
+const MF_DRAFT = { fam:false, ch:false }; // fam 存 'video'|'image'（草稿所在列/预选能力）|false
+function mfRerender(k){ (k==='fam'?renderFamsList:renderChannelCards)(); }
 function openDraft(k, cap){
   MF_DRAFT[k] = k==='fam' ? (cap||'video') : true; mfRerender(k);
-  const f = $(k==='mode'?'#nmode_name':k==='fam'?'#nfam_name':'#nc_name'); if(f) f.focus();
+  const f = $(k==='fam'?'#nfam_name':'#nc_name'); if(f) f.focus();
 }
 function cancelDraft(k){ MF_DRAFT[k] = false; mfRerender(k); }
 function draftCard(k, col){
-  const label = k==='mode'?'新增模式':k==='fam'?'新增家族':'新增渠道';
+  const label = k==='fam'?'新增家族':'新增渠道';
   const open = k==='fam' ? MF_DRAFT.fam===col : !!MF_DRAFT[k];
   if(!open) return `<div class="mfcard ghostcard" onclick="openDraft('${k}'${k==='fam'?`,'${col}'`:''})" title="${label}"><span class="plus">＋</span><span class="glabel">${label}</span></div>`;
-  if(k==='mode') return `<div class="mfcard draft">
-    <div class="top"><input id="nmode_name" type="text" placeholder="显示名（如 简梦）" onkeydown="if(event.key==='Enter')addMode()"/></div>
-    <div class="frow"><span>id</span><input id="nmode_id" type="text" placeholder="英文 id（留空按名自动）" onkeydown="if(event.key==='Enter')addMode()"/></div>
-    <div class="ft"><span class="bad-t" id="mode_err" style="font-size:11.5px"></span><span class="sp" style="flex:1"></span><button class="sm ghost" onclick="cancelDraft('mode')">取消</button><button class="sm pri" onclick="addMode()">新增</button></div>
-  </div>`;
   if(k==='fam') return `<div class="mfcard draft">
     <div class="top"><input id="nfam_name" type="text" placeholder="显示名（如 Wan 2.5）" onkeydown="if(event.key==='Enter')addFamily()"/></div>
     <div class="frow"><span>id</span><input id="nfam_id" type="text" placeholder="英文 id（留空按名自动）" onkeydown="if(event.key==='Enter')addFamily()"/></div>
@@ -1213,54 +1155,20 @@ function mfCard(kind, it, idx, extraMeta){
   return `<div class="mfcard${off?' off':''}" data-id="${esc(it.id)}">
     <div class="top">
       <span class="grip" title="拖动排序（影响客户端顺序）">⠿</span>
-      <input type="text" value="${esc(it.name)}" onchange="${kind==='mode'?'renameMode':'renameFamily'}('${it.id}',this.value)"/>
-      <label class="sw" title="${kind==='mode'?'全局启停：停用后客户端隐藏该模式下全部模型、调用被 403':'全局启停：停用后客户端不显示该家族，其模型归入「其他」（模型仍可用）'}"><input type="checkbox" ${off?'':'checked'} onchange="${kind==='mode'?'toggleModeEnabled':'toggleFamEnabled'}('${it.id}',this.checked)"/><i></i></label>
+      <input type="text" value="${esc(it.name)}" onchange="renameFamily('${it.id}',this.value)"/>
+      <label class="sw" title="全局启停：停用后客户端不显示该家族，其模型归入「其他」（模型仍可用）"><input type="checkbox" ${off?'':'checked'} onchange="toggleFamEnabled('${it.id}',this.checked)"/><i></i></label>
     </div>
     <div class="meta"><span class="mono">${esc(it.id)}</span>${extraMeta||""}${off?'<span class="offbadge">已停用</span>':''}</div>
     <div class="ft">
       <span class="ord">#${idx+1}</span>
-      <span class="cnt" style="font-size:11.5px;color:var(--mut)" title="共 ${kind==='mode'?modelsInMode(it.id):modelsInFam(it.id)} 个模型">${capBreakdown(kind==='mode' ? (x=>x.modeId===it.id) : (x=>x.familyId===it.id))}</span>
+      <span class="cnt" style="font-size:11.5px;color:var(--mut)" title="共 ${modelsInFam(it.id)} 个模型">${capBreakdown(x=>x.familyId===it.id)}</span>
       <span class="sp" style="flex:1"></span>
-      <button class="sm danger" onclick="${kind==='mode'?'delMode':'delFamily'}('${it.id}','${esc(it.name)}')">删除</button>
+      <button class="sm danger" onclick="delFamily('${it.id}','${esc(it.name)}')">删除</button>
     </div>
   </div>`;
 }
 /* 模式=单竖列（补充4 用户定：模式无法可靠判断图像/视频（有图视混合、文本），不按能力分列——勿再回退成派生归列）。 */
 function colIds(sel){ return [...document.querySelectorAll(sel+" .mfcard")].map(c=>c.dataset.id).filter(Boolean); }
-function renderModesList(){
-  const el = $("#modes_list"); if(!el) return;
-  el.innerHTML = `<div class="mfgrid" id="modes_grid">${(MODES||[]).map((m,i)=>mfCard('mode',m,i)).join("")}${draftCard('mode')}</div>`;
-  wireMfSort("modes_grid", saveModeOrder);
-  if(MF_DRAFT.mode){ const f=$("#nmode_name"); if(f&&document.activeElement!==f) f.focus(); }
-}
-async function saveModeOrder(ids){
-  try{
-    const r = await api("/admin-api/modes/reorder",{method:"POST",body:JSON.stringify({ids})});
-    MODES = r.items||MODES; renderModesList(); renderModels();
-    toast("模式排序已保存（客户端 ≤30s 生效）");
-  }catch(e){ toast(e.message,"bad"); await ensureModes(true); renderModesList(); }
-}
-async function toggleModeEnabled(id,on){
-  try{
-    await api("/admin-api/modes/"+id,{method:"PUT",body:JSON.stringify({enabled:on})});
-    const m=(MODES||[]).find(x=>x.id===id); if(m) m.enabled=on;
-    renderModesList(); renderModels();
-    toast(on?"模式已启用（客户端 ≤30s 恢复显示）":"模式已停用：客户端隐藏其下模型、调用被 403");
-  }catch(e){ toast(e.message,"bad"); await ensureModes(true); renderModesList(); }
-}
-async function addMode(){
-  const name=$("#nmode_name").value.trim(), id=$("#nmode_id").value.trim();
-  if(!name){ $("#mode_err").textContent="请填模式显示名"; return; }
-  try{ await api("/admin-api/modes",{method:"POST",body:JSON.stringify({name,id:id||undefined})});
-    MF_DRAFT.mode = false; await ensureModes(true); renderModesList(); renderModels(); toast("模式已新增"); }
-  catch(e){ $("#mode_err").textContent=e.message; }
-}
-async function renameMode(id,name){ try{ await api("/admin-api/modes/"+id,{method:"PUT",body:JSON.stringify({name:name.trim()})}); const m=(MODES||[]).find(x=>x.id===id); if(m)m.name=name.trim(); toast("已保存"); renderModels(); }catch(e){ toast(e.message,"bad"); } }
-function delMode(id,name){ confirmDo({title:"删除模式",text:`删除模式「<b>${esc(name)}</b>」？其下 ${modelsInMode(id)} 个模型将回落「默认模式」（常开不可禁）；用户/渠道商的该模式开关随之失效。`,okLabel:"删除",onOk:async()=>{
-  try{ await api("/admin-api/modes/"+id,{method:"DELETE"}); await ensureModes(true);
-    // 删除会清空其下模型的 modeId → 重取模型保计数/分组准确（面板在「渠道」页，模型表在「模型」页各自守卫）
-    try{ const { items } = await api("/admin-api/models"); window.__models = items; }catch{}
-    renderModesList(); renderModels(); toast("模式已删除"); }catch(e){ toast(e.message,"bad"); } }}); }
 /* ── 家族管理（第163轮，「渠道」页；第165轮改卡片式）── */
 function modelsInFam(id){ return (window.__models||[]).filter(m=>m.familyId===id).length; }
 function saveFamOrderCols(){ saveFamOrder([...colIds("#fams_grid_i"), ...colIds("#fams_grid_v")]); }
@@ -1306,6 +1214,7 @@ function delFamily(id,name){ confirmDo({title:"删除家族",text:`删除家族�
    卡面=仅显示类（显示名/能力/模式/家族/计费方式 + 已禁用/手续费徽标）
    + 快捷功能类（开放范围/克隆/设置/删除）；其余全部编辑能力收敛进「设置」弹窗（openModelSettings）。 */
 function modelBillText(m){
+  if(m.tokenPricing?.enabled) return '按 token · 预扣10积分';
   if(m.costField) return `按秒 · ${m.costPerUnit!=null?m.costPerUnit:'—'}积分/秒`;
   return `按次 · ${m.cost}积分`;
 }
@@ -1324,7 +1233,7 @@ function modelCard(m){
     </div>
     <div class="meta">
       <span class="mtag" title="能力">${esc(CAP_LABELS[m.capability]||m.capability)}</span>
-      <span class="mtag" title="模式（渠道源头 + 门禁开关）">${m.hidden?'内部计费':esc(modeNameA(m.modeId))}</span>
+
       ${m.hidden?'':`<span class="mtag" title="家族（底层模型种类，客户端一级筛选）">${esc(famNameA(m.familyId))}</span>`}
       <span class="mtag" title="计费方式与单价（改动在「设置」里）">${modelBillText(m)}</span>
       ${(m.capability==='video'||m.capability==='image')&&!m.hidden?`<span class="mtag" title="参考素材上限（图/视/音）：∞=不限（按上游能力）、0=不允许该类素材；在「设置」里修改">${matTagText(m)}</span>`:''}
@@ -1346,11 +1255,70 @@ function openModelSettings(id){
   dlg.classList.add("wide");
   if(!dlg.open) dlg.showModal();
 }
-function msRender(id){
-  const m=(window.__models||[]).find(x=>x.id===id); if(!m) return;
-  $("#dlgTitle").textContent = "模型设置 · " + m.label;
-  const fld=(lab,ctl,tip)=>`<div class="fld"${tip?` title="${esc(tip)}"`:''}><span>${lab}</span>${ctl}</div>`;
-  $("#dlgBody").innerHTML = `
+
+function textPeakPeriodRow(r={start:'09:00',end:'12:00'}){
+ return '<div data-peak-period style="display:flex;gap:8px;align-items:center;margin:8px 0"><input data-peak-start aria-label="高峰开始时间" type="time" value="'+esc(r.start)+'"> 至 <input data-peak-end aria-label="高峰结束时间" type="time" value="'+esc(r.end)+'"><button type="button" onclick="const form=this.closest(\'[data-text-pricing]\');this.closest(\'[data-peak-period]\').remove();textPricingChanged(form)">移除</button></div>';
+}
+function textPeakScheduleFields(schedule={days:[1,2,3,4,5],periods:[{start:'09:00',end:'12:00'},{start:'14:00',end:'18:00'}]}){
+ return '<div style="margin:8px 0">'+[1,2,3,4,5,6,0].map(d=>'<label style="margin-right:10px"><input data-peak-day="'+d+'" type="checkbox" '+(schedule.days.includes(d)?'checked':'')+'> 周'+['日','一','二','三','四','五','六'][d]+'</label>').join('')+'</div><div data-peak-periods>'+schedule.periods.map(textPeakPeriodRow).join('')+'</div><button type="button" onclick="this.previousElementSibling.insertAdjacentHTML(\'beforeend\',textPeakPeriodRow());textPricingChanged(this.closest(\'[data-text-pricing]\'))">添加时段</button><p class="faint">北京时间；其余时间使用普通价。结束早于开始表示跨至次日。</p>';
+}
+function textPricingFields(m){
+ if(m.capability!=='text'||m.hidden)return '';
+ const zero={input:0,output:0,cachedInput:0};
+ const draft=TEXT_PRICE_DRAFTS.get(m.id);
+ const p=(draft?.dirty?draft.pricing:m.tokenPricing)||{enabled:false,cacheEnabled:false,rates:{...zero},peak:{enabled:false,rates:{...zero}},longContext:{enabled:false,threshold:272000,rates:{...zero},peakRates:{...zero}}};
+ const field=(key,label,value)=>'<label>'+label+' <input data-tp="'+key+'" aria-label="'+label+'" type="number" min="0" step="any" value="'+value+'" style="width:110px"></label>';
+ const check=(key,label,on)=>'<label><input data-tp="'+key+'" type="checkbox" '+(on?'checked':'')+'> '+label+'</label>';
+ const row=(key,r,label)=>'<div style="display:flex;gap:12px;flex-wrap:wrap;margin:8px 0">'+field(key+'.input',label+'输入',r.input)+field(key+'.output',label+'输出',r.output)+field(key+'.cachedInput',label+'缓存输入',r.cachedInput)+'</div>';
+ return '<div data-text-pricing="'+esc(m.id)+'" oninput="textPricingChanged(this)" onchange="textPricingChanged(this)" style="grid-column:1/-1;border:1px solid var(--line2);border-radius:8px;padding:12px">'+check('enabled','按 token 计费',p.enabled)+' '+field('multiplier','扣费倍率',p.multiplier??1)+'<span class="faint" style="margin-left:12px">元 / 百万 token · 1元=100积分 · 预扣10积分，多退少补；先乘倍率，各计费项分别向上取整到1积分；按次价格同样应用倍率</span>'+row('rates',p.rates,'普通')+
+ '<details><summary>缓存与峰谷价格</summary>'+check('cacheEnabled','启用缓存命中计价',p.cacheEnabled)+'<div style="margin-top:8px">'+check('peak.enabled','启用峰谷价',p.peak.enabled)+'</div>'+textPeakScheduleFields(p.peak.schedule)+row('peak.rates',p.peak.rates,'高峰')+'</details>'+
+ '<details><summary>长上下文价格</summary>'+check('longContext.enabled','启用长上下文档位',p.longContext.enabled)+field('longContext.threshold','输入 token 超过',p.longContext.threshold)+row('longContext.rates',p.longContext.rates,'长上下文')+row('longContext.peakRates',p.longContext.peakRates,'长上下文高峰')+'</details><button type="button" onclick="saveTextPricing(this)">保存文本价格</button> <span data-tp-status role="status" class="mut">'+esc(textPricingStatus(draft))+'</span></div>';
+}
+const TEXT_PRICE_DRAFTS=new Map();
+function textPricingStatus(d){return d?.error?'保存失败：'+d.error+'；点击保存文本价格重试':d?.invalid?d.invalid:d?.saving?'保存中…':d?.dirty?'待自动保存':d?'已保存':'修改后自动保存';}
+function textPricingShowStatus(id){
+ for(const form of document.querySelectorAll('[data-text-pricing]'))if(form.dataset.textPricing===id){const status=form.querySelector('[data-tp-status]');if(status)status.textContent=textPricingStatus(TEXT_PRICE_DRAFTS.get(id));}
+}
+function textPricingChanged(form){
+ const id=form.dataset.textPricing,p={rates:{},peak:{rates:{}},longContext:{rates:{},peakRates:{}}};
+ let invalid='';
+ p.peak.schedule={days:[...form.querySelectorAll('[data-peak-day]:checked')].map(el=>Number(el.dataset.peakDay)),periods:[...form.querySelectorAll('[data-peak-period]')].map(el=>({start:el.querySelector('[data-peak-start]').value,end:el.querySelector('[data-peak-end]').value}))};
+ if(!p.peak.schedule.days.length||!p.peak.schedule.periods.length||p.peak.schedule.periods.some(r=>!r.start||!r.end||r.start===r.end))invalid='请补全高峰星期与时段';
+ for(const input of form.querySelectorAll('[data-tp]')){
+  const path=input.dataset.tp.split('.');let obj=p;for(const key of path.slice(0,-1))obj=obj[key];
+  const value=input.type==='checkbox'?input.checked:input.value.trim()===''?'':Number(input.value);
+  if(input.type!=='checkbox'&&(value===''||!Number.isFinite(value)||value<0))invalid='请填写有效的非负价格';
+  obj[path.at(-1)]=value;
+ }
+ if(!(p.multiplier>0&&p.multiplier<=1000))invalid='倍率须大于0且不超过1000';
+ if(!Number.isSafeInteger(p.longContext.threshold)||p.longContext.threshold<=0)invalid='长上下文阈值须为正整数';
+ const d=TEXT_PRICE_DRAFTS.get(id)||{revision:0};
+ clearTimeout(d.timer);
+ if(JSON.stringify(d.pricing)!==JSON.stringify(p)){d.revision++;d.pricing=p;d.dirty=true;d.error='';}
+ d.invalid=invalid;TEXT_PRICE_DRAFTS.set(id,d);
+ if(d.dirty&&!invalid)d.timer=setTimeout(()=>textPricingFlush(id),500);
+ textPricingShowStatus(id);
+ return id;
+}
+async function textPricingFlush(id){
+ const d=TEXT_PRICE_DRAFTS.get(id);if(!d||d.saving||!d.dirty||d.invalid)return;
+ clearTimeout(d.timer);d.saving=true;d.error='';textPricingShowStatus(id);
+ try{
+  while(d.dirty&&!d.invalid){
+   const revision=d.revision,pricing=structuredClone(d.pricing);
+   const saved=await api('/admin-api/models/'+encodeURIComponent(id),{method:'PUT',body:JSON.stringify({tokenPricing:pricing})});
+   const m=(window.__models||[]).find(x=>x.id===id);if(m)m.tokenPricing=saved.tokenPricing;
+   if(d.revision===revision)d.dirty=false;
+  }
+ }catch(e){d.error=e.message;clearTimeout(d.timer);}
+ finally{d.saving=false;textPricingShowStatus(id);}
+}
+async function saveTextPricing(button){const id=textPricingChanged(button.closest('[data-text-pricing]'));await textPricingFlush(id);}
+window.addEventListener('beforeunload',e=>{if([...TEXT_PRICE_DRAFTS.values()].some(d=>d.dirty||d.saving)){e.preventDefault();e.returnValue='';}});
+
+function modelSettingsFields(m){
+  const fld=(lab,ctl,tip)=>`<div class="fld"${tip?` title="${esc(tip)}"`:''}><span>${lab}</span>${ctl.replace(/<(input|select)\b/,`<$1 aria-label="${esc(lab)}"`)}</div>`;
+  const markup = `
     <div class="fgrid">
       ${fld("逻辑 id",`<input type="text" class="mono" value="${esc(m.id)}" readonly style="opacity:.7"/>`)}
       ${fld("显示名",`<input type="text" value="${esc(m.label)}" onchange="msUpd('${m.id}','label',this.value)"/>`)}
@@ -1359,17 +1327,18 @@ function msRender(id){
       ${fld("渠道",`<select onchange="msUpd('${m.id}','channelId',this.value)"><option value="" ${!m.channelId?"selected":""}>默认网关</option>${CHANNELS.map(c=>`<option value="${esc(c.id)}" ${c.id===m.channelId?"selected":""}>${esc(c.name)}</option>`).join("")}</select>`)}
       ${m.hidden
         ? fld("模式",`<input type="text" value="—（内部计费，与模式无关）" readonly style="opacity:.7"/>`)
-        : fld("模式",`<select onchange="msUpd('${m.id}','modeId',this.value)">${modeOptions(m.modeId)}</select>`,"模式=渠道源头+门禁开关（可按用户/渠道商关闭）")}
+        : fld("用户线路",`<button onclick="dlg.close();switchTab('routing')">在自动路由中配置</button>`,"渠道模型仅作为线路的后台候选")}
       ${m.hidden
         ? fld("家族",`<input type="text" value="—" readonly style="opacity:.7"/>`)
         : fld("家族（模型种类）",`<select onchange="msUpd('${m.id}','familyId',this.value)">${famOptions(m.familyId)}</select>`,"家族=底层模型种类（客户端一级筛选），纯展示分组不参与门禁/计费")}
       ${fld("上游模型名（默认=id）",`<input type="text" value="${esc(m.upstreamModel||"")}" placeholder="${esc(m.id)}" onchange="msUpd('${m.id}','upstreamModel',this.value)"/>`)}
       ${fld("覆盖 URL",`<input type="text" value="${esc(m.baseUrl||"")}" placeholder="跟渠道" onchange="msUpd('${m.id}','baseUrl',this.value)"/>`,"上游地址覆盖：优先级最高，留空=走渠道/默认网关")}
       ${fld("覆盖 Key",msKeyCell(m),"上游密钥覆盖：优先级最高，留空=走渠道/默认网关密钥")}
-      ${fld("计费方式",m.capability==='video'||m.costField
+      ${fld("计费方式",m.tokenPricing?.enabled ? `<input value="按 token（预扣10积分）" readonly/>` : m.capability==='video'||m.costField
         ? `<select onchange="msBillMode('${m.id}',this.value)"><option value="" ${!m.costField?"selected":""}>按次</option><option value="duration" ${m.costField==='duration'?"selected":""}>按秒</option>${m.costField&&m.costField!=='duration'?`<option value="${esc(m.costField)}" selected>按 ${esc(m.costField)}</option>`:""}</select>`
         : `<input type="text" value="按次" readonly style="opacity:.7"/>`,m.capability==='video'||m.costField?undefined:"仅视频生成模型支持按秒计费（其余无时长概念，恒按次）")}
-      ${fld(m.costField?"单价（积分/秒）":"单价（积分/次）",`<input type="number" step="0.1" value="${m.costField?(m.costPerUnit!=null?m.costPerUnit:''):m.cost}" onchange="msPrice('${m.id}',this.value)"/>`,m.costField?"每秒积分（×时长秒数）；兜底次价自动=每秒价×最长时长（默认按最高）":"每次扣的积分")}
+      ${fld(m.tokenPricing?.enabled?"预扣积分":m.costField?"单价（积分/秒）":"单价（积分/次）",m.tokenPricing?.enabled?`<input value="10" readonly/>`:`<input type="number" step="0.1" value="${m.costField?(m.costPerUnit!=null?m.costPerUnit:''):m.cost}" onchange="msPrice('${m.id}',this.value)"/>`,m.costField?"每秒积分（×时长秒数）；兜底次价自动=每秒价×最长时长（默认按最高）":"每次扣的积分")}
+      ${textPricingFields(m)}
       ${m.costField&&m.capability==='video'
         ? fld("参考视频折算 ×",`<input type="number" step="0.1" min="0" value="${m.refVideoSecondsWeight!=null?m.refVideoSecondsWeight:''}" placeholder="0" onchange="updRefW('${m.id}',this.value)"/>`,"参考视频按秒计费折算系数：空/0=不计费；1=与出片每秒价同价（不足1秒算1秒，服务端探测时长）")
         : ''}
@@ -1377,7 +1346,14 @@ function msRender(id){
       ${fld("启用",`<label class="sw"><input type="checkbox" ${m.enabled?"checked":""} onchange="msEnabled('${m.id}',this.checked)"/><i></i></label>`)}
     </div>
     <div class="fld" style="margin-top:10px"><span>备注（用户可见：客户端悬浮「积分消耗」图标显示；留空=默认显示参考素材上限）</span>
-      <input type="text" value="${esc(m.note||"")}" maxlength="200" placeholder="默认=参考素材上限（图/视/音）" title="随 catalog 下发给用户（≤30s 热更），勿写接入信息等敏感内容" onchange="msUpd('${m.id}','note',this.value)"/></div>
+      <input aria-label="模型备注" type="text" value="${esc(m.note||"")}" maxlength="200" placeholder="默认=参考素材上限（图/视/音）" title="随 catalog 下发给用户（≤30s 热更），勿写接入信息等敏感内容" onchange="msUpd('${m.id}','note',this.value)"/></div>
+`;
+  return markup.replace(/(<input\b[^>]*?) onchange="([^"]*)"/g,(all,prefix,handler)=>prefix.includes('type="checkbox"')?all:`${prefix} onblur="if(this.value!==this.defaultValue){${handler}}"`);
+}
+function msRender(id){
+  const m=(window.__models||[]).find(x=>x.id===id); if(!m) return;
+  $("#dlgTitle").textContent = "模型设置 · " + m.label;
+  $("#dlgBody").innerHTML = `${modelSettingsFields(m)}
     <div style="display:flex;gap:9px;margin-top:14px;align-items:center">
       <button class="sm" onclick="editParams('${m.id}')">参数 ${(m.params||[]).length}</button>
       <button class="sm" onclick="editRoutes('${m.id}')">重定向 ${(m.routes||[]).length}</button>
@@ -1388,11 +1364,13 @@ function msRender(id){
 }
 /* 设置弹窗逐字段保存：与旧表格同一存储语义（空串→null 清除），保存后重渲染卡片网格保持卡面同步 */
 async function msUpd(id,k,v){
-  await updModel(id,k,v); renderModels();
+  await updModel(id,k,v);
+  if(CUR_TAB==='channels'&&!['capability','channelId','familyId'].includes(k)) { chUpdateModelHeading(id); return; }
+  renderModels();
   if(k==='label'&&dlg.open){ const m=(window.__models||[]).find(x=>x.id===id); if(m) $("#dlgTitle").textContent="模型设置 · "+m.label; }
 }
-async function msBillMode(id,v){ await updModel(id,'costField',v); renderModels(); msRender(id); }
-async function msPrice(id,v){ await updPrice(id,v); renderModels(); }
+async function msBillMode(id,v){ await updModel(id,'costField',v); renderModels(); if(CUR_TAB!=="channels") msRender(id); }
+async function msPrice(id,v){ await updPrice(id,v); if(CUR_TAB!=='channels') renderModels(); }
 async function msEnabled(id,on){ await updModel(id,'enabled',on); renderModels(); }
 function msKeyCell(m){
   const set=m.apiKeySet;
@@ -1400,12 +1378,12 @@ function msKeyCell(m){
 }
 async function msSetKey(id,v){
   v=(v||"").trim(); if(!v) return;
-  try{ await api("/admin-api/models/"+id,{method:"PUT",body:JSON.stringify({apiKey:v})}); toast("已保存"); await loadModels(); msRender(id); }
+  try{ await api("/admin-api/models/"+id,{method:"PUT",body:JSON.stringify({apiKey:v})}); toast("已保存"); await loadModels(); if(CUR_TAB!=="channels") msRender(id); }
   catch(e){ toast(e.message,"bad"); }
 }
 function msClearKey(id){
   confirmDo({ title:"清除密钥覆盖", text:"清除该模型的密钥覆盖？将改用所属渠道 / 默认网关的密钥。", okLabel:"清除", onOk: async ()=>{
-    try { await api("/admin-api/models/"+id,{method:"PUT",body:JSON.stringify({apiKey:null})}); toast("已清除"); await loadModels(); msRender(id); } catch(e){ toast(e.message,"bad"); }
+    try { await api("/admin-api/models/"+id,{method:"PUT",body:JSON.stringify({apiKey:null})}); toast("已清除"); await loadModels(); if(CUR_TAB!=="channels") msRender(id); } catch(e){ toast(e.message,"bad"); }
   }});
 }
 /* 模型开放范围（第110轮受众制 → 第167轮改按**渠道商分组**）：未开放的受众 catalog 不下发、调用被 403。
@@ -1479,7 +1457,8 @@ function toggleShareGroup(id, gid, on){
   shareSave(id, patch);
 }
 function renderModels(){
-  if(!$("#m_body")) return; // 模式增删改也会调它刷新分组——「渠道」页（模式管理所在页）无模型表，跳过
+  if(CUR_TAB === "channels") { renderChannelCards(); return; }
+  if(!$("#m_body")) return; // 模式增删改也会调它刷新分组——「渠道」页（自动路由所在页）无模型表，跳过
   const all = window.__models||[];
   // 工具栏（分组 + 状态筛选）随数据重渲染：高亮与计数实时（禁用一个模型立刻从「启用」视图消失、计数同步）
   const nOn = all.filter(m=>m.enabled).length;
@@ -1488,7 +1467,7 @@ function renderModels(){
     <span class="faint" style="margin-left:10px">${mScope==="__all" ? "全部模型" : (mScope==="platform" ? "源站（平台直属用户）可用" : esc(scopeName(mScope))+" 可用")}</span>
     <span class="faint" style="margin-left:14px">分组：</span>
     <span class="chip ${mGroup==='channel'?'on':''}" onclick="mGroup='channel';renderModels()">按渠道</span>
-    <span class="chip ${mGroup==='mode'?'on':''}" onclick="mGroup='mode';renderModels()">按模式</span>
+
     <span class="chip ${mGroup==='family'?'on':''}" onclick="mGroup='family';renderModels()">按家族</span>
     <span class="faint" style="margin-left:14px">状态：</span>
     <span class="chip ${mChip==='on'?'on':''}" onclick="mChip='on';renderModels()">启用 ${nOn}</span>
@@ -1531,7 +1510,7 @@ async function addModel(){
       id:$("#nm_id").value.trim(), label:$("#nm_label").value.trim()||$("#nm_id").value.trim(),
       capability:$("#nm_cap").value, protocol:$("#nm_proto").value,
       channelId:$("#nm_channel").value||undefined,
-      modeId:$("#nm_mode").value||undefined,
+
       // 家族：「自动识别」不发字段（服务端按名称归类）；显式选择（含「其他」=空串）原样发
       ...($("#nm_fam").value!=="__auto" ? { familyId:$("#nm_fam").value } : {}),
       upstreamModel:$("#nm_up").value.trim()||undefined,
@@ -1627,7 +1606,7 @@ async function cloneModel(id){
       channelId:src.channelId||undefined, upstreamModel:src.upstreamModel||undefined,
       routes:src.routes||undefined, baseUrl:src.baseUrl||undefined,
       params:src.params||[], cost:src.cost, costField:src.costField||undefined,
-      costPerUnit:src.costPerUnit!=null?src.costPerUnit:undefined, hidden:src.hidden||undefined,
+      tokenPricing:src.tokenPricing?{...structuredClone(src.tokenPricing),enabled:false}:undefined, costPerUnit:src.costPerUnit!=null?src.costPerUnit:undefined, hidden:src.hidden||undefined,
       modeId:src.modeId||undefined, familyId:src.familyId||"", methods:src.methods||undefined, officialAssets:src.officialAssets||undefined,
       shareScope:src.shareScope||undefined, shareAgentIds:src.shareAgentIds||undefined, enabled:false })});
     dlg.close(); toast("已克隆（新模型已停用，确认后再启用）"); loadModels();
@@ -1699,31 +1678,34 @@ function editParams(id){
   dlg.classList.add("wide"); dlg.showModal();
 }
 function renderParamsDlg(id){
-  const ps = window.__params||[];
-  const P = (i,k) => `window.__params[${i}].${k}`;
-  $("#dlgBody").innerHTML = `
-    <p class="mut" style="font-size:12.5px;margin:0 0 10px">用户端面板里该模型暴露的表单字段。<b>key</b> 是请求参数名（重定向「匹配条件」用它）；enum 选项逗号分隔；number 可填 min/max/step。</p>
-    <div class="tblwrap" style="margin-bottom:12px"><table><thead><tr><th>key</th><th>显示名</th><th>类型</th><th>选项(enum,逗号)</th><th>默认</th><th>min</th><th>max</th><th>step</th><th>单位</th><th></th></tr></thead><tbody>
-    ${ps.map((p,i)=>`<tr>
-      <td><input type="text" value="${esc(p.key||'')}" onchange="${P(i,'key')}=this.value.trim()" style="width:105px"/></td>
-      <td><input type="text" value="${esc(p.label||'')}" onchange="${P(i,'label')}=this.value" style="width:120px"/></td>
-      <td><select onchange="${P(i,'type')}=this.value;renderParamsDlg('${id}')">${PARAM_TYPES.map(t=>`<option ${t===p.type?'selected':''}>${t}</option>`).join("")}</select></td>
-      <td><input type="text" value="${esc((p.options||[]).join(','))}" ${p.type==='enum'?'':'disabled'} onchange="${P(i,'options')}=parseList(this.value)" style="width:160px" placeholder="${p.type==='enum'?'480p,720p':'—'}"/></td>
-      <td><input type="text" value="${esc(p.default!=null?p.default:'')}" onchange="${P(i,'default')}=this.value" style="width:76px"/></td>
-      <td><input type="number" value="${p.min!=null?p.min:''}" ${p.type==='number'?'':'disabled'} onchange="${P(i,'min')}=this.value===''?undefined:Number(this.value)" style="width:56px"/></td>
-      <td><input type="number" value="${p.max!=null?p.max:''}" ${p.type==='number'?'':'disabled'} onchange="${P(i,'max')}=this.value===''?undefined:Number(this.value)" style="width:56px"/></td>
-      <td><input type="number" value="${p.step!=null?p.step:''}" ${p.type==='number'?'':'disabled'} onchange="${P(i,'step')}=this.value===''?undefined:Number(this.value)" style="width:56px"/></td>
-      <td><input type="text" value="${esc(p.unit||'')}" onchange="${P(i,'unit')}=this.value||undefined" style="width:48px"/></td>
-      <td><button class="sm danger" onclick="window.__params.splice(${i},1);renderParamsDlg('${id}')">×</button></td></tr>`).join("") || `<tr><td colspan="10" class="faint" style="text-align:center;padding:18px">暂无参数</td></tr>`}
-    </tbody></table></div>
-    <div class="toolbar" style="margin:0">
-      <button class="sm" onclick="window.__params.push({key:'',label:'',type:'text'});renderParamsDlg('${id}')"><svg><use href="#i-plus"/></svg>添加参数</button>
-      <span class="sp"></span>
-      <button class="pri" onclick="saveParams('${id}')">保存参数</button>
-    </div>`;
+  $("#dlgBody").innerHTML=paramEditorHtml(id,window.__params||[]);
 }
-async function saveParams(id){
-  const clean = (window.__params||[]).filter(p=>p.key && p.key.trim()).map(p=>{
+function paramEditorHtml(id,ps,{reference='window.__params',redraw=`renderParamsDlg(${JSON.stringify(id)})`,save=`saveParams(${JSON.stringify(id)})`,reset='',saving=false}={}){
+  const P=(i,k)=>`${reference}[${i}].${k}`;
+  const input=(i,p,k,label,width,type='text',disabled=false,value=p[k]??'')=>`<input aria-label="参数${i+1} ${label}" type="${type}" value="${esc(String(value))}" ${disabled?'disabled':''} oninput="${esc(P(i,k)+"="+(type==='number'?"this.value===''?undefined:Number(this.value)":k==='options'?"parseList(this.value)":k==='key'?"this.value.trim()":"this.value"))}" style="width:${width}px"/>`;
+  return `<p class="mut" style="font-size:12.5px;margin:0 0 10px">直接编辑后点击“保存参数”。key 是请求参数名；enum 选项用逗号分隔；number 可设置最小值、最大值和步长。线路对用户开放的公共参数在自动路由中统一。</p>
+    <fieldset ${saving?'disabled':''} style="border:0;padding:0;margin:0;min-width:0">
+    <div class="tblwrap" style="margin-bottom:12px"><table><thead><tr><th>key</th><th>显示名</th><th>类型</th><th>选项（逗号分隔）</th><th>默认值</th><th>最小值</th><th>最大值</th><th>步长</th><th>单位</th><th></th></tr></thead><tbody>
+    ${ps.map((p,i)=>`<tr>
+      <td>${input(i,p,'key','key',105)}</td>
+      <td>${input(i,p,'label','显示名',120)}</td>
+      <td><select aria-label="参数${i+1} 类型" onchange="${esc(P(i,'type')+'=this.value;'+redraw)}">${PARAM_TYPES.map(t=>`<option ${t===(p.type||'text')?'selected':''}>${t}</option>`).join('')}</select></td>
+      <td>${input(i,p,'options','选项',160,'text',p.type!=='enum',(p.options||[]).join(','))}</td>
+      <td>${input(i,p,'default','默认值',76)}</td>
+      <td>${input(i,p,'min','最小值',64,'number',p.type!=='number')}</td>
+      <td>${input(i,p,'max','最大值',64,'number',p.type!=='number')}</td>
+      <td>${input(i,p,'step','步长',56,'number',p.type!=='number')}</td>
+      <td>${input(i,p,'unit','单位',48)}</td>
+      <td><button class="sm danger" aria-label="删除参数${i+1}" onclick="${esc(reference+'.splice('+i+',1);'+redraw)}">×</button></td>
+    </tr>`).join('')||'<tr><td colspan="10" class="faint" style="text-align:center;padding:18px">暂无参数，点击下方“添加参数”配置。</td></tr>'}
+    </tbody></table></div><div class="toolbar" style="margin:0">
+      <button class="sm" onclick="${esc(reference+".push({key:'',label:'',type:'text'});"+redraw)}"><svg><use href="#i-plus"/></svg>添加参数</button>
+      <span class="sp"></span>${reset?`<button onclick="${esc(reset)}">放弃参数修改</button>`:''}
+      <button class="pri" onclick="${esc(save)}">${saving?'保存中…':'保存参数'}</button>
+    </div></fieldset>`;
+}
+function cleanModelParams(params){
+  return params.filter(p=>p.key && p.key.trim()).map(p=>{
     const o = { key:p.key.trim(), label:p.label||p.key.trim(), type:p.type||"text" };
     if (p.type==="enum") o.options = p.options||[];
     if (p.default!==undefined && p.default!=="") o.default = p.type==="number"?Number(p.default):(p.type==="boolean"?(p.default===true||p.default==="true"):p.default);
@@ -1731,7 +1713,10 @@ async function saveParams(id){
     if (p.unit) o.unit = p.unit;
     return o;
   });
-  try { await api("/admin-api/models/"+id,{method:"PUT",body:JSON.stringify({params:clean})}); dlg.close(); toast("参数已保存"); loadModels(); }
+}
+async function saveParams(id){
+  const clean=cleanModelParams(window.__params||[]);
+  try { await api("/admin-api/models/"+encodeURIComponent(id),{method:"PUT",body:JSON.stringify({params:clean})}); dlg.close(); toast("参数已保存"); loadModels(); }
   catch(e){ toast(e.message,"bad"); }
 }
 
@@ -2104,7 +2089,7 @@ function compressImage(file, maxSize=512){
 /* ════════════════ 预设管理（第174轮：从提示词模板数据层拆出的独立实体 presets.json）════════════════
    预设 = 无用途、不可执行的正文片段（画风/出图预设方案/资产拆分前后缀），catalog 全文下发；
    autoAttach = 资产拆分完成时自动挂到对应类别资产出图提示词上（前缀/后缀按 position）。 */
-const PRESET_CATS = ["画风","预设方案"];
+const PRESET_CATS = ["画风","预设方案","视频预设方案"];
 const ATTACH_CATS = [["characters","角色"],["crowds","群像"],["scenes","场景"],["organisms","生物"],["items","物品"]];
 let PRESETS = [], preSel = "", preSearch = "";
 async function loadPresets(){
@@ -2179,7 +2164,7 @@ function renderPresetEditor(){
       <div class="fgrid" style="margin-bottom:12px">
         <div class="fld"><span>预设 id（只读）</span><input type="text" value="${esc(p.id)}" disabled /></div>
         <div class="fld"><span>显示名</span><input id="pe_name" type="text" value="${esc(p.name)}" /></div>
-        <div class="fld"><span>分组（画风=新建项目画风选择器+画风前缀；预设方案=出图预设胶囊）</span><input id="pe_cat" type="text" list="pcat_list" value="${esc(p.category||'')}" /></div>
+        <div class="fld"><span>分组（预设方案=图片；视频预设方案=视频；画风=项目画风）</span><input id="pe_cat" type="text" list="pcat_list" value="${esc(p.category||'')}" /></div>
         <div class="fld"><span>插入位置</span><select id="pe_pos"><option value="prefix" ${p.position!=="suffix"?"selected":""}>前缀（用户输入前）</option><option value="suffix" ${p.position==="suffix"?"selected":""}>后缀（用户输入后）</option></select></div>
         <div class="fld"><span>互斥组（同组只能存一个，如「宫格」「画风」；空=不互斥）</span><input id="pe_group" type="text" value="${esc(p.group||'')}" /></div>
         <div class="fld"><span>排序（组内按此升序）</span><input id="pe_order" type="number" value="${p.order||0}" /></div>
@@ -2926,7 +2911,7 @@ async function renderAgentDetailConfig(a){
       <button class="sm ${a.allowSharedLib===false?"":"pri"}" onclick="toggleAgentSharedLib('${a.id}',${a.allowSharedLib===false?"true":"false"})">${a.allowSharedLib===false?"已关（点击开放）":"已开放（点击关闭）"}</button>
     </div>
     <div style="background:var(--panel2);border:1px solid var(--line);border-radius:var(--r-md);padding:12px 16px;margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <b style="font-size:12.5px;color:var(--acc)">可用模式（整商硬闸）</b>
+      <b style="font-size:12.5px;color:var(--acc)">可用功能与线路（整商硬闸）</b>
       <span class="faint" style="font-size:11.5px">关=该商<b>全部名下用户</b>不可用该模式（用户自身开关失效）；开=按用户自身设置。心跳 ≤30s 生效。表格视频只控制视频区与视频选择，表格资产和故事板生图始终可用。</span>
       ${AGENT_FEATURES.map(([k,lb])=>{ const on = !(a.features && a.features[k]===false);
         return `<button class="sm ${on?"pri":""}" onclick="toggleAgentFeature('${a.id}','${k}',${on?"false":"true"})">${lb}：${on?"开":"已禁用"}</button>`; }).join("")}
@@ -2998,7 +2983,7 @@ async function loadAgentLogs(id, append){
       <td class="mut" style="white-space:nowrap">${fmtTime(l.startedAt)}</td>
       <td>${esc(l.userName||"—")}</td>
       <td>${esc(purposeLabel(l.purpose))}</td>
-      <td class="mono">${esc(l.model||"—")}</td>
+      <td class="mono">${esc(l.modelLabel||l.model||"—")}</td>
       <td style="text-align:right">${l.platformCost!=null?l.platformCost:"—"}</td>
       <td style="text-align:right" class="mut">${l.cost!=null?l.cost:"—"}</td>
       <td>${statusBadge(l.status)}</td>
@@ -3041,7 +3026,7 @@ async function loadUserLogs(append){
     const rows = (r.items||[]).map(l=>`<tr>
       <td class="mut" style="white-space:nowrap">${fmtTime(l.startedAt)}</td>
       <td>${esc(purposeLabel(l.purpose))}</td>
-      <td class="mono">${esc(l.model||"—")}</td>
+      <td class="mono">${esc(l.modelLabel||l.model||"—")}</td>
       <td style="text-align:right">${l.cost!=null?l.cost:"—"}</td>
       <td>${statusBadge(l.status)}</td>
       <td style="text-align:right"><button class="sm" onclick="showLog('${l.id}',null,true)">详情</button></td>
@@ -3080,7 +3065,7 @@ const agpWhenKey = (w)=>JSON.stringify(Object.entries(w||{}).sort((x,y)=>x[0].lo
 const agpWhenLabel = (w)=>Object.entries(w||{}).map(([k,v])=>v).join("·") || "档位";
 const agpUnit = (f)=>f==="duration"?"秒":(f||"单位");
 function agpPlatPrice(m){
-  const base = m.costField ? `${m.costPerUnit!=null?m.costPerUnit:"—"} 积分/${agpUnit(m.costField)}（兜底 ${m.cost}/次）` : `${m.cost} 积分/次`;
+  const base = m.tokenPricing?.enabled ? "按 token · 预扣10积分" : m.costField ? `${m.costPerUnit!=null?m.costPerUnit:"—"} 积分/${agpUnit(m.costField)}（兜底 ${m.cost}/次）` : `${m.cost} 积分/次`;
   const tiers = (m.costRules||[]).map(r=>`${agpWhenLabel(r.when)} ${m.costField?(r.costPerUnit!=null?r.costPerUnit+"/"+agpUnit(m.costField):"—"):(r.cost!=null?r.cost+"/次":"—")}`);
   return `<div>${esc(base)}</div>` + (tiers.length?`<div class="sub">${tiers.map(esc).join(" · ")}</div>`:"");
 }
@@ -3212,7 +3197,7 @@ async function loadLogs(reset=true){
       <td class="mut" style="text-align:right" title="${l.queuedMs?'实际生成秒数（排队秒数）——排队不计入生成时长':''}">${fmtDur(l.durationMs,l.queuedMs)}</td>
       <td>${esc(l.userName||"—")}</td>
       <td title="${esc(l.purpose||"")}">${esc(purposeLabel(l.purpose))}</td>
-      <td class="mono">${esc(l.model||"—")}</td>
+      <td class="mono">${esc(l.modelLabel||l.model||"—")}</td>
       <td style="text-align:right">${l.cost!=null?l.cost:"—"}</td>
       <td>${statusBadge(l.status)}</td></tr>`).join("");
     if (reset) $("#l_body").innerHTML = rows || `<tr><td colspan="8" class="faint" style="text-align:center;padding:24px">该筛选条件下暂无记录</td></tr>`;
@@ -3431,9 +3416,11 @@ async function showLog(id, backAgentId, backUser){
     s3: l.upstreamRequest!==undefined ? JSON.stringify(l.upstreamRequest, null, 2) : "（无：echo/stub 或上游未发起）",
     s4: l.upstreamResponse!==undefined ? JSON.stringify(l.upstreamResponse, null, 2) : "（无）",
   };
-  const meta = [["用户",esc(l.userName||"—")],["步骤",esc(purposeLabel(l.purpose))],["模型",`<span class="mono">${esc(l.model||"—")}</span>`],
+  const meta = [["用户",esc(l.userName||"—")],["步骤",esc(purposeLabel(l.purpose))],["模型",`<span class="mono">${esc(l.modelLabel||l.model||"—")}</span>`],
     ["用户扣费",l.cost!=null?l.cost+" 积分":"—"],["请求时间",fmtTime(l.startedAt)],["完成时间",fmtTime(l.finishedAt)],
     ["耗时",fmtDur(l.durationMs,l.queuedMs)+(l.queuedMs?' <span class="mut">（实际生成（排队））</span>':"")],["taskId",`<span class="mono">${esc(l.taskId||"—")}</span>`]];
+  if(l.usage)meta.push(['输入 token',l.usage.inputTokens],['输出 token',l.usage.outputTokens],['缓存命中 token',l.usage.cachedInputTokens??'未提供']);
+  if(l.textBilling){const b=l.textBilling;meta.push(['预扣',b.precharged+' 积分'],['结算',b.cost+' 积分'],['退补',b.cost>b.precharged?'补扣 '+(b.cost-b.precharged):'退回 '+(b.precharged-b.cost)]);if(b.items)meta.push(['输入扣费',b.items.input+' 积分'],['输出扣费',b.items.output+' 积分'],['缓存扣费',b.items.cache+' 积分']);}
   // 链路扣费明细（第124轮）：归属链各级渠道商的结算侧实扣（直属商→根，根级=源站实收）——源站全见
   const chain = Array.isArray(l.agentCosts) && l.agentCosts.length
     ? `<div class="badge plain" style="margin-bottom:12px;max-width:100%;white-space:normal">链路扣费：用户 ${l.cost!=null?l.cost:"—"} · ${l.agentCosts.map(a=>`${esc(a.name||a.id)} ${a.cost}`).join(" · ")} <span class="faint">（根级=源站实收 ${l.agentCosts[l.agentCosts.length-1].cost} 积分；失败已逐级退回）</span></div>`

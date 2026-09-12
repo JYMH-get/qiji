@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useCatalogStore } from "@/store/catalogStore";
 import { useSettingsStore } from "@/store/settingsStore";
-import { presetTag, resolvePresets, listPresetOptions, presetBody, presetGroup, gridPresetForShotCount, countUnifiedShots, hasGridInstruction, GRID_GROUP, PRESET_TAG_RE } from "@/lib/presetSchemes";
+import { presetTag, resolvePresets, listPresetOptions, presetBody, presetGroup, gridPresetForShotCount, countUnifiedShots, hasGridInstruction, GRID_GROUP, PRESET_TAG_RE, VIDEO_PRESET_CATEGORY } from "@/lib/presetSchemes";
 
 function seedCatalog(templates: any[]) {
 	useCatalogStore.setState({
@@ -26,6 +26,57 @@ describe("presetSchemes", () => {
 		expect(tag).toBe("【预设:preset.storyboard.6grid】");
 		const m = new RegExp(PRESET_TAG_RE.source).exec(tag);
 		expect(m?.[1]).toBe("preset.storyboard.6grid");
+	});
+
+	it("服务端与本地图片/视频预设列表独立，旧自定义项仍归图片", () => {
+		useCatalogStore.setState({ catalog: { ...useCatalogStore.getState().catalog!, presets: [
+			{ id: "image", name: "图片构图", category: "预设方案", body: "图片正文" },
+			{ id: "video", name: "视频运镜", category: VIDEO_PRESET_CATEGORY, body: "视频正文" },
+		] } });
+		useSettingsStore.setState({ customPresets: [
+			{ id: "old", name: "旧图片预设", body: "旧正文" },
+			{ id: "local-video", name: "视频自定义", body: "运镜", target: "video" },
+		] });
+		expect(listPresetOptions().map(p => p.id)).toEqual(["image", "old"]);
+		expect(listPresetOptions("video").map(p => p.id)).toEqual(["video", "local-video"]);
+	});
+
+	it("视频库为空时不回退图片预设，旧服务端视频分类同样独立", () => {
+		expect(listPresetOptions("video")).toEqual([]);
+		seedCatalog([
+			{ id: "image", name: "图片", category: "预设方案", body: "构图" },
+			{ id: "video", name: "视频", category: VIDEO_PRESET_CATEGORY, body: "运镜" },
+		]);
+		expect(listPresetOptions().map(p => p.id)).toEqual(["image"]);
+		expect(listPresetOptions("video").map(p => p.id)).toEqual(["video"]);
+	});
+
+	it("视频胶囊可展开，跨类型同名互斥组互不替换", () => {
+		useSettingsStore.setState({ customPresets: [
+			{ id: "image", name: "图片", body: "图片正文", group: "风格" },
+			{ id: "video", name: "视频", body: "视频正文", group: "风格", target: "video", position: "suffix" },
+		] });
+		expect(presetBody("video")).toBe("视频正文");
+		expect(presetGroup("video")).not.toBe(presetGroup("image"));
+		expect(resolvePresets("【预设:video】")).toBe("视频正文");
+		// 已保存的提示词胶囊保持可读，不因选择库分离被删除。
+		expect(resolvePresets("【预设:image】\n【预设:video】")).toBe("图片正文\n视频正文");
+	});
+
+	it("视频预设新增、修改和删除不会影响图片预设", () => {
+		const originalSave = useSettingsStore.getState().save;
+		useSettingsStore.setState({ save: async () => {} });
+		try {
+			const settings = useSettingsStore.getState();
+			const imageId = settings.addCustomPreset("图片方案", "构图");
+			const videoId = settings.addCustomPreset("视频方案", "运镜", "镜头", "suffix", "video");
+			const originalImage = useSettingsStore.getState().customPresets.find(p => p.id === imageId);
+			settings.updateCustomPreset(videoId, { name: "新视频方案", body: "新运镜" });
+			expect(listPresetOptions("video")).toEqual([{ id: videoId, name: "新视频方案" }]);
+			settings.removeCustomPreset(videoId);
+			expect(listPresetOptions("video")).toEqual([]);
+			expect(useSettingsStore.getState().customPresets.find(p => p.id === imageId)).toEqual(originalImage);
+		} finally { useSettingsStore.setState({ save: originalSave }); }
 	});
 
 	it("listPresetOptions 只含有正文的「预设方案」分类模板（排除画风/空正文）", () => {

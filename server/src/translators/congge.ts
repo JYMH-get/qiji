@@ -20,8 +20,7 @@
  *   **绝不静默丢**（丢一张即 @ImageN 图例整段错位，第118轮规则）。
  * 规格字段（文档「三、分辨率 / 质量参数」）：
  *   - `aspect_ratio`：10 档比例；⚠ 文档明令**不要传 size**（`resolution` 与 `size` 会冲突）→
- *     我方客户端出图请求发的是像素串 `size`（genParams.resolveSize），这里按「跨参数语义映射」
- *     换算成 比例 + 分辨率档 再发（§9 允许的图片侧 size→比例映射，与 jmh/aistars/jmz image 同规）。
+ *     用户端只发公共比例/分辨率；管理端保留 `aspect_ratio`，本翻译器再按上游字段发出。
  *   - `resolution`：gpt-image-2 仅 1K/2K（传 4K 上游明确报错）；Gemini 两款 1K/2K/4K。
  *   - `quality`：**仅 gpt-image-2**（Gemini 传了上游报 `quality is not supported for Gemini image models`）
  *     → 按上游名判定，gemini 系一律不发；我方 "auto"=不发该字段（走上游默认 medium）。
@@ -107,8 +106,7 @@ function nearestRatio(sizeRaw: string): string | null {
 
 /**
  * 分辨率档：显式 `params.resolution` 优先（1k/2k/4k → 1K/2K/4K，其余原样透传由上游报错）；
- * 缺省时从像素串 `size` 的**长边**反推——客户端出图只发 size（genParams.resolveSize：
- * 1k≈1024 / 2k≈2048 / 4k≈3840-4096 长边），不反推的话用户选的分辨率档到不了上游。
+ * 兼容旧请求时仍可从像素串 `size` 的长边反推；新客户端显式发送 resolution。
  */
 function resolutionOf(params: Record<string, unknown> | undefined): string | null {
 	const explicit = String(params?.resolution ?? "").trim();

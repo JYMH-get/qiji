@@ -1,3 +1,7 @@
+import { beginChannelObservation } from '../store/channelObservations.ts';
+import { matchRoute as availabilityRoute } from '../store/models.ts';
+import { mergeTextUsage } from '../textPricing.ts';
+import { finishTextBilling, linkTextBillingTask } from '../store/textBilling.ts';
 /**
  * 翻译器路由：按模型的 protocol 把 GenerateRequest 分派到具体翻译器，
  * 并在各分支收尾对应的请求日志（finishLog）。
@@ -9,10 +13,11 @@
 import type { GenerateRequest, TaskState, AssetOut, Capability } from "../contract.ts";
 import { getModelDef } from "../store/models.ts";
 import { getTemplateDef } from "../store/templates.ts";
-import { createTask, createRunningTask, completeTask, failTask, appendTaskText, setTaskProgress, setTaskResume, type TaskRecord } from "../store/tasks.ts";
+import { taskPublicModel, createTask, createRunningTask, completeTask, failTask, appendTaskText, setTaskProgress, setTaskResume, type TaskRecord } from "../store/tasks.ts";
 import { createAsset } from "../store/assets.ts";
 import { isOssConfigured } from "../store/oss.ts";
-import { finishLog, attachUpstream } from "../store/logs.ts";
+import { finishLog, attachUpstream, getLog } from "../store/logs.ts";
+import { userPromptBackups } from '../store/userPromptBackups.ts';
 import { resolveUpstream } from "./upstream.ts";
 import { translateOpenAIText, translateOpenAIImage, translateEcho, type ImageResult, type OnDelta, type OnUpstream } from "./openai.ts";
 import { translateAnthropicText } from "./anthropic.ts";
@@ -45,6 +50,7 @@ import { submitZero007Video, pollZero007Video } from "./zero007.ts";
 import { isBuiltinProtocol, getProtocolDef, type CustomProtocol } from "../store/protocols.ts";
 import { runCustomText, runCustomImmediate, customSubmit, customPoll } from "./custom.ts";
 import { resolveContentType } from "./contentType.ts";
+import { imageUpstreamParams } from "../imageRouting.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -230,7 +236,7 @@ async function runVideoPollLoop(opts: {
 				const vAsset = re
 					? { id: re.id, url: re.url, rehosted: true }
 					: { id: `vid-${upstreamTaskId}`, url: st.videoUrl, rehosted: false };
-				result = { assets: [{ id: vAsset.id, type: "video" as Capability, url: vAsset.url, meta: { cover: st.coverUrl, model: req.model, rehosted: vAsset.rehosted } }] };
+				result = { assets: [{ id: vAsset.id, type: "video" as Capability, url: vAsset.url, meta: { cover: st.coverUrl, model: taskPublicModel(taskId) ?? req.model, rehosted: vAsset.rehosted } }] };
 			} else {
 				// 图/音异步：下载完成链接的字节，落为永久资产（OSS/本机），与图像任务同归宿
 				// （resultHeaders：结果链接带鉴权的渠道（简梦Z 图片）由 poll 附下载头，第153轮）
@@ -240,7 +246,7 @@ async function runVideoPollLoop(opts: {
 					const ct = resolveContentType(dl.headers.get("content-type"), capability === "audio" ? "audio/mpeg" : "image/png");
 					const bytes = Buffer.from(await dl.arrayBuffer());
 					const asset = await createAsset(bytes, ct, capability, { prefix: assetPrefixFor(req), name: assetNameOf(req) });
-					result = { assets: [{ id: asset.id, type: capability, url: asset.url, meta: { model: req.model } }] };
+					result = { assets: [{ id: asset.id, type: capability, url: asset.url, meta: { model: taskPublicModel(taskId) ?? req.model } }] };
 				} catch (e) {
 					const m = (e as Error).message;
 					failTask(taskId, m);
@@ -341,7 +347,7 @@ function createImageTask(req: GenerateRequest, run: () => Promise<ImageResult>, 
 				// 客户端凭本机网络下载后经 POST /v1/assets 上传回服务端落 OSS、替换成永久直链。
 				if (r.fallbackUrl) {
 					const result = {
-						assets: [{ id: `img-${rec.taskId}`, type: capability, url: r.fallbackUrl, meta: { model: req.model, rehosted: false, downloadError: r.error } }],
+						assets: [{ id: `img-${rec.taskId}`, type: capability, url: r.fallbackUrl, meta: { model: taskPublicModel(rec.taskId) ?? req.model, rehosted: false, downloadError: r.error } }],
 					};
 					completeTask(rec.taskId, result);
 					if (logId) finishLog(logId, { status: "success", response: result, taskId: rec.taskId });
@@ -352,7 +358,7 @@ function createImageTask(req: GenerateRequest, run: () => Promise<ImageResult>, 
 				return;
 			}
 			const asset = await createAsset(r.data, r.contentType, capability, { prefix: assetPrefixFor(req), name: assetNameOf(req) });
-			const result = { assets: [{ id: asset.id, type: capability, url: asset.url, meta: { model: req.model } }] };
+			const result = { assets: [{ id: asset.id, type: capability, url: asset.url, meta: { model: taskPublicModel(rec.taskId) ?? req.model } }] };
 			completeTask(rec.taskId, result);
 			if (logId) finishLog(logId, { status: "success", response: result, taskId: rec.taskId });
 		})
@@ -411,7 +417,9 @@ async function runChain(
 		variables: { ...(req.variables ?? {}), [pipeVar]: outputA },
 		promptOverride: undefined,
 	};
-	return runTextSync(reqB, model, up, onDelta, onUpstream);
+	const b = await runTextSync(reqB, model, up, onDelta, onUpstream);
+  if (b.result) b.result.usage = mergeTextUsage(a.result?.usage, b.result.usage);
+  return b;
 }
 
 /**
@@ -420,10 +428,12 @@ async function runChain(
  */
 function createTextTask(req: GenerateRequest, run: (onDelta: OnDelta) => Promise<SyncOutcome>, logId?: string): DispatchResult {
 	const rec = createRunningTask("text", req.clientTaskId, logId);
+	if (logId) linkTextBillingTask(logId, rec.taskId);
 	const onDelta: OnDelta = (full) => appendTaskText(rec.taskId, full);
 	run(onDelta)
 		.then((r) => {
 			if (r.status === "success") {
+				if (logId) r.result = finishTextBilling(logId, r.result);
 				completeTask(rec.taskId, r.result);
 				if (logId) finishLog(logId, { status: "success", response: r.result, taskId: rec.taskId });
 			} else {
@@ -444,13 +454,29 @@ export async function dispatchGenerate(
 	logId?: string,
 	opts?: { noChain?: boolean },
 ): Promise<DispatchResult> {
+	// 身份取自鉴权后生成的请求台账，客户端无法通过备份字段冒充他人。
+	if (logId && (req.usedPresets?.length || req.inference?.source === 'skill')) {
+		const log = getLog(logId);
+		if (log?.userId) try {
+			userPromptBackups.capture(req, { userId: log.userId, userName: log.userName, agentId: log.ownerId, requestId: logId, projectId: req.projectId, model: log.model, purpose: req.purpose });
+		} catch (error) { console.error('[user-prompt-backup] 保存失败', error instanceof Error ? error.message : 'storage error'); }
+	}
+	// 备份元数据不进入上游协议或自定义翻译器。
+	if (req.usedPresets) { const { usedPresets: _backups, ...generation } = req; req = generation; }
 	const model = getModelDef(req.model);
 	if (!model || !model.enabled) {
 		const error = `模型不存在或已禁用：${req.model}`;
 		if (logId) finishLog(logId, { status: "failed", error });
 		return { kind: "sync", status: "failed", error };
 	}
-	const up = resolveUpstream(model, req);
+	// 用户端图片契约恒为比例/分辨率/质量；只有选定实际模型后才派生上游 size/原生字段。
+	const wireReq: GenerateRequest = model.capability === "image"
+		? { ...req, params: imageUpstreamParams(model, (req.params ?? {}) as Record<string, unknown>) as GenerateRequest["params"] }
+		: req;
+	const up = resolveUpstream(model, wireReq);
+  if(logId && !model.hidden && !['echo','stub'].includes(model.protocol)) beginChannelObservation({
+    id:logId,modelId:model.id,modelName:model.label,channelId:availabilityRoute(model,wireReq.params)?.channelId??model.channelId??'',capability:model.capability,familyId:model.familyId
+  });
 	// 上游(管理端↔网关/第三方)请求/响应记录器：写入对应日志（③④）
 	const onUpstream: OnUpstream | undefined = logId ? (rec) => attachUpstream(logId, rec) : undefined;
 
@@ -464,18 +490,18 @@ export async function dispatchGenerate(
 		}
 		switch (proto.mode) {
 			case "sync":
-				return createTextTask(req, (onDelta) => runCustomText(req, up, proto, onDelta, onUpstream), logId);
+				return createTextTask(req, (onDelta) => runCustomText(wireReq, up, proto, onDelta, onUpstream), logId);
 			case "async-immediate":
-				return createImageTask(req, () => runCustomImmediate(req, up, proto, onUpstream), logId, proto.capability);
+				return createImageTask(req, () => runCustomImmediate(wireReq, up, proto, onUpstream), logId, proto.capability);
 			case "async-poll":
-				return createVideoPollingTask(req, up, proto.id, customVideoDriver(proto), logId, onUpstream, proto.capability,
+				return createVideoPollingTask(wireReq, up, proto.id, customVideoDriver(proto), logId, onUpstream, proto.capability,
 					{ intervalMs: proto.poll?.intervalMs, timeoutMs: proto.poll?.timeoutMs });
 		}
 	}
 
 	// 文本：一律异步任务 + 后台执行（含链式），客户端轮询取结果
 	if (TEXT_PROTOCOLS.has(model.protocol)) {
-		const tplA = !opts?.noChain && req.templateId ? getTemplateDef(req.templateId) : undefined;
+		const tplA = !opts?.noChain && !req.inference && req.templateId ? getTemplateDef(req.templateId) : undefined;
 		const runner = tplA?.chainNextId
 			? (onDelta: OnDelta) => runChain(req, tplA, model, up, onDelta, onUpstream)
 			: (onDelta: OnDelta) => runTextSync(req, model, up, onDelta, onUpstream);
@@ -484,18 +510,18 @@ export async function dispatchGenerate(
 
 	switch (model.protocol) {
 		case "openai-image":
-			return createImageTask(req, () => translateOpenAIImage(req, up, onUpstream), logId);
+			return createImageTask(req, () => translateOpenAIImage(wireReq, up, onUpstream), logId);
 		case "gemini-image":
-			return createImageTask(req, () => translateGeminiImage(req, up, onUpstream), logId);
+			return createImageTask(req, () => translateGeminiImage(wireReq, up, onUpstream), logId);
 		case "yali-image":
 			// Yali（api.yaliai.com，第229轮）：同步单请求出图（OpenAI Images 形态，generations/edits 两路径）
-			return createImageTask(req, () => translateYaliImage(req, up, onUpstream), logId);
+			return createImageTask(req, () => translateYaliImage(wireReq, up, onUpstream), logId);
 		case "congge-image":
 			// congge（congchen.top，第233轮）：同步单请求出图（generations 文生图 / edits 图生图，垫图≤4 张）
-			return createImageTask(req, () => translateConggeImage(req, up, onUpstream), logId);
+			return createImageTask(req, () => translateConggeImage(wireReq, up, onUpstream), logId);
 		case "jmh-image":
 			// 简梦H（ZhengAPI，第154轮）：同步单请求出图（grok=images/generations、firefly=chat stream:false）
-			return createImageTask(req, () => translateJmhImage(req, up, onUpstream), logId);
+			return createImageTask(req, () => translateJmhImage(wireReq, up, onUpstream), logId);
 		case "jmh-video":
 			// 简梦H 视频（第155轮）：chat/completions SSE 流式单请求（整流读完即有链接，1~10 分钟）——
 			// 非 submit+poll，复用 createImageTask 管线按 video 能力落资产（下载成片字节→createAsset 永久 OSS）
@@ -528,7 +554,7 @@ export async function dispatchGenerate(
 		case "skylee-image":
 			// 简梦Z（第153轮）/ 星辰（第162轮）/ Skylee（第230轮）图片：上游本身异步 submit+poll → 复用视频轮询管线按 image 能力落资产
 			//（jmz 的 poll 附 resultHeaders：结果链接须带 Bearer 下载、约 2h 失效——完成即取字节落永久资产）
-			return createVideoPollingTask(req, up, model.protocol, VIDEO_DRIVERS[model.protocol], logId, onUpstream, "image");
+			return createVideoPollingTask(wireReq, up, model.protocol, VIDEO_DRIVERS[model.protocol], logId, onUpstream, "image");
 		case "volc-mediakit":
 			// 火山 MediaKit：图像增强走**同步接口**（无需轮询，复用图像任务管线落资产）；视频处理走轮询驱动
 			return model.capability === "image-enhance"

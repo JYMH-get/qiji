@@ -5,11 +5,12 @@
  * templateId → 管理端模板库正文，{{变量}} 由 req.variables 填充。
  */
 import type { GenerateRequest, AssetType } from "../contract.ts";
-import { getTemplateDef, getDefaultTemplate } from "../store/templates.ts";
+import { getTemplateDef, getDefaultTemplate, getInferenceTemplate, getInferenceOutputTemplate } from "../store/templates.ts";
 import { getVariantPrefix } from "../catalog.ts";
 import { renderViewAnglePrompt } from "./viewAnglePrompt.ts";
 import { renderPanoramaPrompt } from "./panoramaPrompt.ts";
 import { renderJianyiSummaryPrompt } from "./jianyiSummaryPrompt.ts";
+import { composeInference, inferenceOutputPurpose, inferenceTemplateMatches, isInferenceRequestPurpose } from '../inferenceComposition.ts';
 
 /** asset.{character|scene|creature|prop}.variant → 资产类型 */
 const VARIANT_RE = /^asset\.(character|scene|creature|prop)\.variant$/;
@@ -34,6 +35,17 @@ export function fillTemplate(body: string, vars: Record<string, string>): string
 }
 
 export function buildPrompt(req: GenerateRequest): string {
+  const split = req.purpose === 'storyboard.split';
+  const creativeTemplate = req.templateId ? getInferenceTemplate(req.templateId) : split ? getDefaultTemplate('storyboard.split') : undefined;
+  if (req.inference?.source !== 'skill' && creativeTemplate?.purpose === 'storyboard.split' && !split) throw new Error('仅拆分模板只能用于仅拆分请求');
+  if ((req.inference || (creativeTemplate?.outputSeparated || split) && !req.promptOverride?.trim()) && isInferenceRequestPurpose(req.purpose)) {
+    const format = getInferenceOutputTemplate(inferenceOutputPurpose(req));
+    if (!format?.enabled || !format.body.trim()) throw new Error('输出格式模板不存在、为空或已停用');
+    const tpl = creativeTemplate;
+    if (req.inference?.source !== 'skill' && (!tpl?.enabled || !inferenceTemplateMatches(tpl.purpose, req.purpose) || tpl.category === '输出提示词')) throw new Error(split ? '请选择可用的仅拆分方案' : '请选择可用的推理方案');
+    if (req.inference?.source === 'skill' && !req.inference.skillText?.trim()) throw new Error('请先导入或填写外部 Skills 内容');
+    return composeInference(req, tpl?.body ?? '', format.body);
+  }
 	if (req.promptOverride && req.promptOverride.trim()) return req.promptOverride;
 	const v = req.variables ?? {};
 

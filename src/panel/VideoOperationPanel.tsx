@@ -9,7 +9,8 @@ import { useUiStore } from "@/store/uiStore";
 import type { ParamField } from "@/services/adapters/types";
 import { getPlugin } from "@/nodes/pluginRegistry";
 import { dispatchCommand } from "@/command/dispatch";
-import { NodePromptEditor } from "./NodePromptEditor";
+import { NodePromptEditor, type NodePromptEditorHandle } from "./NodePromptEditor";
+import { NodePresetPicker } from "./NodePresetPicker";
 import { NodeMaterialBay } from "@/nodes/NodeMaterialBay";
 import { getNodeMaterialItems, importAssetToNode, setNodeMaterialUsage, upstreamTextSources } from "@/canvas/nodeMaterials";
 import { mapUpstreamText } from "@/lib/upstreamText";
@@ -19,6 +20,8 @@ import { PromptExpandButton } from "@/components/PromptExpandButton";
 import { getChannelModelsForNodeType, resolveActiveModelKey, catalogFamilyOrder } from "@/services/adapters/channelAdapter";
 import { modelFamilies, familyOf, modelForFamily, modelForSource, channelOf, type FamilyGroup } from "@/services/adapters/localChannels";
 import { useCatalogStore } from "@/store/catalogStore";
+import { useSettingsStore } from "@/store/settingsStore";
+import { listPresetOptions, listPresetSchemes } from "@/lib/presetSchemes";
 import { estimateCost as estimateCreditCost } from "@/lib/genParams";
 import { useRefVideoSeconds } from "@/store/videoDurationStore";
 import { METHOD_LABELS, modelMethods, clampMethod } from "@/lib/videoMethods";
@@ -38,6 +41,7 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 
 
 	const [activePopoverKey, setActivePopoverKey] = useState<string | null>(null);
+	const promptRef = useRef<NodePromptEditorHandle>(null);
 	const [paramPanelExpanded, setParamPanelExpanded] = useState(false);
 	const wrapRef = useRef<HTMLDivElement>(null);
 	const { setViewport: rfSetViewport, getViewport: rfGetViewport } = useReactFlow();
@@ -68,7 +72,11 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 		return () => clearTimeout(t);
 	}, [activePopoverKey, paramPanelExpanded, rfGetViewport, rfSetViewport]);
 
-	const channelModelOptions = useMemo(() => getChannelModelsForNodeType(node?.type ?? "video"), [node]);
+	const catalog = useCatalogStore(s => s.catalog);
+	// 只显示视频预设；目录热更和视频自定义修改均立即刷新。
+	useSettingsStore((s) => s.customPresets);
+	const presetSchemes = listPresetSchemes("video");
+	const channelModelOptions = useMemo(() => getChannelModelsForNodeType(node?.type ?? "video"), [node, catalog]);
 
 	// 视频模型三级折叠（第163轮）：家族（模型种类）→ 渠道/线路（模式名/LibTV/即梦）→ 模型（款式）。
 	// 家族=一级筛选（用户定「以模型为首要筛选」）；家族顺序按 catalog.families 下发序。
@@ -124,6 +132,7 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 	// 视口坐标（⚠ hooks 必须全部在下方 early return 之前：面板开着时节点被删，node 变 undefined
 	// 走 early return，若此 hook 在 return 之后会触发 "Rendered fewer hooks" 崩溃——存量 bug，勿移回）
 	const viewport = useCanvasStore((s) => s.viewport);
+	const canvasMode = useUiStore((s) => s.canvasMode);
 
 	if (!node || !view) return null;
 	const { def, params, adapter, mode, cost } = view;
@@ -229,7 +238,15 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 	const nodeCenterX = node.x * zoom + viewport.x + (node.w / 2) * zoom;
 	const nodeBottomY = (node.y + node.h) * zoom + viewport.y;
 
-	const wrapperStyle: CSSProperties = {
+	const wrapperStyle: CSSProperties = canvasMode?.type === "asset-pick" && canvasMode.targetNodeId === nodeId ? {
+		position: "fixed",
+		left: "50%",
+		bottom: "18px",
+		transform: "translate(-50%, 0) scale(0.9)",
+		transformOrigin: "bottom center",
+		zIndex: 10001,
+		pointerEvents: "none",
+	} : {
 		position: "absolute",
 		left: `${nodeCenterX}px`,
 		top: `${nodeBottomY + 8}px`,
@@ -273,19 +290,19 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 						identityEnabled={!!catModel?.officialAssets}
 						identityIndexes={[...officialSel]}
 						onToggleIdentity={toggleOfficialImage}
-						rightAction={<PromptExpandButton title="编辑视频提示词" getValue={() => mapUpstreamText(prompt, upstreamTextSources(nodeId).map((source) => source.text))} onSave={(v) => setParam({ prompt: v })} placeholder="输入提示词…" getExtra={() => <NodeMaterialBay nodeId={nodeId} identityEnabled={!!catModel?.officialAssets} identityIndexes={[...officialSel]} onToggleIdentity={toggleOfficialImage} />} getMentions={() => getNodeMaterialItems(nodeId)} onImport={(cand) => importAssetToNode(nodeId, cand)} onMatchAssets={(draft) => matchNodeDraftAssets(nodeId, draft)} />}
+						rightAction={<PromptExpandButton title="编辑视频提示词" getValue={() => mapUpstreamText(prompt, upstreamTextSources(nodeId).map((source) => source.text))} onSave={(v) => setParam({ prompt: v })} placeholder="输入提示词…" getExtra={() => <NodeMaterialBay nodeId={nodeId} identityEnabled={!!catModel?.officialAssets} identityIndexes={[...officialSel]} onToggleIdentity={toggleOfficialImage} />} getMentions={() => getNodeMaterialItems(nodeId)} onImport={(cand) => importAssetToNode(nodeId, cand)} getPresets={() => listPresetOptions("video")} onMatchAssets={(draft) => matchNodeDraftAssets(nodeId, draft)} />}
 					/>
 
 					{/* 提示词输入区（自适应高度，超出内部滚动，不撑高面板）*/}
 					<div className="min-w-0 relative mt-1">
-						<NodePromptEditor nodeId={nodeId} prompt={prompt} onChange={(v) => setParam({ prompt: v })} placeholder={mode?.inputHint ?? "输入提示词生成视频..."} />
+						<NodePromptEditor ref={promptRef} nodeId={nodeId} prompt={prompt} onChange={(v) => setParam({ prompt: v })} placeholder={mode?.inputHint ?? "输入提示词生成视频..."} />
 						
 					</div>
 				</div>
 
 				{/* 下列 20%：可选功能区（py 压缩） */}
 				<div className="flex items-center justify-between gap-3 px-5 py-2 shrink-0">
-					<div className="flex items-center gap-2 min-w-0">
+					<div className="flex flex-wrap items-center gap-2 min-w-0">
 						{/* 模型选择（置于滚动容器外，避免下拉被 overflow 裁剪） */}
 						<div className="relative shrink-0">
 							<button
@@ -354,7 +371,7 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 						{famGrp && famChannels.length > 0 && (
 							<div className="relative shrink-0">
 								<button
-									title="渠道/线路：同一模型家族在不同渠道的线路"
+									title="线路"
 									onClick={(e) => {
 										e.stopPropagation();
 										setParamPanelExpanded(false);
@@ -412,7 +429,7 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 						)}
 
 						{/* 「模型」三级选择（线路 pill 旁）：线路内的具体款式（Seedance 2.0 / Fast / VIP…） */}
-						{srcCh && (
+						{srcCh && !adapter?.key.startsWith("route:") && (
 							<div className="relative shrink-0">
 								<button
 									onClick={(e) => {
@@ -541,6 +558,14 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 								)}
 							</AnimatePresence>
 						</div>
+
+						<NodePresetPicker
+							schemes={presetSchemes}
+							onCreate={() => { setActivePopoverKey(null); useUiStore.setState({ settingsOpen: true, settingsTab: "videoPresets" }); }}
+							open={activePopoverKey === "preset"}
+							onOpenChange={(open) => { setParamPanelExpanded(false); setActivePopoverKey(open ? "preset" : null); }}
+							onSelect={(id, name) => promptRef.current?.insertPreset(id, name)}
+						/>
 
 						{/* 功能动作按钮（横向滚动，胶囊/下拉不在此容器内） */}
 						<div className="flex items-center gap-2 min-w-0 overflow-x-auto [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: "none" }}>

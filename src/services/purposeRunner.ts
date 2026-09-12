@@ -16,12 +16,13 @@
  * 使画布与表格真正共用唯一一条提交路径（届时 TaskTracker 由单例统一调度）。
  */
 
-import type { Purpose } from "@/contract";
+import type { Purpose, GenerateRequest } from "@/contract";
 import { getPurposeMeta } from "@/lib/purposeRegistry";
 import { getAdapter } from "./adapters/registry";
 import { resolveAssetModelKey } from "./adapters/channelAdapter";
 import { trackTask } from "./taskCenter";
 import type { TaskExtra } from "./adapters/types";
+import { usedPresetsForRequest } from '@/lib/usedPromptPresets';
 
 export interface RunPurposeInput {
 	/** 已合成的提示词正文（表格模式直接给正文；模板化调用可改用 variables/templateId） */
@@ -132,8 +133,18 @@ export async function runPurpose(
 	if (inp.onProgress) submitInput._onClientProgress = inp.onProgress;
 
 	try {
+		let localBackup: GenerateRequest | undefined;
+		if (/^(libtv-|dreamina-|comfyui-)/.test(adapter.key)) {
+			const variables = inp.variables ?? { prompt: inp.prompt ?? '' };
+			const usedPresets = usedPresetsForRequest({ purpose, model: adapter.key, clientTaskId: '', projectId: '', variables });
+			if (usedPresets?.length) {
+				const ps = (await import('@/store/projectStore')).useProjectStore.getState();
+				localBackup={model:adapter.key,purpose,clientTaskId:'',projectId:(inp.input?.projectId as string)||ps.savePath||ps.name||'',usedPresets};
+			}
+		}
 		inp.onProgress?.(10, "queued");
 		const { taskId } = await adapter.submit(submitInput, inp.params ?? {}, meta.nodeType);
+		if(localBackup) void import('./managedClient').then(({managedClient})=>managedClient.backupLocalPromptUse({...localBackup!,clientTaskId:taskId})).catch(()=>console.warn('[preset-backup] 本地渠道预设备份失败'));
 		inp.onTaskId?.(taskId, adapter.key);
 
 		// 3. 复用通用 TaskTracker 集中轮询（客户端不超时，直到服务端给出 success/failed）

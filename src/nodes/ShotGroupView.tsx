@@ -26,6 +26,9 @@ import {
 	parseRatio, shotGridOf, moveItem,
 } from "@/lib/shotGroup";
 import { useDisplayUri } from "./ResultView";
+import { useUiStore } from "@/store/uiStore";
+import { isCanvasMediaAlreadyAdded } from "@/canvas/canvasInteraction";
+import { addNodeMaterialFromAsset, listNodeMaterials } from "@/canvas/nodeMaterials";
 
 /** 按当前节点宽度反推新宫格/比例下的节点高度（宽度不变，只调高度；工具条已悬浮、不占体高） */
 function heightFor(w: number, rows: number, cols: number, ratio: string): number {
@@ -557,16 +560,29 @@ function ShotCell({
 	onCtxMenu: (e: React.MouseEvent, idx: number) => void;
 }) {
 	const asset = useLibraryStore((s) => s.assets[assetId] ?? null);
+	const pickMode = useUiStore((s) => s.canvasMode?.type === "asset-pick" ? s.canvasMode : null);
 	const uri = useDisplayUri(asset?.uri ?? "");
+	const alreadyAdded = !!(pickMode && asset && isCanvasMediaAlreadyAdded(
+		{ id: asset.serverAssetId || asset.id, url: asset.uri, name: asset.name, media: "image" },
+		listNodeMaterials(pickMode.targetNodeId),
+	));
 	return (
 		<div
 			data-shot-node={nodeId}
 			data-shot-idx={idx}
-			className={`nodrag relative overflow-hidden bg-black/30 min-h-0 min-w-0 cursor-grab select-none transition-opacity ${dimmed ? "opacity-40" : ""
+			data-canvas-asset-id={assetId}
+			className={`nodrag relative overflow-hidden bg-black/30 min-h-0 min-w-0 cursor-grab select-none transition-opacity ${dimmed || alreadyAdded ? "opacity-[0.35]" : ""
 				} ${highlighted ? "ring-2 ring-primary" : ""}`}
 			title="按住拖动排序 · 双击放大 · 右击菜单"
-			onPointerDown={(e) => onPointerDown(e, idx)}
-			onContextMenu={(e) => onCtxMenu(e, idx)}
+			onPointerDown={(e) => { if (pickMode) e.stopPropagation(); else onPointerDown(e, idx); }}
+			onClick={(e) => {
+				if (!pickMode || !asset || alreadyAdded) return;
+				e.preventDefault();
+				e.stopPropagation();
+				addNodeMaterialFromAsset(pickMode.targetNodeId, { id: asset.serverAssetId || asset.id, url: asset.uri, name: asset.name, media: "image" });
+				useUiStore.getState().setActiveNodeId(pickMode.targetNodeId);
+			}}
+			onContextMenu={(e) => { if (pickMode) { e.preventDefault(); e.stopPropagation(); } else onCtxMenu(e, idx); }}
 			onDoubleClick={(e) => {
 				e.stopPropagation();
 				if (uri) openLightbox({ uri, name: asset?.name, media: "image" });

@@ -21,6 +21,8 @@ import {
 	uploadToNyxenAccelerationBucket,
 } from "@/services/nyxenAcceleration";
 import type { TaskExtra } from "./types";
+import { routeParams } from '@/lib/routeParams';
+import { usedPresetsForRequest } from '@/lib/usedPromptPresets';
 
 /**
  * 能力 → 可服务的画布节点类型（真实 catalog 模型的 nodeTypes 白名单）。
@@ -99,9 +101,11 @@ export function buildManagedAdapter(model: CatalogModel): ModelAdapter {
 				purpose,
 				model: model.id,
 				templateId: (input.templateId as string) || (params.template as string) || undefined,
+				inference: input.inference as GenerateRequest['inference'],
 				variables,
 				inputs: collectInputs(input),
-				params,
+				// 图片请求统一使用公共比例/分辨率契约；上游字段由服务端选定实际模型后转换。
+				params: model.capability === 'image' || model.id.startsWith('route:') ? routeParams(params, model.capability) : params,
 				output: (input.output as GenerateRequest["output"]) || {
 					format: input.schemaId ? "json" : model.capability === "text" ? "text" : "asset",
 					schemaId: input.schemaId as string | undefined,
@@ -120,6 +124,7 @@ export function buildManagedAdapter(model: CatalogModel): ModelAdapter {
 			// 表格按键与画布节点共用本 submit（§11.1 唯一请求路径），一处预检覆盖全部提交入口。
 			const matErr = checkMaterialLimits(model.label, model.matLimits, req.inputs);
 			if (matErr) throw new Error(matErr);
+			if ((req.inputs?.images?.length ?? 0) + (req.inputs?.videos?.length ?? 0) + (req.params?.firstFrameUrl ? 1 : 0) < (model.minVisualMaterials ?? 0)) throw new Error('该线路至少需要一份图片或视频参考素材');
 
 			const catalog = useCatalogStore.getState().catalog;
 			if (shouldUseNyxenAcceleration(model, catalog)) {
@@ -134,6 +139,7 @@ export function buildManagedAdapter(model: CatalogModel): ModelAdapter {
 				req = nyxenRequestForWire(acceleratedReq);
 			}
 
+			req.usedPresets = usedPresetsForRequest(req);
 			const { taskId } = await managedClient.generate(req);
 			return { taskId };
 		},

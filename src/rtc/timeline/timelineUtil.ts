@@ -12,6 +12,24 @@ export const RULER_H = 28;
 export const ROW_H = 64;
 /** 文本类轨道行高（用户定稿：缩到一半——文本片段只需一行内容文字） */
 export const ROW_H_TEXT = 32;
+
+/**
+ * 时间画布内的播放头横坐标。
+ *
+ * 标尺三角与贯穿线必须都使用这个局部坐标；轨道头宽度只由外层时间画布的起点负责，
+ * 不能在播放头自身重复叠加，否则可变面板布局下两者会落入不同坐标系。
+ */
+export function playheadOffsetPx(playheadUs: number, pxPerSec: number): number {
+	const safeUs = Number.isFinite(playheadUs) ? Math.max(0, playheadUs) : 0;
+	const safePxPerSec = Number.isFinite(pxPerSec) ? Math.max(0, pxPerSec) : 0;
+	return (safeUs / 1_000_000) * safePxPerSec;
+}
+
+/** 空白区手势结束：单击定位播放头，真正拖动则保留框选语义且不 seek。 */
+export function blankClickSeekUs(moved: boolean, pointerDownUs: number): number | null {
+	if (moved) return null;
+	return Number.isFinite(pointerDownUs) ? Math.max(0, pointerDownUs) : 0;
+}
 /** 某轨道的行高（时间轴几何全链的唯一口径：渲染/指针换算/缝隙/幽灵落点都用它） */
 export function rowHeightOf(t: { type: RtcTrackType }): number {
 	return t.type === "text" ? ROW_H_TEXT : ROW_H;

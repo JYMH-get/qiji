@@ -7,6 +7,7 @@ import { useMemo } from "react";
 import { activeRtcDoc, useRtcStore } from "@/store/rtcStore";
 import { useProjectStore } from "@/store/projectStore";
 import { mainTrackSegAt } from "./rtcCenterTabCore";
+import { chooseWorkbenchSegment, workbenchEditable } from "./rtcWorkbenchTargetCore";
 import type { RtcSegment, RtcTrack } from "@/types/rtc";
 import type { StoryboardShot, VideoEpisode } from "@/services/projectFile";
 
@@ -35,8 +36,8 @@ export function useRtcSelected(): RtcSelected | null {
 
 /**
  * 中栏「AI 工作台」的绑定目标（第240轮补充3 用户定稿「默认显示当前时间的 ai 界面」）：
- * 显式选中的**可编辑片段**优先；无选中（或选中的不可编辑）→ 回退**播放头下主轨的可编辑片段**——
- * 播放头停在待生成/已成片的片段上时工作台直接绑定它（三栏常显，不再出现「未选中」引导黑屏）。
+ * **播放头下主轨的可编辑片段优先**；播放头处为空白/纯素材时，才回退显式选中的可编辑片段——
+ * 播放跨过分镜边界时即使旧选中仍停在上一镜，工作台也必须切到当前分镜。
  *
  * ⚠ 「可编辑」的判据（第251轮需求⑦，勿收回成 `kind === "placeholder"`）：
  *   **占位符 或 带 shotRef 的片段**。用户实报「占位符变成成品后丢失了 AI 工作台数据，
@@ -45,11 +46,6 @@ export function useRtcSelected(): RtcSelected | null {
  *   （重跑落在上方新占位，原结果原位保留，见 timeline/segActions.regenerateShotResult）。
  * ⚠ 播放头选择器只返回 doc 里的稳定 seg 引用（帧级 playheadUs 变化下结果不变=不重渲染）。
  */
-/** 该片段能否进 AI 工作台（占位符=待生成的坑位；带 shotRef 的成片=可二次编辑重跑） */
-function workbenchEditable(seg: { kind: string; shotRef?: unknown }): boolean {
-	return seg.kind === "placeholder" || !!seg.shotRef;
-}
-
 export function useWorkbenchTarget(): RtcSelected | null {
 	const sel = useRtcSelected();
 	const doc = useRtcStore(activeRtcDoc);
@@ -58,10 +54,12 @@ export function useWorkbenchTarget(): RtcSelected | null {
 		return m && workbenchEditable(m.seg) ? m.seg : null;
 	});
 	return useMemo(() => {
-		if (sel && workbenchEditable(sel.seg)) return sel;
-		if (!doc || !phSeg) return null;
+		const targetSeg = chooseWorkbenchSegment(sel?.seg ?? null, phSeg);
+		if (!targetSeg) return null;
+		if (sel?.seg.id === targetSeg.id) return sel;
+		if (!doc) return null;
 		for (const track of doc.tracks) {
-			const segIndex = track.segments.findIndex((s) => s.id === phSeg.id);
+			const segIndex = track.segments.findIndex((s) => s.id === targetSeg.id);
 			if (segIndex >= 0) return { seg: track.segments[segIndex], track, segIndex };
 		}
 		return null;

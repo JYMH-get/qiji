@@ -12,6 +12,14 @@ const rect = (id: string, x: number, y: number, w = 240, h = 200, type = "text.s
 });
 const edge = (source: string, target: string): PushEdge => ({ source, target });
 
+it("标记覆盖业务节点和其他标记时不触发全局避让或拖动挤开", () => {
+	const business = rect("B", 0, 0);
+	const marker = rect("M", 0, 0, 500, 500, "canvas.marker");
+	expect(enforceNoOverlap([business, marker, { ...marker, id: "M2" }], [])).toBeNull();
+	expect(computeBranchPush([business], [marker], [])).toBeNull();
+	expect(computeBranchPush([marker], [business], [])).toBeNull();
+});
+
 describe("collectBranch（同枝干收集：下游子树 + 独占上游链）", () => {
 	it("流水线 t→i→v：从中间节点收集 = 整行（独占上游 t 纳入）", () => {
 		const set = collectBranch("i", [edge("t", "i"), edge("i", "v")]);

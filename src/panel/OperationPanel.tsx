@@ -1,3 +1,5 @@
+import { InferenceStrategyPicker } from '@/components/InferenceStrategyPicker';
+import { canvasInference, inferencePurpose, isSplitTemplateReference, normalInferenceStrategy, type InferenceStrategy } from '@/lib/inferenceStrategy';
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useReactFlow } from "@xyflow/react";
 import type { CSSProperties } from "react";
@@ -6,6 +8,7 @@ import { Play, Sparkles, ChevronDown, FileText } from "lucide-react";
 import { useCanvasStore } from "@/store/canvasStore";
 import { ParamControl } from "./ParamControls";
 import { NodePromptEditor, type NodePromptEditorHandle } from "./NodePromptEditor";
+import { NodePresetPicker } from "./NodePresetPicker";
 import { NodeMaterialBay } from "@/nodes/NodeMaterialBay";
 import { getNodeMaterialItems, importAssetToNode, upstreamTextSources } from "@/canvas/nodeMaterials";
 import { mapUpstreamText } from "@/lib/upstreamText";
@@ -119,6 +122,7 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 
 	// 监听视口坐标以计算屏幕绝对位置
 	const viewport = useCanvasStore((s) => s.viewport);
+	const canvasMode = useUiStore((s) => s.canvasMode);
 	// 模型备注（第166轮）：悬浮积分图标显示——管理端备注优先，未设=默认参考素材上限（matLimits 派生）
 	const noteModel = useCatalogStore((s) => {
 		const key = view?.adapter?.key;
@@ -174,7 +178,7 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 
 	if (!node || !view) return null;
 	const { def, params, adapter, mode, cost } = view;
-	// 家族三级折叠（第163轮）：图像节点「家族（模型种类）→ 渠道/线路 → 模型」与视频面板同款；
+	// 自动路由图像节点选择家族与线路，具体上游模型由服务端决定。
 	// 文本/音频不折叠（模型平铺，行为不变）。视频节点走独立 VideoOperationPanel。
 	const srcFamilies = def.capability === "image"
 		? modelFamilies(
@@ -213,8 +217,15 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 		?? (def.purpose ? catalogState.defaultTemplate(def.purpose) : undefined);
 	const templateLabel = effectiveTemplate?.name ?? "无可用模板";
 
-	const setParam = (patch: Record<string, unknown>) =>
-		dispatchCommand({ type: "updateNodeParams", id: nodeId, params: patch });
+	const inferenceConfig = node.type === 'smart.infer' ? canvasInference(node, useCanvasStore.getState().nodes, edgesMap, catalogState.catalog?.templates ?? []) : null;
+	const inferenceRangeError = inferenceConfig?.durationError;
+	const setParam = (patch: Record<string, unknown>) => {
+		const oldStrategy = (params.inferenceStrategy as InferenceStrategy | undefined) ?? { templateId: params.templateId as string | undefined };
+		const all = catalogState.catalog?.templates ?? [];
+		const migration = inferenceConfig && !params.splitInferenceStrategy && oldStrategy.source !== 'skill' && isSplitTemplateReference(all, oldStrategy.templateId)
+			? { splitInferenceStrategy: structuredClone(oldStrategy), inferenceStrategy: normalInferenceStrategy(oldStrategy, all) } : {};
+		dispatchCommand({ type: "updateNodeParams", id: nodeId, params: { ...migration, ...patch } });
+	};
 
 	// 目标模型生效的参数表（与上方 paramSchemaRaw/paramSchemaForSummary 同一把尺，只是换成目标模型解析）
 	const schemaOfModel = (mkey: string): ParamFieldLike[] => {
@@ -249,6 +260,7 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 
 
 	const onRun = () => {
+		if (inferenceRangeError) return;
 		// 无可用模型（catalog 无该能力模型）：请求不发出，直接打开「设置 → 管理端」引导连接（零兜底，不落假值）。
 		// isScript（本地脚本节点，如剧集分集）不调模型，无需模型即可运行。
 		if (!isScript && def.capability && (!adapter || !mode)) {
@@ -268,7 +280,15 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 	const nodeCenterX = node.x * zoom + viewport.x + (node.w / 2) * zoom;
 	const nodeBottomY = (node.y + node.h) * zoom + viewport.y;
 
-	const wrapperStyle: CSSProperties = {
+	const wrapperStyle: CSSProperties = canvasMode?.type === "asset-pick" && canvasMode.targetNodeId === nodeId ? {
+		position: "fixed",
+		left: "50%",
+		bottom: "18px",
+		transform: "translate(-50%, 0) scale(0.9)",
+		transformOrigin: "bottom center",
+		zIndex: 10001,
+		pointerEvents: "none",
+	} : {
 		position: "absolute",
 		left: `${nodeCenterX}px`,
 		top: `${nodeBottomY + 8}px`,
@@ -307,10 +327,30 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 				{/* 上列 80%：提示词 & 素材（输入）；底部留白压缩（红框空隙瘦身） */}
 				<div className="flex flex-col px-5 pt-5 pb-2 flex-1 min-h-[140px] border-b border-white/5">
 					{/* 素材区（可编辑）：上游连线素材(前) + 自加素材(后)，＋/拖入/粘贴添加；最右为提示词放大按钮 */}
-					<NodeMaterialBay
+					{inferenceConfig ? <div role="group" aria-label="推理输出设置" className="flex items-center gap-2 mb-3">
+            <div className="flex flex-wrap items-center gap-2 min-w-0 flex-1">
+              <select aria-label="推理范围" className="qiji-field-select rounded-full px-3 py-1.5 text-xs" value={inferenceConfig.requestScope} disabled={running || inferenceConfig.scope === 'single'} onChange={e => setParam({ inferenceScope: e.target.value, inferenceOutput: e.target.value === 'split' ? 'storyboard.split' : inferencePurpose(e.target.value === 'single', inferenceConfig.unified) })}>
+                {inferenceConfig.scope !== 'multi' && <option value="single">单卡</option>}
+                {inferenceConfig.scope !== 'single' && <><option value="multi">多卡</option><option value="split">仅拆分</option></>}
+              </select>
+                <select aria-label="输出模式" className="qiji-field-select rounded-full px-3 py-1.5 text-xs" value={inferenceConfig.unified ? 'unified' : 'storyboard'} disabled={running} onChange={e => setParam({ inferenceMode: e.target.value, inferenceOutput: inferenceConfig.requestScope === 'split' ? 'storyboard.split' : inferencePurpose(inferenceConfig.single, e.target.value === 'unified') })}>
+                  <option value="storyboard">双模</option><option value="unified">同源</option>
+                </select>
+                <select aria-label="时长范围" className="qiji-field-select rounded-full px-3 py-1.5 text-xs" value={inferenceConfig.durationPreset} disabled={running} onChange={e => setParam({ inferenceDurationPreset: e.target.value })}>
+                  <option value="4-15">4-15秒</option><option value="4-30">4-30秒</option><option value="custom">自定义</option>
+                </select>
+                {inferenceConfig.durationPreset === 'custom' && <div className="flex items-center gap-2 text-xs">
+                  {(['min', 'max'] as const).map(key => <label key={key} className="flex items-center gap-1.5 text-muted-foreground">
+                    {key === 'min' ? '最小' : '最大'}
+                    <input aria-label={key === 'min' ? '时长最小值' : '时长最大值'} type="number" step="any" min="0" disabled={running} aria-invalid={!!inferenceRangeError} title={inferenceRangeError} value={typeof inferenceConfig.customDuration[key] === 'number' || typeof inferenceConfig.customDuration[key] === 'string' ? String(inferenceConfig.customDuration[key]) : ''} onChange={e => setParam({ inferenceCustomDuration: { ...inferenceConfig.customDuration, [key]: e.target.value === '' ? '' : Number(e.target.value) } })} className="w-16 rounded-md border border-white/15 bg-white/5 px-2 py-1.5 text-foreground outline-none focus:border-violet-400 aria-[invalid=true]:border-red-400" />
+                  </label>)}
+                </div>}
+            </div>
+            <PromptExpandButton title="编辑提示词" getValue={() => mapUpstreamText(prompt, upstreamTextSources(nodeId).map(source => source.text))} onSave={onPromptEdit} placeholder="输入提示词…" />
+          </div> : <NodeMaterialBay
 						nodeId={nodeId}
 						rightAction={<PromptExpandButton title="编辑提示词" getValue={() => mapUpstreamText(prompt, upstreamTextSources(nodeId).map((source) => source.text))} onSave={onPromptEdit} placeholder="输入提示词…" getExtra={() => <NodeMaterialBay nodeId={nodeId} />} getMentions={() => getNodeMaterialItems(nodeId)} onImport={(cand) => importAssetToNode(nodeId, cand)} getPresets={def.capability === "image" ? () => listPresetOptions() : undefined} onMatchAssets={def.displayKind === "image" || def.displayKind === "video" ? (draft) => matchNodeDraftAssets(nodeId, draft) : undefined} />}
-					/>
+					/>}
 
 					{/* 提示词输入区（自适应高度，超出内部滚动，不撑高面板）*/}
 					<div className="min-w-0 relative mt-1">
@@ -321,7 +361,7 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 
 				{/* 下列 20%：可选功能区（py 压缩） */}
 				<div className="flex items-center justify-between gap-3 px-5 py-2 shrink-0">
-					<div className="flex items-center gap-2 min-w-0">
+					<div className="flex flex-wrap items-center gap-2 min-w-0 flex-1">
 						{/* 模型选择（脚本节点不调模型则隐藏；置于滚动容器外，避免上弹下拉被 overflow 裁剪） */}
 						{!isScript && (<div className="relative shrink-0">
 							<button
@@ -393,7 +433,7 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 						{!isScript && famGrp && famChannels.length > 0 && (
 							<div className="relative shrink-0">
 								<button
-									title="渠道/线路：同一模型家族在不同渠道的线路"
+									title="线路"
 									onClick={(e) => {
 										e.stopPropagation();
 										setParamPanelExpanded(false);
@@ -450,7 +490,7 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 						)}
 
 						{/* 「模型」三级选择（图像节点，线路 pill 旁）：线路内的具体款式 */}
-						{!isScript && srcCh && (
+						{!isScript && srcCh && !adapter?.key.startsWith('route:') && (
 							<div className="relative shrink-0">
 								<button
 									onClick={(e) => {
@@ -511,7 +551,10 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 
 						{/* 提示词模板选择（脚本/媒体生成节点隐藏；按节点 purpose 过滤）。
 						    无「跟随默认」占位：未显式选择时直接勾选实际生效的那条模板（与执行逻辑一致）。 */}
-						{!isScript && !isMediaGen && !!def.purpose && templateOptions.length > 0 && (
+						{inferenceConfig && <>
+              <InferenceStrategyPicker key={`${node.id}:${inferenceConfig.strategyKey}`} mode={inferenceConfig.requestScope === 'split' ? 'split' : 'infer'} value={inferenceConfig.strategy} onChange={strategy => setParam({ [inferenceConfig.strategyKey]: strategy })} disabled={running} />
+            </>}
+            {!inferenceConfig && !isScript && !isMediaGen && !!def.purpose && templateOptions.length > 0 && (
 							<div className="relative shrink-0">
 								<button
 									onClick={(e) => {
@@ -600,58 +643,13 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 							</div>
 						)}
 
-						{/* 预设方案（图片节点，置于参数右侧）：点击插入预设胶囊到提示词光标处，提交时展开为完整预设词 */}
-						{presetSchemes.length > 0 && (
-							<div className="relative shrink-0">
-								<button
-									onClick={(e) => {
-										e.stopPropagation();
-										setParamPanelExpanded(false);
-										setActivePopoverKey(activePopoverKey === "preset" ? null : "preset");
-									}}
-									title="插入出图预设方案（提交时替换为完整预设词）"
-									className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold cursor-pointer whitespace-nowrap transition-colors"
-									style={{ color: "#fcd34d", border: "1px solid rgba(245,158,11,0.4)", background: activePopoverKey === "preset" ? "rgba(245,158,11,0.22)" : "rgba(245,158,11,0.12)" }}
-								>
-									▦ 预设方案
-									<ChevronDown className="h-3 w-3" />
-								</button>
-								<AnimatePresence>
-									{activePopoverKey === "preset" && (
-										<motion.div
-											data-dropdown
-											initial={{ y: -8, opacity: 0 }}
-											animate={{ y: 0, opacity: 1 }}
-											exit={{ y: -8, opacity: 0 }}
-											transition={panelTransition}
-											style={{
-												position: "absolute",
-												top: "100%",
-												right: 0,
-												marginTop: "6px",
-												background: "rgba(22, 27, 38, 0.98)",
-												border: "1px solid rgba(255, 255, 255, 0.12)",
-												backdropFilter: "blur(20px)",
-												boxShadow: "0 8px 32px rgba(0, 0, 0, 0.6)",
-												zIndex: 1010,
-											}}
-											className="rounded-xl overflow-visible w-[288px] max-h-[300px] overflow-y-auto Qiji-scroll-thin py-1"
-											onClick={(e) => e.stopPropagation()}
-										>
-											{presetSchemes.map((p) => (
-												<button
-													key={p.id}
-													onClick={() => { promptRef.current?.insertPreset(p.id, p.name); setActivePopoverKey(null); }}
-													className="block w-full text-left px-3.5 py-2 hover:bg-white/5 cursor-pointer"
-												>
-													<div className="text-xs font-semibold" style={{ color: "#fcd34d" }}>▦ {p.name}</div>
-													<div className="text-[10px] text-muted-foreground mt-0.5" style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{p.body}</div>
-												</button>
-											))}
-										</motion.div>
-									)}
-								</AnimatePresence>
-							</div>
+						{def.capability === "image" && (
+							<NodePresetPicker
+								schemes={presetSchemes}
+								open={activePopoverKey === "preset"}
+								onOpenChange={(open) => { setParamPanelExpanded(false); setActivePopoverKey(open ? "preset" : null); }}
+								onSelect={(id, name) => promptRef.current?.insertPreset(id, name)}
+							/>
 						)}
 
 						{/* 功能动作按钮（横向滚动，胶囊/下拉不在此容器内） */}
@@ -675,13 +673,13 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 							<span className="flex items-center cursor-help" title={modelNoteText(noteModel) || undefined}>
 								<Sparkles className="h-3.5 w-3.5 text-amber-400" />
 							</span>
-							<span>{cost}积分</span>
+							<span>{noteModel?.tokenPricing?.enabled ? "预扣10积分" : cost+"积分"}</span>
 						</span>
 						<button
 							onClick={onRun}
-							disabled={running}
+							disabled={running || !!inferenceRangeError}
 							className="h-8 w-8 rounded-full p-0 flex items-center justify-center cursor-pointer bg-[color:var(--node-accent)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
-							title="运行节点"
+							title={inferenceRangeError || '运行节点'}
 						>
 							<Play className="h-4 w-4" fill="currentColor" />
 						</button>

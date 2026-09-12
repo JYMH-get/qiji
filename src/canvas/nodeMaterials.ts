@@ -171,14 +171,10 @@ export async function addNodeMaterialFiles(nodeId: string, files: File[]): Promi
 		const kind = uploadKindFromFile(file);
 		if (kind === "script") continue; // 仅媒体作素材
 		let assetId: string;
-		let displayUri: string;
-		let localPath: string | null;
 		useUploadStore.getState().begin(key); // 素材区显示占位符+转圈
 		try {
 			const up = await uploadMediaToCanvasAsset(file);
 			assetId = up.assetId;
-			displayUri = up.displayUri;
-			localPath = up.localPath;
 		} catch (err) {
 			alert(`素材上传失败（未做 OSS 存储）：${err instanceof Error ? err.message : "未知错误"}`);
 			continue;
@@ -194,11 +190,7 @@ export async function addNodeMaterialFiles(nodeId: string, files: File[]): Promi
 			arr.push({ id: assetId, url, name: file.name });
 		});
 		syncNodeLegend(nodeId); // 添加素材同步加入图例前缀
-		// 同时进「本地素材库」（origin=upload），供跨节点复用
-		useLibraryStore.getState().addAsset({
-			id: assetId, kind, name: file.name, uri: displayUri, serverAssetId: assetId,
-			thumbnailUri: null, createdAt: new Date().toISOString(), deletedByUser: false, localPath, origin: "upload",
-		});
+		// 节点参考上传只服务当前节点；不再沉淀到画布顶部的本地复用栏。
 	}
 }
 

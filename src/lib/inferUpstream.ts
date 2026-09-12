@@ -1,27 +1,26 @@
 /**
- * inferUpstream —— 智能推理节点的「上游类型 → 可用用途」判定（第108轮，单卡/多卡重做）。
+ * inferUpstream —— 智能推理节点的「上游类型 → 请求范围」判定。
  *
  * 用户定的规则（单卡独立为专属用途 storyboard.singleShot 后）：
  *  - 上游有**智能推理节点**（分镜n原文节点即此形态：接自分集推理/原文拆分）→ **仅单卡推理**；
  *  - 上游有**剧集分集节点**（episode.split：投影/裂变的分集流水线）→ **仅多卡推理**（含智能拆分）；
  *  - **无上游或其他上游**（如手动连全文文本节点）→ 多卡/单卡/拆分都可选。
  *
- * 三个消费方共用（同一把尺）：面板模板下拉过滤、执行时允许集与默认模板回退、
- * 106轮模板联动的扇出门禁（用途不符的节点不同步模板）。
+ * 仅约束请求输出范围；创作方案列表与模板联动不受单卡/多卡范围影响。
  */
 import type { Purpose } from "@/contract";
 import type { CanvasNode, CanvasEdge } from "@/types";
 import { SMART_INFER_MULTI_TPL, SMART_INFER_SINGLE_TPL } from "@/lib/smartInferPrompts";
 
 // 图视同源用途（图片与视频共用一段提示词）与原双结果用途**并列可选**：单卡场景多一个「同源单卡」、
-// 多卡场景多一个「同源多卡」——用哪套由用户选模板/项目「图视同源」开关决定，同一套卡解析。
+// 多卡场景多一个「同源多卡」——由节点输出选择决定，同一套卡解析。
 
 export interface SmartInferContext {
 	/** single=仅单卡 / multi=仅多卡（含拆分）/ both=全部 */
 	scope: "single" | "multi" | "both";
-	/** 模板下拉/执行允许的用途集合 */
+	/** 该场景允许请求的输出用途集合，不用来过滤创作方案 */
 	purposes: Purpose[];
-	/** 该场景下未显式选模板时的默认模板 id */
+	/** 旧模板选择器的默认值；新版创作方案使用目录默认项 */
 	defaultTemplateId: string;
 }
 

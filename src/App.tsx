@@ -346,6 +346,9 @@ export default function App() {
 				hbFailures.current = 0;
 				// 全量刷新 user（积分 + features 开关）：管理端改「可用模式」≤30s 生效
 				if (r.user) useConnectionStore.getState().setSession(true, r.user);
+				// 线路/模型配置改变不会改变账号归属；每次成功心跳同步目录版本（未变返回304）。
+				const catalog = useCatalogStore.getState();
+				if (!catalog.loading) void catalog.syncCatalog();
 			} else if (r.authRejected) {
 				// 服务端明确拒绝（API 密钥失效 / 用户被禁用 / 被其它设备抢占登录）→ 立即登出
 				hbFailures.current = 0;

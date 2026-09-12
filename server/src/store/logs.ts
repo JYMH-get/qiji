@@ -1,3 +1,4 @@
+import { finishChannelObservation } from './channelObservations.ts';
 /**
  * 请求记录（按天分文件的轻量索引 + 分条详情）。
  *
@@ -23,6 +24,7 @@ import { scrubChannelInfo } from "../errorScrub.ts";
 import { readJsonl, genId, truncateBase64, DATA_DIR } from "./db.ts";
 import { db } from "./sqlite.ts";
 import type { GenerateRequest } from "../contract.ts";
+import { observeUpstream, finishRouteObservation } from '../routeObservations.ts';
 
 const LEGACY_FILE = "logs.jsonl"; // 旧的单文件索引（第129轮前）；首启迁移后改名 .migrated
 const INDEX_DIR_NAME = "logs-index"; // 按天分文件的索引目录（相对 DATA_DIR）
@@ -104,6 +106,8 @@ export interface LogMeta {
 	ownerId?: string;
 	purpose?: string; // 请求方式 / 在哪一步
 	model?: string;
+	textBilling?: import("../contract.ts").TextBill;
+	usage?: import("../contract.ts").TextTokenUsage;
 	cost?: number; // 本次消耗积分——**用户侧实扣**（按其直属商售价；平台直属=平台价）
 	/** 归属链各级渠道商的结算侧实扣（第124轮补：直属商→根，仅记 >0 的级）。
 	 *  「每个环节只看自身积分变化」：门户显示本商那份、源站显示根级那份（=源站实收）、
@@ -128,6 +132,7 @@ export interface LogMeta {
 
 /** 单条重报文：存 data/logs/<id>.json，仅详情视图/对账按需读取 */
 export interface LogDetail {
+	routing?: { lineId: string; modelId: string; channelId: string; publicModel: string };
 	requestHeaders?: unknown; // ① 用户 → 管理端 的请求头（敏感值已脱敏）
 	request?: unknown; // ① 用户 → 管理端 的完整请求体（截断 base64）
 	response?: unknown; // ② 管理端 → 用户 的完整响应 / 结果（截断 base64）
@@ -255,6 +260,8 @@ function toMeta(r: Record<string, unknown>): LogMeta {
 		purpose: r.purpose as string | undefined,
 		model: r.model as string | undefined,
 		cost: r.cost as number | undefined,
+		textBilling: r.textBilling as LogMeta["textBilling"],
+		usage: r.usage as LogMeta["usage"],
 		status: (r.status as LogMeta["status"]) ?? "failed",
 		startedAt: String(r.startedAt ?? new Date().toISOString()),
 		finishedAt: r.finishedAt as string | undefined,
@@ -524,13 +531,14 @@ function applyFinishMeta(m: LogMeta, patch: FinishPatch): void {
 	m.durationMs = new Date(m.finishedAt).getTime() - new Date(m.startedAt).getTime();
 	if (patch.queuedMs !== undefined && patch.queuedMs > 0) m.queuedMs = patch.queuedMs;
 	// 第168轮：请求记录的失败原因擦除渠道识别信息（会经 /v1/logs 与门户下发；③④上游段不受影响）
-	if (patch.error) m.error = scrubChannelInfo(patch.error);
+	if (patch.error) m.error = scrubChannelInfo(patch.error, !m.model?.startsWith('route:'));
 	if (patch.taskId) m.taskId = patch.taskId;
 	if (patch.response !== undefined) m.resultLink = resultLinkFrom(patch.response) || undefined;
 }
 
 /** 完成一条日志：更新索引元信息（防抖落盘）+ 把 ②响应 写入详情文件 */
 export function finishLog(id: string, patch: FinishPatch): void {
+  if (patch.status === 'success' || patch.status === 'failed') { finishRouteObservation(id, patch.status === 'success', patch.error); finishChannelObservation(id, patch.status === 'success', patch.error); }
 	const m = index.find((x) => x.id === id);
 	if (!m) return;
 	applyFinishMeta(m, patch);
@@ -557,6 +565,7 @@ export function rewriteLogResult(id: string, response: unknown): void {
 export function finishLogsBulk(patches: ({ id: string } & FinishPatch)[]): void {
 	if (!patches.length) return;
 	for (const p of patches) {
+		if (p.status === 'success' || p.status === 'failed') finishRouteObservation(p.id, p.status === 'success', p.error);
 		const m = index.find((x) => x.id === p.id);
 		if (!m) continue;
 		applyFinishMeta(m, p);
@@ -610,11 +619,15 @@ export function getRunningLogs(): LogEntry[] {
 
 /** 记录上游(管理端↔网关/第三方)的请求体与原始响应；只写详情文件、不动索引。 */
 export function attachUpstream(id: string, rec: { request?: unknown; response?: unknown }): void {
+  observeUpstream(id, rec);
 	if (!index.some((x) => x.id === id)) return;
 	const patch: LogDetail = {};
 	if (rec.request !== undefined) patch.upstreamRequest = truncateBase64(rec.request);
 	if (rec.response !== undefined) patch.upstreamResponse = truncateBase64(rec.response);
 	if (patch.upstreamRequest !== undefined || patch.upstreamResponse !== undefined) patchDetail(id, patch);
+}
+export function attachRouting(id: string, routing: NonNullable<LogDetail['routing']>): void {
+	patchDetail(id, { routing });
 }
 
 export interface LogFilter {
@@ -880,4 +893,11 @@ export function requestStats(days = 14): {
 		byPurpose: top(byPurpose, 10).map(([key, count]) => ({ key, label: purposeLabel(key) || key, count })),
 		byModel: top(byModel, 10).map(([key, count]) => ({ key, count })),
 	};
+}
+
+export function updateTextBillingLog(id: string, billing: import('../contract.ts').TextBill, usage?: import('../contract.ts').TextTokenUsage): void {
+  const m = index.find(x => x.id === id); if (!m) return;
+  if (m.agentCosts?.length) m.agentCosts = m.agentCosts.map(a => ({...a, cost: billing.cost}));
+  else m.cost = billing.cost;
+  m.textBilling = billing; m.usage = usage; markDirty(m); flushIndex();
 }

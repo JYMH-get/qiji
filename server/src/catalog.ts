@@ -1,3 +1,5 @@
+import { routedFamily, publicRoutingModels, routingVersion, routingConfig, publicId, routingEnabled, routingFamilies, routeFamilyName, routeCapability } from "./autoRouting.ts";
+import { imageRouteParams } from "./imageRouting.ts";
 /**
  * 管理端目录（catalog）数据 —— 远程下发给用户端的模型/模板/出图模板/变体前缀/schema。
  *
@@ -28,6 +30,8 @@ function buildTemplates(agentId?: string): CatalogTemplate[] {
 		.sort((a, b) => a.order - b.order)
 		.map((t) => ({
 			id: t.id,
+			aliases: t.aliases,
+			outputDurationLimit: t.outputDurationLimit,
 			name: t.name,
 			capability: t.capability,
 			purpose: t.purpose,
@@ -193,13 +197,13 @@ export function buildCatalog(agentId?: string): Catalog {
 	//   停用的模式：其下模型整体不下发（客户端隐藏；调用另有 routes 403 兜底）；
 	//   停用的家族：仅剥模型的 familyId（客户端归「其他」分组——家族是纯展示维度，模型仍可用）；
 	//   模型按「模式 order」稳定排序（同模式内保持原序）→ 客户端源折叠/家族内线路顺序跟随管理端拖动排序。
-	const modeList = listModes();
+	const modeList = [...listModes(), ...(routingEnabled() ? routingConfig().lines.map(l => ({ id: publicId(l.id), name: l.name, enabled: l.enabled })) : [])];
 	const modeIdx = new Map(modeList.map((m, i) => [m.id, i]));
 	const disabledModes = new Set(modeList.filter((m) => m.enabled === false).map((m) => m.id));
 	const disabledFams = new Set(listFamilies().filter((f) => f.enabled === false).map((f) => f.id));
 	const modeRank = (modeId?: string): number =>
 		modeId ? (modeIdx.get(modeId) ?? modeList.length) : modeList.length + 1; // 无模式（默认源）恒最后
-	const models: CatalogModel[] = listEnabledModels()
+	const models: CatalogModel[] = [...listEnabledModels().filter(m => !routedFamily(m)), ...publicRoutingModels(agentId)]
 		.filter((m) => !m.hidden && modelAllowedForAgent(m, agentId) && !(m.modeId && disabledModes.has(m.modeId)))
 		// 排序键（第176轮）：模式 order → 模型 order（管理端同组内拖动）→ 原始加入序（稳定）
 		.sort((a, b) => modeRank(a.modeId) - modeRank(b.modeId)
@@ -219,8 +223,11 @@ export function buildCatalog(agentId?: string): Catalog {
 			refVideoSecondsWeight: m.refVideoSecondsWeight, // 第140轮：参考视频按秒计费系数（供客户端预估；实扣以服务端为准）
 			matLimits: m.matLimits, // 第145轮：素材数量上限（管理端可调；服务端硬闸为准，客户端提交前同尺预检）
 			note: m.note, // 第166轮：模型备注（管理端可编辑，用户可见）——客户端悬浮积分图标显示；未设=客户端按 matLimits 派生默认文案
-			params: m.params,
-			cost: m.cost,
+			// 用户目录只下发公共图片参数；管理端保存的上游 size 等字段不泄漏到客户端。
+			params: m.capability === "image" ? (imageRouteParams([m]) ?? []) : m.params,
+			minVisualMaterials: m.minVisualMaterials,
+			cost: m.tokenPricing?.enabled ? 10 : m.cost,
+			tokenPricing: m.tokenPricing,
 			costField: m.costField,
 			costPerUnit: m.costPerUnit,
 			// 仅投影计费相关字段（不含上游真实模型名），供客户端按档精确预估（平台价，P1 统一定价）
@@ -236,15 +243,17 @@ export function buildCatalog(agentId?: string): Catalog {
 	const pv = chainPricingVersion(agentId);
 	return {
 		// 版本并入模板版本：模型或模板任一改动都触发用户端热更新；
+		routedFamilies: routingEnabled() ? routingFamilies() : undefined,
 		// 渠道商用户再并入其归属链定价版本（改价 → 名下用户 catalog 版本变化 → 客户端热更预估价）；
 		// 第131轮再并入模式注册表版本（管理端改模式名/增删模式 → 客户端下拉分组名热更）；
 		// 第163轮再并入家族注册表版本（改家族名/增删家族/模型改家族经 models version 或 .f 段热更）；
 		// 第174轮再并入预设库版本（预设拆为独立存储后改预设不再 bump 模板版本，须自带热更段）
 		// 同版本的不同受众也可能有不同模型/模板；用户迁移后必须拉取目标受众目录，不能误回 304。
-		version: `${catalogVersion()}.t${templatesVersion()}${pv ? `.p${pv}` : ""}.m${modesVersion()}.f${familiesVersion()}.ps${presetsVersion()}.a${encodeURIComponent(audienceOf(agentId))}`,
+		version: `${catalogVersion()}.r${routingVersion()}.t${templatesVersion()}${pv ? `.p${pv}` : ""}.m${modesVersion()}.f${familiesVersion()}.ps${presetsVersion()}.a${encodeURIComponent(audienceOf(agentId))}`,
 		// 第165轮：全局停用的模式/家族不下发（客户端隐藏）；两表本就按 order 排序=管理端拖动排序直达客户端
-		modes: modeList.filter((m) => m.enabled !== false).map((m) => ({ id: m.id, name: m.name })),
-		families: listFamilies().filter((f) => f.enabled !== false).map((f) => ({ id: f.id, name: f.name, capability: f.capability })),
+		modes: modeList.filter((m) => m.enabled !== false && models.some(x => x.modeId === m.id)).map((m) => ({ id: m.id, name: m.name })),
+		families: [...listFamilies().filter((f) => f.enabled !== false).map((f) => ({ id: f.id, name: f.id === 'fam-seedance' && routingEnabled() ? 'Seedance 2.0' : f.name, capability: f.capability })),
+			...(routingEnabled() ? [...new Map(routingConfig().lines.filter(l => !listFamilies().some(f => f.id === l.familyId && f.enabled !== false)).map(l => [l.familyId, {id:l.familyId,name:routeFamilyName(l),capability:routeCapability(l)}])).values()] : [])],
 		models,
 		// 模板 + 预设兼容投影（旧客户端从模板分类读预设；新客户端走下方 presets 字段）
 		templates: [...buildTemplates(agentId), ...presetCompatTemplates()],

@@ -281,7 +281,7 @@ export async function pollJmzVideo(up: Upstream, taskId: string, onUpstream?: On
  *     （⚠ 按同站视频 API「素材与兼容字段」多图别名族推定，待真机实锤）；上限按目录/文档表（守卫绝不静默丢）。
  *   参数按款式分三形态：gpt-image-2=像素尺寸枚举+quality(low/medium/high/auto)；gemini 双子=比例串+
  *     quality(1K/2K/4K，由我方 resolution 档映射；4K 按文档示例补 extra_body.google.image_config)；
- *     grok 系=仅比例串（按模型默认质量）。客户端发的像素尺寸（SIZE_MAP 产物）→ 比例串由 gcd 约简/最近比例映射。
+ *     grok 系=仅比例串（按模型默认质量）。公共比例/分辨率由管理端先转换为本翻译器所需 size。
  *   GPT Image 2 分组：1K/2K/4K 能力由 API Key 所在分组决定（default/image2/image2 4k）——站方控制台配置，
  *     我方不传任何上游线路信息；要 4K 请运营把 Key 分到「image2 4k」分组。 */
 

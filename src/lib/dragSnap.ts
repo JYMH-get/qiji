@@ -29,10 +29,11 @@ const DEFAULT_H = 200;
 const GUIDE_PAD = 48; // 参考线越过节点两端的出头量（太短=沿边对齐时几乎看不出是线）
 
 export function snapPosition(
-	drag: { id: string; x: number; y: number; w?: number; h?: number },
+	drag: SnapRect,
 	others: SnapRect[],
 	threshold: number = SNAP_THRESHOLD,
 ): { x: number; y: number; guides: SnapGuide[] } {
+	if (drag.type === "canvas.marker") return { x: drag.x, y: drag.y, guides: [] };
 	const w = drag.w ?? DEFAULT_W;
 	const h = drag.h ?? DEFAULT_H;
 	let bestX: { d: number; line: number; other: SnapRect } | null = null;
@@ -40,7 +41,7 @@ export function snapPosition(
 	const dragXs = [drag.x, drag.x + w / 2, drag.x + w];
 	const dragYs = [drag.y, drag.y + h / 2, drag.y + h];
 	for (const o of others) {
-		if (o.id === drag.id || o.type === "group") continue;
+		if (o.id === drag.id || o.type === "group" || o.type === "canvas.marker") continue;
 		const ow = o.w ?? DEFAULT_W;
 		const oh = o.h ?? DEFAULT_H;
 		for (const ox of [o.x, o.x + ow / 2, o.x + ow]) {

@@ -223,7 +223,8 @@ describe("IncrementalSpawner 智能推理卡片流式裂变", () => {
 		expect(b.nodes.map((n) => n.type)).toEqual(["smart.infer", "text.seed", "image.gen", "video.gen"]);
 		const [txt, uni, img, vid] = b.nodes;
 		expect(txt.data.title).toBe("分镜1原文");
-		expect(txt.data.params.templateId).toBe("smart.infer.unified.single"); // 自跑仍同源
+		expect(txt.data.params.inferenceOutput).toBe("storyboard.unifiedShot"); // 同源由显式输出选择保留
+		expect(txt.data.params.templateId).not.toBe("smart.infer.unified.single");
 		expect(uni.data.title).toBe("分镜1同源提示词");
 		expect(uni.data.params.prompt).toBe("同源提示词一"); // 提示词只在同源节点（单一来源）
 		expect(img.data.title).toBe("分镜1图片");

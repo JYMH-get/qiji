@@ -294,6 +294,89 @@ export function moveSegment(doc: RtcDoc, segId: string, trackId: string, targetS
 }
 
 /**
+ * 整体移动一组选中片段，以 anchorSegId 为鼠标抓取锚点。
+ *
+ * - 选区跨轨时，以锚点从源轨到目标轨的显示层级偏移为准，各片段在同类型轨道组内同步换轨；
+ * - 所有片段保持原相对时间，碰到未选中片段时整组钳到最近合法位移，绝不逐条挤散。
+ */
+export function moveSegmentsTogether(
+	doc: RtcDoc,
+	segIds: string[],
+	anchorSegId: string,
+	targetTrackId: string,
+	anchorTargetStartUs: number,
+): RtcDoc {
+	const selected = new Set(segIds);
+	const entries = doc.tracks.flatMap((track) =>
+		track.segments.filter((seg) => selected.has(seg.id)).map((seg) => ({ track, seg })),
+	);
+	const anchor = entries.find((e) => e.seg.id === anchorSegId);
+	if (!anchor || entries.length === 0 || entries.some((e) => e.track.locked)) return doc;
+	if (entries.length === 1) return moveSegment(doc, anchorSegId, targetTrackId, anchorTargetStartUs);
+
+	const target = doc.tracks.find((t) => t.id === targetTrackId);
+	if (!target || target.locked || target.type !== anchor.track.type) return doc;
+	const displayRows = orderTracksForDisplay(doc.tracks);
+	const anchorTypeRows = displayRows.filter((t) => t.type === anchor.track.type);
+	const trackDelta = anchorTypeRows.findIndex((t) => t.id === target.id)
+		- anchorTypeRows.findIndex((t) => t.id === anchor.track.id);
+	const destinations = new Map<string, string>();
+	for (const entry of entries) {
+		const typeRows = displayRows.filter((t) => t.type === entry.track.type);
+		const sourceIndex = typeRows.findIndex((t) => t.id === entry.track.id);
+		const destination = typeRows[sourceIndex + trackDelta];
+		if (sourceIndex < 0 || !destination || destination.locked) return doc;
+		destinations.set(entry.seg.id, destination.id);
+	}
+	const destinationOf = (entry: (typeof entries)[number]) => destinations.get(entry.seg.id)!;
+	const lowerBound = -Math.min(...entries.map((e) => e.seg.targetStartUs));
+	const desiredDelta = Math.max(lowerBound, anchorTargetStartUs - anchor.seg.targetStartUs);
+	const obstaclesByTrack = new Map(
+		doc.tracks.map((track) => [track.id, track.segments.filter((seg) => !selected.has(seg.id))]),
+	);
+
+	const validDelta = (delta: number) => entries.every((entry) => {
+		const { seg } = entry;
+		const start = seg.targetStartUs + delta;
+		const end = start + seg.targetDurationUs;
+		if (start < 0) return false;
+		return (obstaclesByTrack.get(destinationOf(entry)) ?? []).every(
+			(other) => end <= other.targetStartUs || start >= segEnd(other),
+		);
+	});
+
+	// 合法解只会在期望值、0 点下界或某个障碍物边缘出现；枚举这些边界后取最近者。
+	const candidates = new Set<number>([desiredDelta, lowerBound]);
+	for (const entry of entries) {
+		for (const other of obstaclesByTrack.get(destinationOf(entry)) ?? []) {
+			candidates.add(Math.max(lowerBound, other.targetStartUs - segEnd(entry.seg)));
+			candidates.add(Math.max(lowerBound, segEnd(other) - entry.seg.targetStartUs));
+		}
+	}
+	const delta = [...candidates]
+		.filter(validDelta)
+		.sort((a, b) => Math.abs(a - desiredDelta) - Math.abs(b - desiredDelta) || a - b)[0];
+	if (delta == null) return doc; // 尾部总有解；仅防异常数据导致无合法候选
+
+	const movedByTrack = new Map<string, RtcSegment[]>();
+	for (const entry of entries) {
+		const destinationId = destinationOf(entry);
+		const moved = { ...entry.seg, targetStartUs: entry.seg.targetStartUs + delta };
+		movedByTrack.set(destinationId, [...(movedByTrack.get(destinationId) ?? []), moved]);
+	}
+	return {
+		...doc,
+		tracks: doc.tracks.map((track) => ({
+			...track,
+			segments: sortSegs([
+				...track.segments.filter((seg) => !selected.has(seg.id)),
+				...(movedByTrack.get(track.id) ?? []),
+			]),
+		})),
+	};
+}
+
+/**
  * 第238轮补充10：原文改「派生只读」——历史 doc 里落过盘的 role:"script" 原文轨（补充8-9 的
  * 旧形态）加载时整轨清除（原文现由 rtcScriptLane 从主轨实时派生，不再是片段数据）。
  * 无该轨返回原引用零开销。

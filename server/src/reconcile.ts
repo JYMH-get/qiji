@@ -1,3 +1,5 @@
+import { recoverTextBillingResults } from './store/textBilling.ts';
+import { completeTask } from './store/tasks.ts';
 /**
  * 启动对账：进程重启会杀掉内存里所有异步任务循环，这里在启动时收拾残局。
  *
@@ -10,7 +12,8 @@
  *      （这些是任务表持久化之前的存量——日志还挂 running 说明 finishLog 没跑到，也就从未退过款）。
  */
 import { listPendingTasks, failTask } from "./store/tasks.ts";
-import { finishLog, finishLogsBulk, getRunningLogs, type LogEntry } from "./store/logs.ts";
+import { finishLog, finishLogsBulk, getRunningLogs, getLog, type LogEntry } from "./store/logs.ts";
+import { pendingRouteObservationIds, finishRouteObservation } from './routeObservations.ts';
 import { settle } from "./store/credits.ts";
 import { resumeVideoPolling, rehostVideo } from "./translators/index.ts";
 import { pickVideoUrl } from "./translators/videos.ts";
@@ -28,6 +31,13 @@ function rescuableVideoUrl(l: LogEntry): string {
 
 export async function reconcileOnStartup(logger?: { info: (msg: string) => void }): Promise<void> {
 	const info = (m: string) => (logger ? logger.info(m) : console.log(m));
+	// Capture before any await: later user requests must not be swept as startup orphans.
+	const routeSnapshot = pendingRouteObservationIds();
+  for (const r of recoverTextBillingResults()) {
+    if (r.taskId) completeTask(r.taskId, r.result);
+    const log = getLog(r.logId);
+    if (log?.status === 'running') finishLog(r.logId,{status:'success',response:r.result,taskId:r.taskId});
+  }
 
 	// ① 待办任务：能续则续，不能续则失败+退款（failTask 触发退款钩子，billing 已随任务落盘）
 	const liveLogs = new Set<string>(); // 续轮询任务的日志仍是合法 running，②不得清扫
@@ -84,6 +94,12 @@ export async function reconcileOnStartup(logger?: { info: (msg: string) => void 
 		patches.push({ id: l.id, status: "failed", error: refund ? `${INTERRUPT}（已退回 ${refund} 积分）` : INTERRUPT });
 	}
 	finishLogsBulk(patches);
+	const liveRouteIds = new Set(listPendingTasks().map(t => t.routing?.observationId ?? t.logId).filter(Boolean));
+	for (const id of routeSnapshot) {
+		if (liveRouteIds.has(id)) continue;
+		const log = getLog(id);
+		finishRouteObservation(id, log?.status === 'success', log?.error ?? INTERRUPT);
+	}
 
 	if (resumed || aborted || patches.length) {
 		info(

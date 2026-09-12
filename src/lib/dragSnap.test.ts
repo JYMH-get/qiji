@@ -2,6 +2,16 @@ import { describe, it, expect } from "vitest";
 import { snapPosition } from "./dragSnap";
 
 describe("snapPosition（拖动吸附对齐）", () => {
+	it("标记拖动保持原坐标且没有对齐辅助线", () => {
+		const marker = { id: "M", type: "canvas.marker", x: 105, y: 96, w: 240, h: 200 };
+		expect(snapPosition(marker, [{ id: "B", x: 100, y: 100, w: 240, h: 200 }])).toEqual({ x: 105, y: 96, guides: [] });
+	});
+	it("普通节点不吸附到标记，普通节点之间仍然吸附", () => {
+		const drag = { id: "A", x: 105, y: 96, w: 240, h: 200 };
+		const marker = { id: "M", type: "canvas.marker", x: 100, y: 100, w: 240, h: 200 };
+		expect(snapPosition(drag, [marker])).toEqual({ x: 105, y: 96, guides: [] });
+		expect(snapPosition(drag, [{ ...marker, type: "image.gen" }]).x).toBe(100);
+	});
 	it("左缘差 ≤ 阈值 → 吸附对齐到其它节点左缘", () => {
 		const p = snapPosition({ id: "A", x: 105, y: 0, w: 240, h: 200 }, [{ id: "B", x: 100, y: 400, w: 240, h: 200 }]);
 		expect(p.x).toBe(100);

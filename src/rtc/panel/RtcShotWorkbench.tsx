@@ -11,7 +11,7 @@
  *
  * 档位值域一把尺（勿自造）：全部读写 projectStore.mediaSettings（setMediaSettings——与表格模式
  * Frame161195「视频设置」同一份**项目级**设置，两处改动互通）；图像比例/画质=genParams 的
- * IMAGE_ASPECTS / IMAGE_QUALITIES、出图 size=resolveSize（全客户端唯一一份 SIZE_MAP）、
+ * IMAGE_ASPECTS / IMAGE_QUALITIES、出图请求=比例+分辨率+质量，
  * 分辨率与视频三档/方法=**[modelOptions](@/lib/modelOptions) 按模型 key 取**——⚠ 第251轮改点：
  * 原来的 `catalog.models.find(...)` 只认 catalog，选中 ComfyUI 直连/LibTV/即梦 这类本地渠道模型时
  * 档位会掉回内置三档（480p/720p/1080p），显示与提交都错；modelOptions 会回退到适配器 paramsSchema。
@@ -22,7 +22,7 @@ import { useMemo } from "react";
 import { useProjectStore } from "@/store/projectStore";
 import { useCatalogStore } from "@/store/catalogStore";
 import ModelPicker, { useEffectiveModelKey } from "@/components/ModelPicker";
-import { clampDuration, clampImageResolution, resolveSize, IMAGE_ASPECTS, IMAGE_QUALITIES } from "@/lib/genParams";
+import { clampDuration, clampImageResolution, IMAGE_ASPECTS, IMAGE_QUALITIES } from "@/lib/genParams";
 import { METHOD_LABELS, ASPECT_LABELS, clampMethod, clampToOptions, clampDurationTo } from "@/lib/videoMethods";
 import { imageResolutionOptionsForKey, modelMethodsForKey, videoReqOptionsForKey } from "@/lib/modelOptions";
 import type { MediaSettings } from "@/services/projectFile";
@@ -53,7 +53,6 @@ export function RtcShotWorkbench({ episodeId, shotId }: { episodeId: string; sho
 	const imageAspect = ms.imageAspect ?? "16:9";
 	const imageResolution = clampImageResolution(ms.imageResolution, sbResOptions);
 	const imageQuality = ms.imageQuality ?? "high";
-	const imageSize = resolveSize(imageAspect, imageResolution);
 
 	// 生视频档位：方法/时长/分辨率/比例按当前生效视频模型 catalog 下发（本地 CLI 模型=内置回退档）
 	const vidModelKey = useEffectiveModelKey("video");
@@ -104,7 +103,7 @@ export function RtcShotWorkbench({ episodeId, shotId }: { episodeId: string; sho
 					</select>
 				</label>
 				<label style={rowSt}>
-					<span style={rowLb}>画质 <span style={{ color: "rgba(255,255,255,0.35)" }}>（size {imageSize}）</span></span>
+					<span style={rowLb}>画质 <span style={{ color: "rgba(255,255,255,0.35)" }}>（{imageAspect} · {imageResolution}）</span></span>
 					<select value={imageQuality} onChange={(e) => setMS({ imageQuality: e.target.value })} style={rowCtl}>
 						{IMAGE_QUALITIES.map((v) => <option key={v} value={v} style={optBg}>{QUALITY_LABEL[v] || v}</option>)}
 					</select>

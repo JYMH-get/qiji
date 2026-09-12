@@ -9,6 +9,7 @@
  * 生成时用 effectiveModelKey(cap) 解析出生效模型，显式传给 runPurpose({modelKey})。
  */
 import { useMemo } from "react";
+import { migratedRouteKey } from '@/lib/routeParams';
 import { SEEDANCE_FAMILY_ID, type Capability } from "@/contract";
 import { useCatalogStore } from "@/store/catalogStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -28,8 +29,10 @@ function firstModelKey(cap: Capability): string {
 	const m = models.find((x) => x.capability === cap && (!x.modeId || feats?.modes?.[x.modeId] !== false));
 	if (m) return m.id;
 	if (cap === "video") {
-		if (feats?.libtv !== false && useLibtvStore.getState().authed) return LIBTV_MODEL_CHOICES[0].id;
-		if (feats?.dreamina !== false && useDreaminaStore.getState().authed) return DREAMINA_MODEL_CHOICES[0].id;
+		const routed = useCatalogStore.getState().catalog?.routedFamilies;
+		const local = LIBTV_MODEL_CHOICES.find(c => !routed?.includes(c.familyId));
+		if (local && feats?.libtv !== false && useLibtvStore.getState().authed) return local.id;
+		if (!routed?.includes(SEEDANCE_FAMILY_ID) && feats?.dreamina !== false && useDreaminaStore.getState().authed) return DREAMINA_MODEL_CHOICES[0].id;
 		if (feats?.comfyui !== false && isComfyuiBound()) return COMFYUI_MODEL_CHOICES[0].id;
 	}
 	return "";
@@ -42,8 +45,9 @@ function keyAvailable(cap: Capability, key?: string): boolean {
 	const m = (useCatalogStore.getState().catalog?.models ?? []).find((x) => x.id === key);
 	if (m) return m.capability === cap && (!m.modeId || feats?.modes?.[m.modeId] !== false);
 	if (cap === "video") {
-		if (LIBTV_MODEL_CHOICES.some((c) => c.id === key)) return feats?.libtv !== false && useLibtvStore.getState().authed;
-		if (DREAMINA_MODEL_CHOICES.some((c) => c.id === key)) return feats?.dreamina !== false && useDreaminaStore.getState().authed;
+		const routed = useCatalogStore.getState().catalog?.routedFamilies;
+		if (LIBTV_MODEL_CHOICES.some((c) => c.id === key && !routed?.includes(c.familyId))) return feats?.libtv !== false && useLibtvStore.getState().authed;
+		if (!routed?.includes(SEEDANCE_FAMILY_ID) && DREAMINA_MODEL_CHOICES.some((c) => c.id === key)) return feats?.dreamina !== false && useDreaminaStore.getState().authed;
 		if (COMFYUI_MODEL_CHOICES.some((c) => c.id === key)) return feats?.comfyui !== false && isComfyuiBound();
 	}
 	return false;
@@ -54,6 +58,11 @@ function keyAvailable(cap: Capability, key?: string): boolean {
 export function effectiveModelKey(cap: Capability): string {
 	const override = useProjectStore.getState().projectModelConfig?.[cap];
 	if (override && keyAvailable(cap, override)) return override;
+	if (cap === 'video' || cap === 'image') {
+		const catalog = useCatalogStore.getState().catalog;
+		const migrated = migratedRouteKey(override, (catalog?.models ?? []).filter(m => keyAvailable(cap, m.id)), catalog?.routedFamilies);
+		if (migrated !== undefined) return migrated;
+	}
 	return firstModelKey(cap);
 }
 
@@ -61,7 +70,8 @@ export function effectiveModelKey(cap: Capability): string {
 export function useEffectiveModelKey(cap: Capability): string {
 	const override = useProjectStore((s) => s.projectModelConfig?.[cap]);
 	const opts = useCapModelOptions(cap);
-	return override && opts.some((o) => o.id === override) ? override : opts[0]?.id || "";
+	const routed = useCatalogStore(s => s.catalog?.routedFamilies);
+	return override && opts.some((o) => o.id === override) ? override : migratedRouteKey(override, opts, routed) ?? opts[0]?.id ?? '';
 }
 
 /**
@@ -76,6 +86,7 @@ export function useCapModelOptions(cap: Capability): ModelOpt[] {
 	const models = useCatalogStore((s) => s.catalog?.models);
 	const catalogModes = useCatalogStore((s) => s.catalog?.modes);
 	const catalogFams = useCatalogStore((s) => s.catalog?.families);
+	const routedFamilies = useCatalogStore((s) => s.catalog?.routedFamilies);
 	const modeGates = useConnectionStore((s) => s.user?.features?.modes);
 	const libtvOn = useLibtvFeature();
 	const libtvAuthed = useLibtvStore((s) => s.authed);
@@ -102,7 +113,7 @@ export function useCapModelOptions(cap: Capability): ModelOpt[] {
 	if (cap === "video" && comfyuiOn && comfyuiBound) {
 		opts.push(...COMFYUI_MODEL_CHOICES.map((c) => ({ id: c.id, label: c.label, familyId: c.familyId, familyName: famName(c.familyId) || c.familyName })));
 	}
-	return opts;
+	return opts.filter(o => !routedFamilies?.includes(o.familyId ?? '') || !!models?.some(m => m.id === o.id));
 }
 
 /** hook：家族排序（catalog.families 序），「家族→渠道/线路→模型」一级下拉顺序用 */
@@ -138,7 +149,8 @@ export default function ModelPicker({ cap, label = "模型", style, noPlaceholde
 	const opts = useCapModelOptions(cap);
 
 	// 未显式选择/选择已失效 → 自动取第一个可用（与 effectiveModelKey 同一把尺，显示=实际提交）
-	const value = override && opts.some((o) => o.id === override) ? override : opts[0]?.id ?? "";
+	const routed = useCatalogStore(s => s.catalog?.routedFamilies);
+	const value = override && opts.some((o) => o.id === override) ? override : migratedRouteKey(override, opts, routed) ?? opts[0]?.id ?? '';
 
 	// 第163轮：视频/图像能力改「家族 → 渠道/线路 → 模型」三级选择（家族=模型种类一级筛选；
 	// 渠道/线路=模式名/LibTV/即梦；模型=源内款式）。其余能力（文/音/处理类）保持旧两级：
@@ -181,7 +193,7 @@ export default function ModelPicker({ cap, label = "模型", style, noPlaceholde
 					</select>
 					{curFam && (
 						<select
-							title="渠道/线路"
+							title="线路"
 							value={curCh ? sourceValueOf(value, famChannels) : ""}
 							onChange={(e) => commit(modelForSource(e.target.value, value, famChannels))}
 							className="qiji-field-select"
@@ -192,7 +204,7 @@ export default function ModelPicker({ cap, label = "模型", style, noPlaceholde
 							))}
 						</select>
 					)}
-					{curCh && (
+					{curCh && !value.startsWith("route:") && (
 						<select
 							title="模型（本线路款式）"
 							value={value}

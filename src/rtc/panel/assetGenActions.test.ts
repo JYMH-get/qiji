@@ -2,7 +2,7 @@
  * assetGenActions 纯逻辑单测：
  *  - 五类 purpose / id 前缀映射与 AssetWorkbench 各页一致（群像共用 character 出图用途、前缀 G）；
  *  - buildAssetBaseGenSpec 与 AssetWorkbench.generateForm 逐字段对齐
- *    （params={size,quality,idPrefix,assetName}、variantId=null、无提示词明确报错不发请求）；
+ *    （params={aspect_ratio,resolution,quality,idPrefix,assetName}、variantId=null、无提示词明确报错不发请求）；
  *  - 分辨率档按模型开放集收敛（服务端控档一把尺）。
  */
 import { describe, it, expect } from "vitest";
@@ -37,7 +37,7 @@ describe("buildAssetBaseGenSpec", () => {
 			purpose: "asset.character.image",
 			prompt: "一位青年剑客",
 			modelKey: "img-model-1",
-			params: { size: "2048x1152", quality: "high", idPrefix: "C", assetName: "李云" },
+			params: { aspect_ratio: "16:9", resolution: "2k", quality: "high", idPrefix: "C", assetName: "李云" },
 			label: "李云",
 		});
 	});
@@ -60,7 +60,8 @@ describe("buildAssetBaseGenSpec", () => {
 	it("分辨率档按模型开放集收敛：默认 2k 不在开放集（仅 1k）→ 归一第一档 1k", () => {
 		const r = buildAssetBaseGenSpec("organisms", { id: "m1", name: "灵狐", prompt: "九尾灵狐" }, "m", [{ v: "1k" }]);
 		if (!("spec" in r)) throw new Error("expected spec");
-		expect(r.spec.params?.size).toBe("1280x720"); // 16:9 × 1k（第251轮三份 size 表统一后的规范值）
+		expect(r.spec.params?.aspect_ratio).toBe("16:9");
+		expect(r.spec.params?.resolution).toBe("1k");
 		expect(r.spec.params?.idPrefix).toBe("M");
 	});
 
@@ -68,7 +69,7 @@ describe("buildAssetBaseGenSpec", () => {
 		const r = buildAssetBaseGenSpec("crowds", { id: "g1", name: "村民", prompt: "一群村民" }, "m",
 			[{ v: "1k" }, { v: "2k" }, { v: "4k" }], { aspect: "1:1", resolution: "4k", quality: "medium" });
 		if (!("spec" in r)) throw new Error("expected spec");
-		expect(r.spec.params).toEqual({ size: "4096x4096", quality: "medium", idPrefix: "G", assetName: "村民" });
+		expect(r.spec.params).toEqual({ aspect_ratio: "1:1", resolution: "4k", quality: "medium", idPrefix: "G", assetName: "村民" });
 	});
 });
 

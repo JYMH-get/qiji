@@ -91,7 +91,7 @@ export interface BranchPushResult {
  * 坐标），保证同一拖动位置的计算结果稳定、拖走即可整体回原位。
  */
 export function computeBranchPush(
-	drags: { id: string; x: number; y: number; w?: number; h?: number }[],
+	drags: { id: string; type?: string; x: number; y: number; w?: number; h?: number }[],
 	nodes: PushRect[],
 	edges: PushEdge[],
 	opts?: {
@@ -102,12 +102,13 @@ export function computeBranchPush(
 		exclude?: Set<string>;
 	},
 ): BranchPushResult | null {
+	drags = drags.filter((d) => d.type !== "canvas.marker");
 	if (drags.length === 0) return null;
 	const dragIds = new Set(drags.map((d) => d.id));
 	// 可被挤开的对象：非分组容器、非分组子节点、非拖动者本身（工作副本，级联时就地更新 y）
 	const movable = new Map<string, PushRect>();
 	for (const n of nodes) {
-		if (dragIds.has(n.id) || n.type === "group" || n.parentId || opts?.exclude?.has(n.id)) continue;
+		if (dragIds.has(n.id) || n.type === "group" || n.type === "canvas.marker" || n.parentId || opts?.exclude?.has(n.id)) continue;
 		movable.set(n.id, { ...n });
 	}
 
@@ -258,7 +259,7 @@ export function enforceNoOverlap(
 	const tops: PushRect[] = [];
 	const seq = new Map<string, number>();
 	nodes.forEach((n, i) => {
-		if (n.type === "group" || n.parentId) return;
+		if (n.type === "group" || n.type === "canvas.marker" || n.parentId) return;
 		tops.push({ ...n });
 		seq.set(n.id, i);
 	});

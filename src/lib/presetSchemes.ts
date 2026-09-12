@@ -13,6 +13,8 @@ import { useSettingsStore } from "@/store/settingsStore";
 
 /** 预设方案分类名（旧服务端回退口径=模板分类；新服务端=预设库分组名） */
 export const PRESET_CATEGORY = "预设方案";
+export const VIDEO_PRESET_CATEGORY = "视频预设方案";
+export type PresetTarget = "image" | "video";
 
 /** 预设胶囊在提示词里的标记文本：`【预设:<模板id>】`（id 限 ASCII，可含点/横线/下划线）。
  *  与 @ImageN（@ 开头）、@[port]（@[ ）、{{变量}}、【素材图例】（【素材…）均不冲突。 */
@@ -29,6 +31,7 @@ export interface PresetOption {
 
 export interface PresetScheme extends PresetOption {
 	body: string;
+	target?: PresetTarget;
 	/** 互斥组：同一非空组内的预设不能同时出现在一段提示词里（插入其一即移除同组其它）。宫格预设同属 GRID_GROUP。 */
 	group?: string;
 	/** 默认插入位置（前缀/后缀）；缺省=前缀 */
@@ -45,11 +48,11 @@ export const GRID_GROUP = "宫格";
 const GRID_ID_RE = /^preset\.storyboard\.(\d+)grid$/;
 
 /**
- * 当前可用预设 = 服务端预设库（catalog.presets，全部分组含画风——画风胶囊也要能展开）
- * + 用户自定义预设（本地设置），均含完整正文 body。
- * 旧服务端（无 presets 字段）回退读模板清单里的「预设方案」分类（旧口径，画风不含在内）。
+ * 图片/视频选择器按 target 读取独立清单，旧预设归图片；all 仅供已保存胶囊的解析。
+ * 服务端按「视频预设方案」分类识别视频，其余分类保留图片语义；本地按 target 区分。
+ * 旧服务端回退读模板清单中对应分类，均只包含有正文的条目。
  */
-export function listPresetSchemes(): PresetScheme[] {
+export function listPresetSchemes(target: PresetTarget | "all" = "image"): PresetScheme[] {
 	const cat = useCatalogStore.getState();
 	const serverPresets = cat.presets();
 	const server: PresetScheme[] = serverPresets.length
@@ -57,18 +60,18 @@ export function listPresetSchemes(): PresetScheme[] {
 			id: p.id,
 			name: p.name,
 			body: p.body ?? "",
+			target: p.category === VIDEO_PRESET_CATEGORY ? "video" : "image",
 			// 互斥组优先用管理端配置；画风/宫格无配置时按分组/id 兜底
 			group: p.group?.trim() || (p.category === "画风" ? "画风" : GRID_ID_RE.test(p.id) ? GRID_GROUP : undefined),
 			position: normPos(p.position),
 			category: p.category,
 			autoAttach: p.autoAttach,
 		}))
-		: cat
-			.templatesByCategory(PRESET_CATEGORY)
+		: [...cat.templatesByCategory(PRESET_CATEGORY), ...cat.templatesByCategory(VIDEO_PRESET_CATEGORY)]
 			// 旧服务端回退：互斥组优先 presetGroup；内置 4/6/9 宫格无配置时按 id 归「宫格」组。
-			.map((t) => ({ id: t.id, name: t.name, body: t.body ?? t.bodyPreview ?? "", group: t.presetGroup?.trim() || (GRID_ID_RE.test(t.id) ? GRID_GROUP : undefined), position: normPos(t.presetPosition), category: t.category }));
-	const custom = useSettingsStore.getState().customPresets.map((p) => ({ id: p.id, name: p.name, body: p.body, group: p.group?.trim() || undefined, position: normPos(p.position) }));
-	return [...server, ...custom].filter((p) => p.body.trim().length > 0);
+			.map((t) => ({ id: t.id, name: t.name, body: t.body ?? t.bodyPreview ?? "", target: t.category === VIDEO_PRESET_CATEGORY ? "video" : "image", group: t.presetGroup?.trim() || (GRID_ID_RE.test(t.id) ? GRID_GROUP : undefined), position: normPos(t.presetPosition), category: t.category }));
+	const custom: PresetScheme[] = useSettingsStore.getState().customPresets.map((p) => ({ id: p.id, name: p.name, body: p.body, target: p.target === "video" ? "video" : "image", group: p.group?.trim() || undefined, position: normPos(p.position) }));
+	return [...server, ...custom].filter((p) => p.body.trim().length > 0 && (target === "all" || p.target === target));
 }
 
 /** 归一化位置：仅接受 "suffix"，其余（含缺省）都是 "prefix" */
@@ -78,17 +81,18 @@ function normPos(v: unknown): PresetPosition {
 
 /** 按 id 取预设默认插入位置（前缀/后缀；缺省=前缀） */
 export function presetPosition(id: string): PresetPosition {
-	return listPresetSchemes().find((p) => p.id === id)?.position ?? "prefix";
+	return listPresetSchemes("all").find((p) => p.id === id)?.position ?? "prefix";
 }
 
 /** 按 id 取预设正文（供双击胶囊就地展开为可编辑正文） */
 export function presetBody(id: string): string | undefined {
-	return listPresetSchemes().find((p) => p.id === id)?.body;
+	return listPresetSchemes("all").find((p) => p.id === id)?.body;
 }
 
 /** 按 id 取互斥组（空=无互斥）；供插入胶囊时移除同组旧胶囊 */
 export function presetGroup(id: string): string | undefined {
-	return listPresetSchemes().find((p) => p.id === id)?.group || undefined;
+	const p = listPresetSchemes("all").find((p) => p.id === id);
+	return p?.group ? (p.target === "video" ? `video:${p.group}` : p.group) : undefined;
 }
 
 /** 数「同源提示词」里的镜头数：匹配「第X镜/第X个镜头」或「镜头X」（X=中文数字或阿拉伯数字），去重取个数；数不出→0 */
@@ -115,13 +119,13 @@ export function gridPresetForShotCount(n: number): string | undefined {
 }
 
 /** 供选择器/胶囊显示用（不含正文） */
-export function listPresetOptions(): PresetOption[] {
-	return listPresetSchemes().map((p) => ({ id: p.id, name: p.name }));
+export function listPresetOptions(target: PresetTarget | "all" = "image"): PresetOption[] {
+	return listPresetSchemes(target).map((p) => ({ id: p.id, name: p.name }));
 }
 
 /** id → 显示名（供富文本编辑器把 【预设:id】 渲染成带名字的 pill） */
 export function presetNameMap(): Map<string, string> {
-	return new Map(listPresetSchemes().map((p) => [p.id, p.name]));
+	return new Map(listPresetSchemes("all").map((p) => [p.id, p.name]));
 }
 
 /**
@@ -130,6 +134,6 @@ export function presetNameMap(): Map<string, string> {
  */
 export function resolvePresets(text: string): string {
 	if (!text || text.indexOf("【预设:") < 0) return text;
-	const bodyById = new Map(listPresetSchemes().map((p) => [p.id, p.body]));
+	const bodyById = new Map(listPresetSchemes("all").map((p) => [p.id, p.body]));
 	return text.replace(new RegExp(PRESET_TAG_RE.source, "g"), (m, id: string) => bodyById.get(id) ?? m);
 }

@@ -10,6 +10,7 @@ import {
 	insertTrackAt,
 	mainVideoTrackId,
 	moveSegment,
+	moveSegmentsTogether,
 	nearestLegalGap,
 	formatEditableTime,
 	frameDurationUs,
@@ -253,6 +254,51 @@ describe("rtcOps moveSegment", () => {
 	it("片段/目标轨未命中返回原引用", () => {
 		expect(moveSegment(base, "nope", "t1", 0)).toBe(base);
 		expect(moveSegment(base, "a", "nope", 0)).toBe(base);
+	});
+});
+
+describe("rtcOps moveSegmentsTogether", () => {
+	it("同轨多选拖动保持片段间距并一起移动", () => {
+		const base = doc({ id: "t1", segments: [seg("a", 0, SEC), seg("b", 2 * SEC, SEC)] });
+		const d = moveSegmentsTogether(base, ["a", "b"], "a", "t1", 5 * SEC);
+		expect(d.tracks[0].segments.map((s) => [s.id, s.targetStartUs])).toEqual([
+			["a", 5 * SEC],
+			["b", 7 * SEC],
+		]);
+	});
+
+	it("整组遇到未选中片段时共同钳位，不压缩组内间距", () => {
+		const base = doc({
+			id: "t1",
+			segments: [seg("a", 0, SEC), seg("b", 2 * SEC, SEC), seg("fixed", 6 * SEC, 2 * SEC)],
+		});
+		const d = moveSegmentsTogether(base, ["a", "b"], "a", "t1", 5 * SEC);
+		const byId = Object.fromEntries(d.tracks[0].segments.map((s) => [s.id, s.targetStartUs]));
+		expect(byId.a).toBe(3 * SEC);
+		expect(byId.b).toBe(5 * SEC);
+	});
+
+	it("跨轨多选保持各自轨道并使用同一个水平位移", () => {
+		const base = doc(
+			{ id: "v1", type: "video", segments: [seg("a", SEC, SEC)] },
+			{ id: "a1", type: "audio", segments: [seg("b", 3 * SEC, SEC, { media: "audio" })] },
+		);
+		const d = moveSegmentsTogether(base, ["a", "b"], "a", "v1", 5 * SEC);
+		expect(d.tracks[0].segments[0].targetStartUs).toBe(5 * SEC);
+		expect(d.tracks[1].segments[0].targetStartUs).toBe(7 * SEC);
+	});
+
+	it("选区横跨多条同类轨道时按锚点轨道偏移整体换轨", () => {
+		const base = doc(
+			{ id: "v1", type: "video", segments: [seg("a", SEC, SEC)] },
+			{ id: "v2", type: "video", segments: [seg("b", 3 * SEC, SEC)] },
+			{ id: "v3", type: "video", segments: [] },
+		);
+		// 视频显示序是 v3、v2、v1；锚点 a 从 v1 上移到 v2，b 应同步从 v2 上移到 v3。
+		const d = moveSegmentsTogether(base, ["a", "b"], "a", "v2", 5 * SEC);
+		expect(d.tracks.find((t) => t.id === "v1")!.segments).toHaveLength(0);
+		expect(d.tracks.find((t) => t.id === "v2")!.segments.map((s) => s.id)).toEqual(["a"]);
+		expect(d.tracks.find((t) => t.id === "v3")!.segments.map((s) => s.id)).toEqual(["b"]);
 	});
 });
 

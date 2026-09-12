@@ -13,9 +13,10 @@ export const NODE_H = 200;
  * 仅用于"新增节点"，分组内子节点/粘贴/裂变/投影各有自己的布局、不走此逻辑。
  */
 export function avoidOverlap(node: CanvasNode, existing: RectNode[]): CanvasNode {
+	if (node.type === "canvas.marker") return node;
 	const STEP = 28, MAX = 120;
 	const w = node.w || NODE_W, h = node.h || NODE_H;
-	const others = existing.filter((n) => n.id !== node.id && n.type !== "group");
+	const others = existing.filter((n) => n.id !== node.id && n.type !== "group" && n.type !== "canvas.marker");
 	const hits = (x: number, y: number) => others.some((n) => rectsTooClose(x, y, w, h, n));
 	let x = node.x, y = node.y;
 	for (let i = 0; i < MAX && hits(x, y); i++) { x += STEP; y += STEP; }
@@ -37,9 +38,10 @@ function rectsTooClose(ax: number, ay: number, aw: number, ah: number, b: RectNo
  * 取位移最小者返回新坐标；不相交返回 null(无需移动)。用于拖拽落子后的"不重合"纠正。
  */
 export function resolveCollision(node: RectNode, obstacles: RectNode[]): { x: number; y: number } | null {
+	if (node.type === "canvas.marker") return null;
 	const STEP = 14, MAX = 240;
 	const w = node.w || NODE_W, h = node.h || NODE_H;
-	const obs = obstacles.filter((n) => n.id !== node.id && n.type !== "group");
+	const obs = obstacles.filter((n) => n.id !== node.id && n.type !== "group" && n.type !== "canvas.marker");
 	const hits = (x: number, y: number) => obs.some((n) => rectsTooClose(x, y, w, h, n));
 	if (!hits(node.x, node.y)) return null;
 	const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]]; // 上 / 下 / 左 / 右

@@ -57,6 +57,7 @@ interface OpAccount {
 export interface SettleInput {
 	/** 结算事由：generate / batch / refund / reconcile-refund */
 	reason: string;
+	idempotencyKey?: string;
 	/** 关联对象（logId 或 taskId），便于对账时回溯 */
 	ref?: string;
 	/** 实际扣款人（团队共享积分模式=团长），=统计人时两者相同 */
@@ -96,13 +97,19 @@ function readBalance(kind: "user" | "agent", id: string): number | null {
  * 同步、不可被打断（Node 单线程 + saveJson 同步写），故无需锁。
  */
 export function settle(input: SettleInput): SettleResult {
-	const accounts: OpAccount[] = [];
+	if (input.idempotencyKey) {
+    const old = db.prepare("SELECT status FROM credit_ops WHERE op_id=?").get(input.idempotencyKey) as {status:string}|undefined;
+    if (old && ['done','healed'].includes(old.status)) return {ok:true,charged:{opId:input.idempotencyKey,payerId:input.payerId,statsUserId:input.statsUserId,userAmount:input.userAmount,agents:input.agents}};
+    if (old && old.status !== 'aborted') return {ok:false,error:'结算流水待恢复'};
+    if (old) db.prepare("DELETE FROM credit_ops WHERE op_id=? AND status='aborted'").run(input.idempotencyKey);
+  }
+  const accounts: OpAccount[] = [];
 	const push = (kind: "user" | "agent", id: string, delta: number): string | null => {
 		if (!id || delta === 0) return null;
 		const pre = readBalance(kind, id);
 		if (pre === null) return kind === "user" ? "用户不存在" : "渠道商不存在";
 		const post = pre + delta;
-		if (post < 0) {
+		if (post < 0 && delta < 0 && input.reason !== "text-token-settle" && input.reason !== "text-token-mirror") {
 			// 退款方向不该走到这里；扣款方向=余额在 plan 之后被并发请求吃掉了
 			return delta < 0
 				? kind === "user"
@@ -122,7 +129,7 @@ export function settle(input: SettleInput): SettleResult {
 	}
 
 	const charged: Charged = {
-		opId: nextOpId(),
+		opId: input.idempotencyKey ?? nextOpId(),
 		payerId: input.payerId,
 		statsUserId: input.statsUserId,
 		userAmount: input.userAmount,
@@ -149,10 +156,10 @@ function applyAccounts(accounts: OpAccount[], statsUserId: string): void {
 	let touchedAgents = false;
 	for (const a of accounts) {
 		if (a.kind === "user") {
-			applyUserCreditsDelta(a.id, statsUserId, a.delta);
+			if (!applyUserCreditsDelta(a.id, statsUserId, a.delta, a.post < 0)) throw new Error("用户结算余额写入失败");
 			touchedUsers = true;
 		} else {
-			applyAgentCreditsDelta(a.id, a.delta);
+			if (!applyAgentCreditsDelta(a.id, a.delta, a.post < 0)) throw new Error("渠道结算余额写入失败");
 			touchedAgents = true;
 		}
 	}

@@ -63,7 +63,7 @@ export const NodePromptEditor = forwardRef<NodePromptEditorHandle, {
 	// 出图预设方案（随 catalog 版本 + 自定义预设变化刷新）——仅供 PromptMentionEditor 把 【预设:id】 渲染成 pill；插入按钮在功能栏
 	const catalogVer = useCatalogStore((s) => s.catalog?.version);
 	const customPresets = useSettingsStore((s) => s.customPresets);
-	const presetOptions = useMemo(() => listPresetSchemes().map((p) => ({ id: p.id, name: p.name })), [catalogVer, customPresets]);
+	const presetOptions = useMemo(() => listPresetSchemes("all").map((p) => ({ id: p.id, name: p.name })), [catalogVer, customPresets]);
 
 	// 上游素材响应性：候选列表含「上游连线素材」，但本组件此前不订阅连线/上游结果——
 	// 连上上游或上游生成完时不重渲染，@ 弹出的还是旧候选（面板里无法 @ 上游素材的根因；

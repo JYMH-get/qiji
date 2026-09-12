@@ -1002,6 +1002,45 @@
   background-color: rgba(140, 160, 200, 0.14);
 }
 
+.Qiji-group-node.is-material {
+  border-color: rgba(52, 211, 153, 0.9);
+  background-color: rgba(16, 185, 129, 0.08);
+}
+
+.Qiji-group-node.is-material:hover {
+  border-color: #6ee7b7;
+  background-color: rgba(16, 185, 129, 0.12);
+}
+
+.react-flow__node.Qiji-canvas-pick--added {
+  opacity: 0.32;
+}
+
+.Qiji-canvas--asset-pick .react-flow__pane,
+.Qiji-canvas--asset-pick .react-flow__node {
+  cursor: copy !important;
+}
+
+.Qiji-canvas--asset-pick .react-flow__node button,
+.Qiji-canvas--asset-pick .react-flow__node input,
+.Qiji-canvas--asset-pick .react-flow__node textarea,
+.Qiji-canvas--asset-pick .react-flow__node select {
+  pointer-events: none !important;
+}
+
+.Qiji-canvas--marker .react-flow__pane {
+  cursor: default !important;
+}
+
+.Qiji-canvas--text-marker .react-flow__pane,
+.Qiji-canvas--text-marker .react-flow__node:not(.Qiji-canvas-marker-node) {
+  cursor: text !important;
+}
+
+.Qiji-canvas--marker .react-flow__node:not(.Qiji-canvas-marker-node) * {
+  pointer-events: none !important;
+}
+
 .react-flow__node.selected .Qiji-group-node,
 .Qiji-group-node.is-selected {
   border: 2px solid var(--primary) !important;

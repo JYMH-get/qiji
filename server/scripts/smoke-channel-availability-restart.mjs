@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+if(!import.meta.url.includes('qiji-availability-'))throw Error('Sandbox only');
+globalThis.fetch=async()=>{throw Error('No upstream allowed');};
+const {channelAvailability}=await import('../src/channelAvailability.ts');
+const row=channelAvailability().rows.find(r=>r.modelId==='av-gpt');
+assert.equal(row.requests,3);
+assert.equal(row.active,0);
+assert.equal(row.successRate,2/3);
+(await import('../src/store/sqlite.ts')).closeSqlite();
+console.log('AVAILABILITY restart passed: persistent identities, counts and terminal states');

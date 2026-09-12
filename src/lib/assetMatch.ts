@@ -1,6 +1,7 @@
 /**
- * assetMatch —— 资产匹配（与资产模式 Frame161195 同算法）：扫文本命中角色/群像/场景/生物/物品
- * (名称+别名+造型名，场景不做模糊保底)。资产图优先取「原文点名的造型 > 资产助手当前选中造型 > 基础形象」。
+ * assetMatch —— 客户端三种入口共用的资产匹配：排除对白正文后，扫描角色/群像/场景/生物/物品
+ * 的名称、别名和造型名；同一文本区间按最长名称唯一匹配，再保留 80% 模糊兜底。
+ * 资产图优先取「原文点名的造型 > 资产助手当前选中造型 > 基础形象」。
  * 画布「生成图片」节点连接上游文本时自动据此把匹配到的资产图设为参考垫图。
  */
 import { useProjectStore } from "@/store/projectStore";
@@ -43,17 +44,22 @@ function editDistanceLE(a: string, b: string, maxDist: number): boolean {
 
 /** 文本中是否存在与 term 相似度 ≥ minSim 的子串（滑窗；term 需先归一化） */
 function fuzzyContains(text: string, term: string, minSim: number): boolean {
+	return fuzzySpan(text, term, minSim) !== null;
+}
+
+/** 返回首个模糊命中的归一化文本区间，供全局最长词消歧。 */
+function fuzzySpan(text: string, term: string, minSim: number): { start: number; end: number } | null {
 	// +1e-9 抵消浮点误差（如 1-0.9=0.0999…会让 10 字词的允许编辑数被 floor 成 0）
 	const maxDist = Math.floor(term.length * (1 - minSim) + 1e-9);
-	if (maxDist <= 0) return false; // 阈值下不允许任何编辑 → 精确子串已在上层查过
+	if (maxDist <= 0) return null; // 阈值下不允许任何编辑 → 精确子串已在上层查过
 	const scan = text.length > 20000 ? text.slice(0, 20000) : text; // 成本上限（分镜/提示词远小于此）
 	for (let w = term.length - maxDist; w <= term.length + maxDist; w++) {
 		if (w <= 0 || w > scan.length) continue;
 		for (let i = 0; i + w <= scan.length; i++) {
-			if (editDistanceLE(scan.slice(i, i + w), term, maxDist)) return true;
+			if (editDistanceLE(scan.slice(i, i + w), term, maxDist)) return { start: i, end: i + w };
 		}
 	}
-	return false;
+	return null;
 }
 
 /** 匹配阈值：相似度 ≥80% 才采用（低于它宁可漏配也不误配；第86轮定 90%，用户随即调至 80%） */
@@ -106,6 +112,37 @@ export interface MatchedAsset {
 interface PoolForm { variantId: string | null; name: string; image: string; terms: string[] }
 interface PoolItem extends MatchedAsset { terms: string[]; forms: PoolForm[] }
 
+/**
+ * 排除对白正文，但保留说话人供角色匹配：
+ * - 项目角色/群像名（含别名）后接冒号时，只保留冒号前的说话人；
+ * - 其它行仅剥掉中文/英文双引号中的行内对白；「」常用于强调资产名，不在此删除。
+ * 这里只做结构排除，不判断“回忆/计划/进入”等自然语言语义。
+ */
+function stripDialogueForMatch(text: string, pool: PoolItem[]): string {
+	const speakers = new Set(
+		pool
+			.filter((asset) => asset.kind === "character" || asset.kind === "crowd")
+			.flatMap((asset) => asset.terms)
+			.map(normForMatch)
+			.filter(Boolean),
+	);
+	const fixedSpeakers = new Set(["旁白", "画外音", "电话音", "广播", "众人"]);
+	const structuralHead = /^(?:场景|地点|时间|镜头|画面|环境|内景|外景|草稿|提示词|构图|动作|描述|备注|色调|光线|音效)\d*$/;
+	return String(text || "").split(/\r?\n/).map((rawLine) => {
+		const line = rawLine.trim();
+		if (!line) return "";
+		const colon = /^([^：:\n]{1,24})[：:]/.exec(line);
+		if (colon) {
+			const speaker = colon[1].trim();
+			const genericSpeaker = /^[一-龥A-Za-z0-9·・]{1,12}$/.test(speaker) && !structuralHead.test(speaker);
+			if (speakers.has(normForMatch(speaker)) || fixedSpeakers.has(speaker) || genericSpeaker) return speaker;
+		}
+		return line
+			.replace(/“[^”]*(?:”|$)/g, "")
+			.replace(/"[^"\n]*(?:"|$)/g, "");
+	}).filter(Boolean).join("\n");
+}
+
 /** 从 projectStore 构建资产池（5 类）：terms 含名称+别名+各造型名；forms=全部有图造型（基础+变体） */
 function buildAssetPool(): PoolItem[] {
 	const s = useProjectStore.getState();
@@ -134,20 +171,58 @@ function buildAssetPool(): PoolItem[] {
 	return pool;
 }
 
-/** 扫文本匹配资产（与资产模式一致）：五类均按名称/别名/造型名命中（场景不做低阈值模糊保底）。
- *  命中标准 = 归一化精确子串 或 相似度 ≥80%（makeTermMatcher）。
+/** 扫文本匹配资产（资产模式/画布/实时剪辑共用）：五类均按名称/别名/造型名命中。
+ *  命中标准 = 排除对白正文后，归一化精确子串优先、同区间最长词唯一占用，再用相似度 ≥80% 兜底。
  *  资产图优先「原文点名的造型 > 资产助手当前选中造型 > 基础形象 > 首个有图造型」。 */
 export function matchAssetsInText(text: string): MatchedAsset[] {
 	if (!text.trim()) return [];
 	const pool = buildAssetPool();
-	const matches = makeTermMatcher(text);
+	const normalizedText = normForMatch(stripDialogueForMatch(text, pool));
+	type TermHit = { asset: PoolItem; term: string; start: number; end: number; exact: boolean; poolIndex: number };
+	const hits: TermHit[] = [];
+	for (let poolIndex = 0; poolIndex < pool.length; poolIndex++) {
+		const asset = pool[poolIndex];
+		for (const rawTerm of asset.terms) {
+			const term = normForMatch(rawTerm);
+			if (!term) continue;
+			let from = 0;
+			let foundExact = false;
+			while (from <= normalizedText.length - term.length) {
+				const start = normalizedText.indexOf(term, from);
+				if (start < 0) break;
+				foundExact = true;
+				hits.push({ asset, term, start, end: start + term.length, exact: true, poolIndex });
+				from = start + 1;
+			}
+			if (!foundExact) {
+				const span = fuzzySpan(normalizedText, term, MATCH_MIN_SIMILARITY);
+				if (span) hits.push({ asset, term, ...span, exact: false, poolIndex });
+			}
+		}
+	}
+	// 精确命中优先；同级按名称长度从长到短占用文本区间。同一段文字一旦被占用，
+	// 短名称、重复名称或别名不得再次匹配另一资产；不同位置的独立出现仍可分别命中。
+	hits.sort((a, b) => Number(b.exact) - Number(a.exact)
+		|| (b.end - b.start) - (a.end - a.start)
+		|| a.start - b.start
+		|| a.poolIndex - b.poolIndex);
+	const occupied: Array<{ start: number; end: number }> = [];
+	const acceptedTerms = new Map<string, Set<string>>();
+	for (const hit of hits) {
+		if (occupied.some((span) => hit.start < span.end && span.start < hit.end)) continue;
+		occupied.push({ start: hit.start, end: hit.end });
+		const terms = acceptedTerms.get(hit.asset.assetId) ?? new Set<string>();
+		terms.add(hit.term);
+		acceptedTerms.set(hit.asset.assetId, terms);
+	}
 	const selFormMap = useAssetFormStore.getState().selForm;
 	const out: MatchedAsset[] = [];
 	const seen = new Set<string>();
 	const add = (a: PoolItem) => {
 		if (seen.has(a.assetId)) return;
 		seen.add(a.assetId);
-		const hitForm = a.forms.find((f) => f.variantId !== null && f.terms.some((t) => t && matches(t)));
+		const accepted = acceptedTerms.get(a.assetId) ?? new Set<string>();
+		const hitForm = a.forms.find((f) => f.variantId !== null && f.terms.some((t) => accepted.has(normForMatch(t))));
 		const sel = selFormMap[a.assetId];
 		const selForm = sel !== undefined ? a.forms.find((f) => f.variantId === sel) : undefined;
 		const form = hitForm ?? selForm ?? a.forms.find((f) => f.variantId === null) ?? a.forms[0];
@@ -156,7 +231,7 @@ export function matchAssetsInText(text: string): MatchedAsset[] {
 			voiceUri: a.voiceUri, voiceAssetId: a.voiceAssetId, voiceName: a.voiceName,
 		});
 	};
-	for (const a of pool) { if (a.terms.some((t) => t && matches(t))) add(a); }
+	for (const a of pool) { if (acceptedTerms.has(a.assetId)) add(a); }
 	return out;
 }
 

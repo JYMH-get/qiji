@@ -102,7 +102,7 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
 	models: () => get().catalog?.models ?? [],
 	modelsByCapability: (cap) => (get().catalog?.models ?? []).filter((m) => m.capability === cap),
 	model: (id) => (get().catalog?.models ?? []).find((m) => m.id === id),
-	templatesByPurpose: (p) => (get().catalog?.templates ?? []).filter((t) => t.purpose === p),
+	templatesByPurpose: (p) => (get().catalog?.templates ?? []).filter((t) => t.category !== '输出提示词' && t.purpose === p),
 	templatesByNode: (nodeType) =>
 		(get().catalog?.templates ?? []).filter(
 			(t) =>

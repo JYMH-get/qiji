@@ -11,6 +11,7 @@
  * 注：Tauri 下需 window.dragDropEnabled=false，否则 WebView2 拦截网页内 HTML5 拖拽。
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useProjectStore, type AssetCat } from "@/store/projectStore";
 import { useFavoritesStore } from "@/store/favoritesStore";
 import { useLibraryStore } from "@/store/libraryStore";
@@ -35,6 +36,7 @@ import { sharedItemFromUri } from "@/services/sharedPublish";
 import { openSharedPick } from "@/store/sharedPickStore";
 import { confirmDialog } from "@/lib/confirmDialog";
 import type { SharedLibraryInfo } from "@/contract";
+import { useUiStore } from "@/store/uiStore";
 
 function isTauriEnv(): boolean {
 	return typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
@@ -240,6 +242,9 @@ const accent = "#8b5cf6";
 
 export default function AssetAssistant({ popout = false }: { popout?: boolean }) {
 	const [open, setOpen] = useState(false);
+	const pickTargetNodeId = useUiStore((s) => s.assetLibraryTargetNodeId);
+	const pickMode = !!pickTargetNodeId && !popout;
+	const shown = open || popout || pickMode;
 	const [major, setMajor] = useState<Major>("project");
 	const [sub, setSub] = useState<SubCat>("characters");
 	// 收藏（P1）：服务端为准。ids 供 ☆ 状态 O(1) 查询，items 供「收藏资产」页渲染
@@ -254,7 +259,7 @@ export default function AssetAssistant({ popout = false }: { popout?: boolean })
 	const { pos, drag } = useDockStore();
 	// 提示词放大弹窗(z 100000)打开时，把助手抬到其上方，便于打开助手并拖入垫图
 	const promptModalOpen = usePromptModalStore((s) => s.open);
-	const zBase = promptModalOpen ? 100100 : 9000;
+	const zBase = promptModalOpen ? 100100 : pickMode ? 10550 : 9000;
 
 	// 展开面板拖动（拖标题栏，松手停在原处——展开态不再吸附边缘）
 	const [panelDrag, setPanelDrag] = useState<{ x: number; y: number } | null>(null);
@@ -335,17 +340,17 @@ export default function AssetAssistant({ popout = false }: { popout?: boolean })
 	// 收藏拉取（P1）：面板打开时从服务端取一次（收藏是跨机的，本地不留权威副本），
 	// 并把旧的 localStorage 本地收藏一次性迁上去（反查得到 assetId 的部分）。
 	useEffect(() => {
-		if (!open) return;
+		if (!shown) return;
 		void (async () => {
 			await useFavoritesStore.getState().load();
 			const n = await migrateLegacyFavorites();
 			if (n > 0) showToast(`已把 ${n} 项本地收藏同步到云端`);
 		})();
-	}, [open]);
+	}, [shown]);
 
 	// 预落盘：为当前展示、尚无本地原件的项目资产后台生成原件，使拖出软件外即时可用（Tauri）
 	useEffect(() => {
-		if (!isTauriEnv() || !open || major !== "project") return;
+		if (!isTauriEnv() || !shown || major !== "project") return;
 		let cancelled = false;
 		(async () => {
 			for (const it of projectItems) {
@@ -355,7 +360,7 @@ export default function AssetAssistant({ popout = false }: { popout?: boolean })
 			}
 		})();
 		return () => { cancelled = true; };
-	}, [projectItems, open, major]);
+	}, [projectItems, shown, major]);
 
 	// 展开时：双击面板以外的区域 → 收起助手（弹出模式为独立窗口，不收起）
 	useEffect(() => {
@@ -414,7 +419,7 @@ export default function AssetAssistant({ popout = false }: { popout?: boolean })
 		window.addEventListener("mouseup", onUp);
 	};
 
-	if (!open && !popout) {
+	if (!shown) {
 		const style: React.CSSProperties = drag
 			? { left: drag.x, top: drag.y }
 			: { [pos.side]: 14, top: pos.top };
@@ -439,14 +444,31 @@ export default function AssetAssistant({ popout = false }: { popout?: boolean })
 		: { left: panelPos?.x ?? defaultLeft, top: panelPos?.y ?? defaultTop };
 	const rootStyle: React.CSSProperties = popout
 		? { position: "fixed", inset: 0, width: "100%", height: "100%", display: "flex", flexDirection: "column", background: panel.background, border: "none", borderRadius: 0 }
-		: { position: "fixed", zIndex: zBase, width: panelW, height: "min(740px, 86vh)", display: "flex", flexDirection: "column", ...panel, boxShadow: "0 10px 40px rgba(0,0,0,0.55)", ...panelStyle };
+		: pickMode
+			? { position: "fixed", zIndex: 10550, left: "50%", top: "50%", transform: "translate(-50%, -50%)", width: panelW, height: "min(740px, 86vh)", display: "flex", flexDirection: "column", ...panel, boxShadow: "0 16px 60px rgba(0,0,0,0.7)" }
+			: { position: "fixed", zIndex: zBase, width: panelW, height: "min(740px, 86vh)", display: "flex", flexDirection: "column", ...panel, boxShadow: "0 10px 40px rgba(0,0,0,0.55)", ...panelStyle };
+	const pickItem = (item: AssetItem) => {
+		if (!pickTargetNodeId) return false;
+		const blob = useProjectStore.getState().blobByUri(item.uri);
+		addNodeMaterialFromAsset(pickTargetNodeId, {
+			id: blob?.id,
+			assetId: item.id,
+			url: blob?.url || item.uri,
+			name: item.name,
+			media: "image",
+			usage: materialKindFromAssetCat(item.cat) === "character" ? "identity" : undefined,
+		});
+		useUiStore.getState().setAssetLibraryTargetNodeId(null);
+		return true;
+	};
 	return (
 		<div ref={panelRef} style={rootStyle}>
-			<div onMouseDown={popout ? undefined : startPanelDrag} title={popout ? undefined : "拖动标题栏可移动"}
-				style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", borderBottom: "1px solid rgba(255,255,255,0.08)", cursor: popout ? "default" : panelDrag ? "grabbing" : "grab", userSelect: "none" }}>
-				<div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontSize: 14, fontWeight: 600 }}><Boxes size={17} /> 资产助手</div>
+			<div onMouseDown={popout || pickMode ? undefined : startPanelDrag} title={popout || pickMode ? undefined : "拖动标题栏可移动"}
+				style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", borderBottom: "1px solid rgba(255,255,255,0.08)", cursor: popout || pickMode ? "default" : panelDrag ? "grabbing" : "grab", userSelect: "none" }}>
+				<div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontSize: 14, fontWeight: 600 }}><Boxes size={17} /> {pickMode ? "选择一项资产" : "资产助手"}</div>
+				{pickMode && <button onClick={() => useUiStore.getState().setAssetLibraryTargetNodeId(null)} style={{ padding: "5px 10px", fontSize: 12, borderRadius: 6, border: "1px solid rgba(255,255,255,0.16)", background: "rgba(255,255,255,0.06)", color: "#fff", cursor: "pointer" }}>取消</button>}
 				{!popout && (
-					<div style={{ display: "flex", alignItems: "center", gap: 6 }} onMouseDown={(e) => e.stopPropagation()}>
+					<div style={{ display: pickMode ? "none" : "flex", alignItems: "center", gap: 6 }} onMouseDown={(e) => e.stopPropagation()}>
 						<button
 							title="检查本项目全部资产的云端（OSS）直链是否正常，死链且本机有本地副本则自动修复"
 							onClick={() => { void runAssetCheck(allProjectAssetTargets(), "检查所有资产"); }}
@@ -519,8 +541,8 @@ export default function AssetAssistant({ popout = false }: { popout?: boolean })
 							const forms = it.forms ?? [];
 							const hasForms = major === "project" && !!it.id && forms.length > 1; // 有多个造型才可右击选择
 							return (
-								<div key={i} draggable onDragStart={(e) => onCardDragStart(e, it)}
-									onMouseDown={(e) => startAssetDragToCanvas(e, it)}
+								<div key={i} draggable={!pickMode} onDragStart={(e) => { if (!pickMode) onCardDragStart(e, it); }}
+									onMouseDown={(e) => { if (e.button === 0 && pickMode) { e.preventDefault(); e.stopPropagation(); pickItem(it); } else startAssetDragToCanvas(e, it); }}
 									onDoubleClick={() => openLightbox({ uri: it.uri, name: it.name, media: "image", voiceUri: it.voiceUri, voiceName: it.voiceName })}
 									onContextMenu={(e) => { e.preventDefault(); setFormMenu({ x: e.clientX, y: e.clientY, item: it }); }}
 									title={`${it.name}（双击放大 / 拖到素材区=垫图 / 画布=新建图片节点 / 软件外=复制原图 / 右键：检查素材${hasForms ? `·选择造型（${forms.length}）` : ""}）`}
@@ -549,14 +571,14 @@ export default function AssetAssistant({ popout = false }: { popout?: boolean })
 			</div>
 
 			<div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.4)", padding: "8px 14px", borderTop: "1px solid rgba(255,255,255,0.08)", lineHeight: 1.5 }}>
-				拖到素材区 = 垫图·拖到画布 = 新建图片节点·拖到软件外 = 复制·右键资产 = 选择造型
+				{pickMode ? "单击资产立即加入节点·切换分类和右键选择造型不会结束选择" : "拖到素材区 = 垫图·拖到画布 = 新建图片节点·拖到软件外 = 复制·右键资产 = 选择造型"}
 			</div>
 
-			{formMenu && (
+			{formMenu && createPortal(
 				<>
 					<div onClick={() => setFormMenu(null)} onContextMenu={(e) => { e.preventDefault(); setFormMenu(null); }}
 						style={{ position: "fixed", inset: 0, zIndex: zBase + 100 }} />
-					<div style={{ position: "fixed", left: Math.min(formMenu.x, window.innerWidth - 232), top: Math.min(formMenu.y, window.innerHeight - 240), zIndex: zBase + 101, width: 220, maxHeight: 320, overflowY: "auto", padding: 10, ...panel, boxShadow: "0 10px 40px rgba(0,0,0,0.6)" }}>
+					<div style={{ position: "fixed", left: Math.max(8, Math.min(formMenu.x, window.innerWidth - 248)), top: Math.max(8, Math.min(formMenu.y, window.innerHeight - 348)), zIndex: zBase + 101, width: 220, maxHeight: 320, overflowY: "auto", padding: 10, ...panel, boxShadow: "0 10px 40px rgba(0,0,0,0.6)" }}>
 						<div
 							onClick={() => {
 								const it = formMenu.item;
@@ -602,7 +624,7 @@ export default function AssetAssistant({ popout = false }: { popout?: boolean })
 						</div>
 					)}
 					</div>
-				</>
+				</>, document.body
 			)}
 		</div>
 	);
@@ -627,6 +649,7 @@ const shRow: React.CSSProperties = { display: "flex", alignItems: "center", gap:
 type SharedView = { level: "libs" } | { level: "folders"; libId: string } | { level: "assets"; libId: string; folderId: string };
 
 function SharedPanel() {
+	const pickTargetNodeId = useUiStore((s) => s.assetLibraryTargetNodeId);
 	const libs = useSharedLibStore((s) => s.libs);
 	const foldersByLib = useSharedLibStore((s) => s.foldersByLib);
 	const assetsByFolder = useSharedLibStore((s) => s.assetsByFolder);
@@ -925,9 +948,16 @@ function SharedPanel() {
 						const media = rec.mime?.startsWith("video/") ? "video" : rec.mime?.startsWith("audio/") ? "audio" : "image";
 						const item: AssetItem = { uri: rec.localUri!, name: rec.name, cat: sharedCatOf(rec.assetId) };
 						return (
-							<div key={rec.id} draggable
-								onDragStart={(e) => { ensureSharedBlob(rec); onCardDragStart(e, item); }}
-								onMouseDown={media === "image" ? (e) => { ensureSharedBlob(rec); startAssetDragToCanvas(e, item); } : undefined}
+							<div key={rec.id} draggable={!pickTargetNodeId}
+								onDragStart={(e) => { if (!pickTargetNodeId) { ensureSharedBlob(rec); onCardDragStart(e, item); } }}
+								onMouseDown={(e) => {
+									ensureSharedBlob(rec);
+									if (e.button === 0 && pickTargetNodeId) {
+										e.preventDefault(); e.stopPropagation();
+										addNodeMaterialFromAsset(pickTargetNodeId, { id: rec.assetId || rec.id, url: rec.url || rec.localUri, name: rec.name, media });
+										useUiStore.getState().setAssetLibraryTargetNodeId(null);
+									} else if (media === "image") startAssetDragToCanvas(e, item);
+								}}
 								onDoubleClick={() => openLightbox({ uri: rec.localUri || rec.url, name: rec.name, media })}
 								onContextMenu={media !== "video" ? (e) => { e.preventDefault(); setBindMenu({ x: e.clientX, y: e.clientY, rec, media: media as "image" | "audio" }); } : undefined}
 								title={`${rec.name}（双击放大 / 拖到素材区=垫图 / 画布=新建图片节点${media !== "video" ? " / 右键：添加到项目资产" : ""}）`}

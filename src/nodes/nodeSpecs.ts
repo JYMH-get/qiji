@@ -116,7 +116,7 @@ const IN_ALL: NodePort = { name: "in", label: "输入", formats: ["text", "image
 const OUT_IMAGE: NodePort = { name: "out", label: "输出", formats: ["image"] };
 const OUT_VIDEO: NodePort = { name: "out", label: "输出", formats: ["video"] };
 
-// 出图要求与资产模式一一对应：模型(面板选) + 质量 + 比例 + 分辨率（执行时 比例×分辨率→size）
+// 出图要求与资产模式一一对应：模型(面板选) + 质量 + 比例 + 分辨率
 const IMG_PARAMS: SpecParamField[] = [
 	{ key: "quality", label: "质量", type: "enum", options: IMAGE_QUALITIES, default: "high" },
 	{ key: "aspect", label: "比例", type: "enum", options: IMAGE_ASPECTS.map((a) => a.v), default: "16:9" },
@@ -366,7 +366,7 @@ export function getNodeSpec(type: string): NodeSpec | undefined {
 
 /** 已知节点类型（用于加载旧项目时清空无法识别的旧节点） */
 export function isKnownNodeType(type: string): boolean {
-	return type === "group" || type in SPEC_BY_TYPE;
+	return type === "group" || type === "canvas.marker" || type in SPEC_BY_TYPE;
 }
 
 const RAW_CAPS = new Set<string>(["text", "image", "video", "audio", "video-enhance", "video-erase", "image-enhance"]);

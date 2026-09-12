@@ -19,7 +19,7 @@
  *   - **进度帧 / 在途状态镜像**：走 `patchSilent`（不进撤销栈，见 rtcStore.patchSilent 注释）。
  */
 import type { Capability, Purpose } from "@/contract";
-import { clampDuration, clampImageResolution, resolveSize } from "@/lib/genParams";
+import { clampDuration, clampImageResolution, buildImageParams } from "@/lib/genParams";
 import { clampDurationTo, clampToOptions, type VideoReqOptions } from "@/lib/videoMethods";
 import type { RtcSegment } from "@/types/rtc";
 
@@ -231,7 +231,7 @@ export function buildFreeVideoParams(
 
 /**
  * 自由占位·图片参数（与 assetGenActions.buildAssetBaseGenSpec / genShotStoryboard 同尺：
- * `{size, quality}`，分辨率档按当前生效图像模型的 catalog params 收敛）。
+ * `{aspect_ratio, resolution, quality}`，分辨率档按当前生效图像模型的 catalog params 收敛）。
  */
 export function buildFreeImageParams(
 	ms: FreeGenSettings | undefined,
@@ -239,7 +239,7 @@ export function buildFreeImageParams(
 ): Record<string, unknown> {
 	const aspect = ms?.imageAspect || "16:9";
 	const resolution = clampImageResolution(ms?.imageResolution ?? "2k", resOptions);
-	return { size: resolveSize(aspect, resolution), quality: ms?.imageQuality || "high" };
+	return buildImageParams({ aspect, resolution, quality: ms?.imageQuality || "high" }, resOptions);
 }
 
 /** 已公网化的垫素材引用（提交前由 ensurePublicUrl 解析得到） */

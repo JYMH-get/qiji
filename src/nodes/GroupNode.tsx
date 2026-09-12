@@ -9,14 +9,16 @@ export function GroupNode({
   id: string;
   selected?: boolean;
 }) {
+  const kind = useCanvasStore((s) => s.groups[id]?.kind ?? "default");
+  const material = kind === "material";
   return (
-    <div className={`Qiji-group-node ${selected ? "is-selected" : ""}`}>
+    <div className={`Qiji-group-node ${material ? "is-material" : ""} ${selected ? "is-selected" : ""}`}>
       <NodeResizer
         isVisible={Boolean(selected)}
         minWidth={120}
         minHeight={120}
-        lineClassName="!border-[#5b8df6]"
-        handleClassName="!bg-[#5b8df6]"
+        lineClassName={material ? "!border-emerald-400" : "!border-[#5b8df6]"}
+        handleClassName={material ? "!bg-emerald-400" : "!bg-[#5b8df6]"}
         onResize={(_, params) => {
           useCanvasStore.getState().resizeNode(id, params.width, params.height);
         }}
@@ -30,7 +32,7 @@ export function GroupNode({
         }}
       />
       <div className="absolute bottom-full left-0.5 mb-1.5 font-mono text-[9px] font-bold uppercase tracking-wider text-[#98a2b3] select-none nodrag">
-        分组·GROUP
+        {material ? "素材分组·MATERIAL" : "分组·GROUP"}
       </div>
     </div>
   );

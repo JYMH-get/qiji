@@ -1,3 +1,5 @@
+import { validateTextPricing, TEXT_PRECHARGE } from '../textPricing.ts';
+import type { TextTokenPricing } from '../contract.ts';
 /**
  * 模型存储（文件持久化）—— 数据化的 catalog 模型 + 翻译格式。
  *
@@ -9,6 +11,7 @@ import { CH_GAISC, CH_JIANMENG, CH_VOLC, CH_SUDASHUI, CH_AISTARS, CH_HUAYING, CH
 import { audienceChain, agentModelBlocked, audienceGroupId } from "./agents.ts";
 import { normMatLimits, type MatLimits } from "../materialLimits.ts";
 import type { ParamField, Capability } from "../contract.ts";
+import { seedanceModelFamily } from '../contract.ts';
 
 /** 翻译协议：决定 dispatch 路由到哪个翻译器 */
 export type Protocol =
@@ -66,6 +69,8 @@ export interface ModelRoute {
 }
 
 export interface ModelDef {
+	tokenPricing?: TextTokenPricing;
+	minVisualMaterials?: number;
 	id: string;
 	label: string;
 	capability: Capability;
@@ -167,6 +172,8 @@ interface Store {
 	xc50RenameVersion?: number;
 	/** 定向迁移版本（第163轮）：给全部存量模型按 classifyFamily 补 familyId（只补缺不覆盖，一次性） */
 	familyInitVersion?: number;
+	seedance25FamilyVersion?: number;
+	seedanceVariantsFamilyVersion?: number;
 	/** 定向迁移版本（第187轮）：os933-sd2.5 时长上限 15→30（sd-2-5 支持 30s）+ 兜底价按最高档修正 */
 	osSd25DurVersion?: number;
 	/** 定向迁移版本（第216轮）：星辰按 2026-08-09 config 对齐存量能力（grok 两款大改/48 线 frames 下线/
@@ -949,7 +956,7 @@ const ZERO007_PARAMS: ParamField[] = [
 const ZERO007_SD20_PARAMS: ParamField[] = [
 	{ key: "duration", label: "时长", type: "enum", options: Array.from({ length: 12 }, (_, i) => String(i + 4)), default: "5", unit: "s" },
 	{ key: "aspect_ratio", label: "宽高比", type: "enum", options: ["1:1", "3:4", "4:3", "9:16", "16:9", "21:9", "adaptive"], default: "16:9" },
-	{ key: "resolution", label: "分辨率", type: "enum", options: ["480p", "720p", "1080p", "4k"], default: "720p" },
+	{ key: "resolution", label: "分辨率", type: "enum", options: ["720p"], default: "720p" },
 	{ key: "generate_audio", label: "生成音频", type: "enum", options: ["true", "false"], default: "true" },
 	{ key: "watermark", label: "添加水印", type: "enum", options: ["false", "true"], default: "false" },
 ];
@@ -1323,7 +1330,7 @@ const DEFAULT_MODELS: ModelDef[] = [
 	official("off-sd2.5-filter-off", "官方·Seedance 2.5 · Filter Off", "dreamina-seedance-2-5-filter-off", true),
 	// ── 007 正版 Seedance 2.5：独立协议与凭据，不使用官方人像素材库 ──────────
 	def("007-sd2.5", "007·Seedance 2.5", "video", "zero007-video", ZERO007_PARAMS, 1500, {
-		channelId: CH_007, upstreamModel: "seedance-2.5", modeId: "007", familyId: "fam-seedance",
+		channelId: CH_007, upstreamModel: "seedance-2.5", modeId: "007", familyId: "fam-seedance-2-5",
 		costField: "duration", costPerUnit: 50, matLimits: { img: 30, vid: 10, aud: 10 },
 		methods: ["omni"], enabled: false,
 	}),
@@ -1358,6 +1365,8 @@ function classifyFamily(m: Pick<ModelDef, "id" | "label" | "capability" | "upstr
 		return undefined;
 	}
 	if (m.capability === "video") {
+		const seedanceFamily = seedanceModelFamily(m.id);
+		if (seedanceFamily) return seedanceFamily;
 		if (s.includes("grok")) return "fam-grok";
 		// ⚠ minimax/happyhorse 判定必须在下方 seedance 兜底正则（/933|900|903/）之前——
 		//   xc903-minimax-h3 / xc900-hh 系的数字段会被兜底误吞进 seedance（第216轮）
@@ -1366,6 +1375,7 @@ function classifyFamily(m: Pick<ModelDef, "id" | "label" | "capability" | "upstr
 		if (s.includes("kling")) return "fam-kling3";
 		if (s.includes("runway")) return "fam-runway45";
 		if (s.includes("veo")) return "fam-veo31";
+		if (/(?:sd|seedance)[- ]?2\.5/.test(s)) return "fam-seedance-2-5";
 		if (s.includes("sora-v3")) return "fam-seedance"; // 全能参考 sora=seedance（用户实锤）
 		if (s.includes("sora")) return "fam-sora2";
 		if (s.includes("gemini")) return "fam-gemini-omni";
@@ -1713,6 +1723,24 @@ if (store.models.length === 0) {
 		store.familyInitVersion = 1;
 		changed = true;
 	}
+	// Seedance 2.5 is an independent family. Only migrate previously shared Seedance assignments once.
+	if ((store.seedance25FamilyVersion ?? 0) < 1) {
+		for (const m of store.models) {
+			if (m.capability === 'video' && m.familyId === 'fam-seedance' && /(?:sd|seedance)[- ]?2\.5/.test(m.id)) {
+				m.familyId = 'fam-seedance-2-5'; m.updatedAt = new Date().toISOString();
+			}
+		}
+		store.seedance25FamilyVersion = 1; changed = true;
+	}
+	if ((store.seedanceVariantsFamilyVersion ?? 0) < 1) {
+		for (const m of store.models) {
+			const familyId = seedanceModelFamily(m.id);
+			if (m.capability === 'video' && m.familyId === 'fam-seedance' && familyId?.startsWith('fam-seedance-2-0-')) {
+				m.familyId = familyId; m.updatedAt = new Date().toISOString();
+			}
+		}
+		store.seedanceVariantsFamilyVersion = 1; changed = true;
+	}
 	if (changed) persist();
 }
 
@@ -1850,6 +1878,7 @@ export function createModel(input: Partial<ModelDef> & Pick<ModelDef, "id" | "la
 		apiKey: input.apiKey || undefined,
 		params: input.params ?? [],
 		cost: input.cost ?? 10,
+		tokenPricing: input.capability === "text" && !input.hidden ? validateTextPricing(input.tokenPricing) : undefined,
 		costField: input.costField?.trim() || undefined,
 		costPerUnit: input.costPerUnit != null ? Number(input.costPerUnit) : undefined,
 		hidden: input.hidden || undefined,
@@ -1885,7 +1914,11 @@ export function createModel(input: Partial<ModelDef> & Pick<ModelDef, "id" | "la
 export function updateModel(id: string, patch: Partial<Omit<ModelDef, "id" | "createdAt">>): ModelDef | undefined {
 	const m = getModelDef(id);
 	if (!m) return undefined;
-	Object.assign(m, patch, { updatedAt: new Date().toISOString() });
+	if ('tokenPricing' in patch) {
+    if ((patch.capability ?? m.capability) !== 'text' || (patch.hidden ?? m.hidden)) throw new Error('仅文本生成模型支持 token 计费');
+    patch.tokenPricing = validateTextPricing(patch.tokenPricing);
+  }
+  Object.assign(m, patch, { updatedAt: new Date().toISOString() });
 	// hidden 内部计费模型与模式体系无关（见 createModel 注释）：任何路径写入的 modeId 一律剥除
 	if (m.hidden) m.modeId = undefined;
 	// 家族归一（第163轮）：空串=清空（客户端归「其他」）；hidden 不归家族
@@ -1933,15 +1966,17 @@ export function resolveModelCost(
 	params?: Record<string, unknown>,
 	override?: { cost?: number; costPerUnit?: number; rules?: { when: Record<string, string>; cost?: number; costPerUnit?: number }[] },
 ): number {
+	if (m.capability === "text" && m.tokenPricing?.enabled) return TEXT_PRECHARGE;
 	const p = params ?? {};
+	const scale = (cost: number) => { const raw = cost * (m.tokenPricing?.multiplier ?? 1); return m.capability === "text" ? Math.ceil(raw - Number.EPSILON * Math.max(1, raw) * 4) : cost; };
 	const route = matchRoute(m, params);
 	const ovRule = override?.rules?.find((r) => Object.keys(r.when ?? {}).every((k) => String(p[k]) === String(r.when[k])));
 	if (m.costField) {
 		const perUnit = ovRule?.costPerUnit ?? override?.costPerUnit ?? route?.costPerUnit ?? m.costPerUnit ?? 0;
 		const unit = Math.max(0, Number(p[m.costField]) || 0);
-		if (perUnit > 0 && unit > 0) return Math.round(perUnit * unit);
+		if (perUnit > 0 && unit > 0) return m.capability === "text" ? scale(perUnit * unit) : Math.round(perUnit * unit);
 	}
-	return ovRule?.cost ?? override?.cost ?? route?.cost ?? m.cost;
+	return scale(ovRule?.cost ?? override?.cost ?? route?.cost ?? m.cost);
 }
 
 export function deleteModel(id: string): boolean {

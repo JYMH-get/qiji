@@ -1,3 +1,5 @@
+import { normalizeTextUsage } from '../textPricing.ts';
+import type { TextTokenUsage } from '../contract.ts';
 /**
  * OpenAI 兼容文本翻译器（真）。
  *
@@ -53,6 +55,7 @@ export async function translateOpenAIText(req: GenerateRequest, up: Upstream, on
 		messages: [{ role: "user", content: userContent }],
 		temperature: Number(req.params?.temperature ?? 0.7),
 		stream: true,
+		stream_options: { include_usage: true },
 	};
 	if (req.params?.maxTokens) body.max_tokens = Number(req.params.maxTokens);
 
@@ -104,6 +107,8 @@ export async function translateOpenAIText(req: GenerateRequest, up: Upstream, on
 	}
 
 	let content = "";
+	let usage: TextTokenUsage | undefined;
+	let rawUsage: unknown;
 	let buffer = "";
 	const decoder = new TextDecoder();
 	try {
@@ -119,6 +124,7 @@ export async function translateOpenAIText(req: GenerateRequest, up: Upstream, on
 				if (payload === "[DONE]") continue;
 				try {
 					const j = JSON.parse(payload);
+					if (j.usage != null) { rawUsage = j.usage; usage = normalizeTextUsage(j.usage); }
 					const delta = j?.choices?.[0]?.delta?.content;
 					if (typeof delta === "string" && delta) {
 						content += delta;
@@ -134,17 +140,22 @@ export async function translateOpenAIText(req: GenerateRequest, up: Upstream, on
 		return { status: "failed", error: `下游流式中断：${(err as Error).message}` };
 	}
 	clearIdle();
-	onUpstream?.({ response: { httpStatus: resp.status, content } });
+  const tail = buffer.trim();
+  if (tail.startsWith('data:')) { try { const j=JSON.parse(tail.slice(5).trim());
+    if (j.usage != null) {rawUsage=j.usage;usage=normalizeTextUsage(j.usage);}
+    if (typeof j?.choices?.[0]?.delta?.content === 'string') content += j.choices[0].delta.content;
+  } catch {} }
+	onUpstream?.({ response: { httpStatus: resp.status, content, usage: rawUsage } });
 
 	if (!content) return { status: "failed", error: "下游未返回任何内容" };
 	if (wantJson) {
 		try {
-			return { status: "success", result: { json: JSON.parse(content), text: content } };
+			return { status: "success", result: { json: JSON.parse(content), text: content, usage } };
 		} catch {
 			return { status: "failed", error: "下游未返回合法 JSON（结构化输出解析失败）" };
 		}
 	}
-	return { status: "success", result: { text: content } };
+	return { status: "success", result: { text: content, usage } };
 }
 
 /** 公网可达的 http(s) 直链（排除 localhost/asset.localhost/回环地址——g-aisc 服务器拉取不到内网/本机 URL） */

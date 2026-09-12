@@ -97,6 +97,7 @@ const BRAND_TOKENS = [
 
 /** 已知上游域（含成片 CDN）；出现在错误文案里一律隐藏（子域一并吞掉） */
 const HOST_TOKENS = [
+	"hjmie.cc.cd",
 	"dimensio.cn",
 	"aixyzz.com",
 	"aistarslab.com",
@@ -153,7 +154,7 @@ const NUL = String.fromCharCode(0);
 const PH = (i: number): string => NUL + i + NUL;
 
 /** 把错误/提示文案里的渠道识别信息（品牌名/渠道显示名/上游域名/链接）替换为中性词 */
-export function scrubChannelInfo(msg: string): string {
+export function scrubChannelInfo(msg: string, preserveModeNames = true): string {
 	if (!msg) return msg;
 	let out = msg;
 
@@ -183,6 +184,7 @@ export function scrubChannelInfo(msg: string): string {
 		.sort((a, b) => b.length - a.length);
 	const stash: string[] = [];
 	for (const n of modeNames) {
+		if (!preserveModeNames) continue;
 		if (!out.includes(n)) continue;
 		out = out.split(n).join(PH(stash.length));
 		stash.push(n);
@@ -190,6 +192,7 @@ export function scrubChannelInfo(msg: string): string {
 
 	// 4) 品牌词（静态清单 + 渠道显示名）→ 中性词「渠道」
 	const tokens = new Set<string>(BRAND_TOKENS);
+	if (!preserveModeNames) for (const name of modeNames) tokens.add(name);
 	for (const ch of listChannels()) {
 		const name = (ch.name || "").trim();
 		if (name.length >= 2) tokens.add(name);

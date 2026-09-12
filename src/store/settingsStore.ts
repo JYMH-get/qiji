@@ -65,11 +65,13 @@ export function normalizeTidyRowGap(v: unknown): number {
   return Math.min(400, Math.max(0, Math.round(n)));
 }
 
-/** 用户自定义出图预设方案（客户端本地，与服务端「预设方案」模板并列出现在图片节点预设下拉/胶囊里） */
+/** 用户自定义预设方案（客户端本地，按 target 分为独立的图片/视频预设） */
 export interface CustomPreset {
   id: string;
   name: string;
   body: string;
+  /** 图片/视频独立预设；旧设置未标注时归图片。 */
+  target?: "image" | "video";
   /** 互斥组（规则）：同组预设不能同时出现在一段提示词里；填「宫格」可与内置宫格预设互斥。空=无互斥 */
   group?: string;
   /** 默认插入位置：前缀（用户输入前）/后缀（用户输入后）；缺省=前缀 */
@@ -100,7 +102,7 @@ interface SettingsState {
   /** 已保存的表格样式模板（命名快照，可一键切换） */
   videoTableTemplates: VideoTableTemplate[];
 
-  /** 用户自定义出图预设方案（本地，图片节点预设下拉/胶囊里与服务端预设并列） */
+  /** 用户自定义预设，按 target 筛选；旧项未标注时归图片 */
   customPresets: CustomPreset[];
 
   /** 画布快捷键用户覆盖：actionId → 规范化组合串（见 src/canvas/keymap.ts；缺省=各动作默认键） */
@@ -163,7 +165,7 @@ interface SettingsState {
   setDepthVideoSmooth: (enabled: boolean) => void;
 
   /** 新增自定义预设（返回新 id）；group=互斥组、position=前缀/后缀（可选） */
-  addCustomPreset: (name: string, body: string, group?: string, position?: "prefix" | "suffix") => string;
+  addCustomPreset: (name: string, body: string, group?: string, position?: "prefix" | "suffix", target?: "image" | "video") => string;
   /** 修改自定义预设 */
   updateCustomPreset: (id: string, patch: Partial<Omit<CustomPreset, "id">>) => void;
   /** 删除自定义预设 */
@@ -342,9 +344,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     get().save();
   },
 
-  addCustomPreset: (name, body, group, position) => {
+  addCustomPreset: (name, body, group, position, target = "image") => {
     const id = `preset.custom.${Date.now()}.${++_idCounter}`;
-    const p: CustomPreset = { id, name: name.trim() || `自定义预设${get().customPresets.length + 1}`, body, group: group?.trim() || undefined, position: position === "suffix" ? "suffix" : "prefix" };
+    const p: CustomPreset = { id, name: name.trim() || `自定义预设${get().customPresets.filter((p) => (p.target ?? "image") === target).length + 1}`, body, target, group: group?.trim() || undefined, position: position === "suffix" ? "suffix" : "prefix" };
     set((s) => ({ customPresets: [...s.customPresets, p] }));
     get().save();
     return id;

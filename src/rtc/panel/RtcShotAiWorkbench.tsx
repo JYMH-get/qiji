@@ -185,9 +185,9 @@ function WorkbenchBody({ episodeId, shotId, segId, imageSlot, isMedia }: { episo
 	// 出图预设方案（与 Frame161195 同源：服务端预设库 + 本地自定义，随 catalog 热更）
 	const presetCatalogVer = useCatalogStore((s) => s.catalog?.version);
 	const customPresets = useSettingsStore((s) => s.customPresets);
-	const presetSchemes = useMemo(() => listPresetSchemes(), [presetCatalogVer, customPresets]);
 	// 非同源模式的提示词小页签（本地态，换选中随 key 重置）
 	const [promptTab, setPromptTab] = useState<ShotPromptFieldKey>("storyboardPrompt");
+	const presetSchemes = useMemo(() => listPresetSchemes(!sameSource && promptTab === "videoPrompt" ? "video" : "image"), [presetCatalogVer, customPresets, sameSource, promptTab]);
 	// 第二行「仅本分镜」视频参数的数据面（第251轮：模型三级下拉已移除，只留档位；
 	// 生效模型仍按「本分镜覆盖 > 右栏项目级」解析——档位随它走）
 	const effVideoKey = useEffectiveModelKey("video");

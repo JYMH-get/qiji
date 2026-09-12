@@ -12,7 +12,7 @@
 import type { Purpose } from "@/contract";
 import type { GenSpec } from "@/services/generationQueue";
 import type { AssetCat } from "@/store/projectStore";
-import { resolveSize, clampImageResolution, imageResolutionOptions } from "@/lib/genParams";
+import { buildImageParams, clampImageResolution, imageResolutionOptions } from "@/lib/genParams";
 import { assetImageAspectFrom } from "@/lib/templateAspect";
 
 /** 五类资产 → 出图 purpose（与 AssetWorkbench 各页 imagePurpose 一致：群像与角色共用 character 出图用途，前缀 G） */
@@ -38,7 +38,7 @@ export interface AssetGenInput {
 
 /**
  * 纯函数：组装基础形象出图 GenSpec（与 AssetWorkbench.generateForm 逐字段对齐——
- * params={size,quality,idPrefix,assetName}、purpose 按分类映射、variantId=null）。
+ * params={aspect_ratio,resolution,quality,idPrefix,assetName}、purpose 按分类映射、variantId=null）。
  * 无提示词返回 { error }（明确报错不发请求）；resOptions=当前生效图像模型开放的分辨率档
  * （服务端 catalog 控档，选择不在开放集时归一到第一档——与资产模式同一把尺）。
  */
@@ -62,7 +62,7 @@ export function buildAssetBaseGenSpec(
 			purpose: ASSET_IMAGE_PURPOSE[cat],
 			prompt,
 			modelKey: modelKey || undefined,
-			params: { size: resolveSize(aspect, resolution), quality, idPrefix: ASSET_CAT_PREFIX[cat], assetName: asset.name },
+			params: { ...buildImageParams({ aspect, resolution, quality }, resOptions), idPrefix: ASSET_CAT_PREFIX[cat], assetName: asset.name },
 			label: asset.name,
 		},
 	};

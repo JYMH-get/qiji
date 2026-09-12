@@ -107,20 +107,10 @@ import { applyTransformAt, effectiveTransformAt } from "@/lib/rtcKeyframes";
 /* ── 第三批：画面裁剪（clip-path 换算）+ 字幕层 ── */
 import { cropClipPathCss, cropOf } from "@/lib/rtcCropCore";
 import { RtcTextLayer } from "./RtcTextLayer";
+import { rememberMediaTime, seekMediaTime, shouldResyncMedia } from "./rtcMediaSync";
 
-/** 漂移校正阈值（秒）：视频 >150ms seek 回来；音频池粗校正 300ms；暂停跟随 1 帧（33ms） */
-const VIDEO_DRIFT_SEC = 0.15;
+/** 漂移校正阈值（秒）：视频阈值由 rtcMediaSync 统一；音频池粗校正 300ms */
 const AUDIO_DRIFT_SEC = 0.3;
-const SCRUB_FOLLOW_SEC = 0.033;
-
-/** 元素就绪即 seek，未就绪挂 loadedmetadata 一次性补 seek */
-function setMediaTime(el: HTMLMediaElement, sec: number) {
-	const apply = () => {
-		try { el.currentTime = sec; } catch { /* 元数据异常时忽略，漂移校正兜底 */ }
-	};
-	if (el.readyState >= 1) apply();
-	else el.addEventListener("loadedmetadata", apply, { once: true });
-}
 
 function PlaceholderCard({ seg }: { seg: RtcSegment }) {
 	return (
@@ -566,9 +556,8 @@ export function RtcSequencePlayer() {
 				const el = videoElsRef.current.get(l.trackId);
 				if (!el || el.readyState < 1) continue;
 				if (syncedSegRef.current.get(l.trackId) !== l.seg.id) continue;
-				if (Math.abs(el.currentTime - l.sourceSec) > VIDEO_DRIFT_SEC) {
-					try { el.currentTime = l.sourceSec; } catch { /* noop */ }
-				}
+				rememberMediaTime(el, l.sourceSec);
+				if (shouldResyncMedia(el.currentTime, l.sourceSec, true)) seekMediaTime(el, l.sourceSec);
 			}
 			raf = requestAnimationFrame(tick);
 		};
@@ -602,11 +591,14 @@ export function RtcSequencePlayer() {
 			el.volume = layer.volume; // 音量（含关键帧与复合宿主乘积）已在 rtcPlayback 源头算好
 			el.muted = layer.muted;
 			el.playbackRate = layer.rate;
+			// 每一帧先登记最新目标：metadata 延迟到达时必须跳当前播放头，不能跳最初入段位置。
+			rememberMediaTime(el, layer.sourceSec);
 			if (synced.get(trackId) !== layer.seg.id) {
-				setMediaTime(el, layer.sourceSec); // 入段对时（含 sourceStartUs/speed 换算）
+				seekMediaTime(el, layer.sourceSec); // 入段对时（含 sourceStartUs/speed 换算）
 				synced.set(trackId, layer.seg.id);
-			} else if (!playing && el.readyState >= 1 && Math.abs(el.currentTime - layer.sourceSec) > SCRUB_FOLLOW_SEC) {
-				try { el.currentTime = layer.sourceSec; } catch { /* noop */ } // 暂停时被时间轴拖动 → 画面跟随
+			} else if (el.readyState >= 1 && shouldResyncMedia(el.currentTime, layer.sourceSec, playing)) {
+				// 暂停拖动精确跟随；同一片段从其它位置开播时，也在 play() 前立即对时。
+				seekMediaTime(el, layer.sourceSec);
 			}
 			// 冻结幽灵层（转场定格帧）永不 play：入段对时那一帧就是它的全部
 			if (playing && active.has(trackId) && !layer.frozen) {
@@ -656,14 +648,15 @@ export function RtcSequencePlayer() {
 			}
 			el.volume = clip.volume;
 			el.playbackRate = clip.rate;
+			rememberMediaTime(el, clip.sourceSec);
 			if (playing) {
 				// 条目自带已解算的源时间（复合偏移与 speed 已在纯函数里算好）
 				const target = clip.sourceSec;
 				if (el.paused) {
-					setMediaTime(el, target);
+					seekMediaTime(el, target);
 					void el.play().catch(() => {});
 				} else if (el.readyState >= 1 && Math.abs(el.currentTime - target) > AUDIO_DRIFT_SEC) {
-					setMediaTime(el, target); // 粗漂移校正
+					seekMediaTime(el, target); // 粗漂移校正
 				}
 			} else if (!el.paused) {
 				el.pause();

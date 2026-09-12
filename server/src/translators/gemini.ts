@@ -6,8 +6,7 @@
  *  - parts 用 **snake_case** `inline_data/mime_type`（官方两种命名都收，聚合网关只认文档写法——
  *    此前发 camelCase `inlineData` 被网关忽略，垫图等于没发）；文本在前、垫图在后；
  *  - **全部垫图**都发（此前只取第一张，多图垫图全丢）；
- *  - generationConfig.imageConfig 的 aspectRatio/imageSize 从客户端 params.size（如 "2048x1152"）
- *    推导（此前读从未下发的 params.aspectRatio，配置从未生效）。
+ *  - generationConfig.imageConfig 的 aspectRatio/imageSize 由管理端按公共比例/分辨率转换后传入。
  * 响应从 candidates[].content.parts[].inlineData / inline_data 取 base64 图像字节（两种命名都兼容）。
  */
 import { buildPrompt } from "./prompt.ts";

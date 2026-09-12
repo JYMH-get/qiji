@@ -10,6 +10,10 @@ $buildStartedAt = Get-Date
 $embeddedNyxenUploadKey = 'sk_7f71fe98b2664f5fa1605e8a'
 $injectedEmbeddedNyxenKey = $false
 $scriptExitCode = 0
+$packageLogDir = Join-Path $projectRoot 'outputs\client-packaging'
+New-Item -ItemType Directory -Path $packageLogDir -Force | Out-Null
+$packageLog = Join-Path $packageLogDir ("package-" + $buildStartedAt.ToString('yyyyMMdd-HHmmss') + '.log')
+Start-Transcript -LiteralPath $packageLog | Out-Null
 
 function Assert-File {
     param(
@@ -121,6 +125,11 @@ try {
     if ($packages.Count -eq 0) {
         throw "打包命令完成，但未找到本轮新生成的 .exe 或 .msi：$bundleRoot"
     }
+    foreach ($extension in @('.exe', '.msi')) {
+        if (-not ($packages | Where-Object Extension -eq $extension)) {
+            throw "本轮缺少 $extension 安装包，已停止发布旧产物。"
+        }
+    }
 
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $shareDir = Join-Path $projectRoot "release\Qiji-$($tauriConfig.version)-$stamp"
@@ -135,6 +144,14 @@ try {
         "$($hash.Hash)  $($package.Name)"
     }
     Set-Content -LiteralPath (Join-Path $shareDir 'SHA256SUMS.txt') -Value $hashLines -Encoding UTF8
+    [ordered]@{
+        version = $tauriConfig.version
+        builtAt = (Get-Date).ToString('o')
+        serverUrl = $productionServerUrl
+        testsSkipped = [bool]$SkipTests
+        packages = @($copiedPackages | ForEach-Object { @{ name = $_.Name; bytes = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash } })
+    } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $shareDir 'build-info.json') -Encoding UTF8
+    Set-Content -LiteralPath (Join-Path $packageLogDir 'latest-release.txt') -Value $shareDir -Encoding UTF8
 
     Write-Host "`n打包成功，可分享文件位于：" -ForegroundColor Green
     Write-Host $shareDir -ForegroundColor Yellow
@@ -154,6 +171,7 @@ try {
         Write-Host '当前打包进程中的专项密钥已清除。' -ForegroundColor DarkGray
     }
     $embeddedNyxenUploadKey = $null
+    Stop-Transcript | Out-Null
 }
 
 exit $scriptExitCode

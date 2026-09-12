@@ -104,6 +104,14 @@ export function registerGroupHandlers(): void {
     s.setGroups({ ...s.groups, [groupId]: newGroup });
   });
 
+  commandBus.register("setGroupKind", (c) => {
+    if (c.type !== "setGroupKind") return;
+    const s = store();
+    const group = s.groups[c.groupId];
+    if (!group) return;
+    s.setGroups({ ...s.groups, [c.groupId]: { ...group, kind: c.kind } });
+  });
+
   commandBus.register("ungroup", (c) => {
     if (c.type !== "ungroup") return;
     const s = store();

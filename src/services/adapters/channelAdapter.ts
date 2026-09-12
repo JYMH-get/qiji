@@ -11,6 +11,7 @@
  */
 
 import type { NodeType } from "@/types";
+import { migratedRouteKey } from '@/lib/routeParams';
 import { SEEDANCE_FAMILY_ID, type Capability } from "@/contract";
 import { getAdapter } from "./registry";
 import { libtvModelOptions } from "./libtvAdapter";
@@ -90,7 +91,8 @@ export function getChannelModelsForNodeType(nodeType: NodeType): ModelOption[] {
     familyId: o.familyId ?? SEEDANCE_FAMILY_ID,
     familyName: fams?.find((f) => f.id === (o.familyId ?? SEEDANCE_FAMILY_ID))?.name || o.familyName || "Seedance 2.0",
   }));
-  return [...filtered, ...locals];
+  const routedFamilies = useCatalogStore.getState().catalog?.routedFamilies;
+  return [...filtered, ...locals.filter(o => !routedFamilies?.includes(o.familyId))];
 }
 
 /** 获取某节点类型 / 能力分类的默认模型 id（第132轮：设置「模型」页已删、无全局默认——自动取该能力第一个可用模型，
@@ -120,6 +122,14 @@ export function resolveActiveModelKey(
     !modelParam.endsWith("__fallback") &&
     modelParam !== placeholderModel
   ) {
+    const routedFamilies = useCatalogStore.getState().catalog?.routedFamilies;
+    if (routedFamilies?.length && ['video','image'].includes(capabilityForNodeType(nodeType))) {
+      const choices = getChannelModelsForNodeType(nodeType);
+      if (!choices.some(m => m.id === modelParam)) {
+        const migrated = migratedRouteKey(modelParam, choices, routedFamilies);
+        if (migrated !== undefined) return migrated;
+      }
+    }
     return modelParam;
   }
 

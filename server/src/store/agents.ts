@@ -456,10 +456,10 @@ export function deleteAgent(id: string): boolean {
 // **切换前**的历史扣款（billing 快照里带 agentCosts），故原语保留。
 
 /** 只改内存余额，不落盘。delta<0=扣、>0=退。返回 false=渠道商不存在或会透支。 */
-export function applyAgentCreditsDelta(id: string, delta: number): boolean {
+export function applyAgentCreditsDelta(id: string, delta: number, allowDebt = false): boolean {
 	const a = getAgent(id);
 	if (!a) return false;
-	if (a.credits + delta < 0) return false;
+	if (a.credits + delta < 0 && !allowDebt) return false;
 	a.credits += delta;
 	a.updatedAt = new Date().toISOString();
 	return true;

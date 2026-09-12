@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { Layers, Settings } from "lucide-react";
+import { Layers, Settings, Type } from "lucide-react";
 import { listPlugins } from "@/nodes/pluginRegistry";
 import { dispatchCommand } from "@/command/dispatch";
 import { makeNode, NODE_W, NODE_H } from "./nodeFactory";
@@ -13,6 +13,8 @@ import { useReactFlow } from "@xyflow/react";
 export function FloatingToolbar() {
 	const startDragToCanvas = useDragToCanvas();
 	const { screenToFlowPosition } = useReactFlow();
+	const canvasMode = useUiStore((s) => s.canvasMode);
+	const markerActive = canvasMode?.type === "canvas-draw";
 
 	const addAtCenter = (type: NodeType) => {
 		const screenCenterX = window.innerWidth / 2;
@@ -55,6 +57,15 @@ export function FloatingToolbar() {
 					</button>
 				);
 			})}
+
+			<button
+				onClick={() => useUiStore.getState().setCanvasMode(markerActive ? null : { type: "canvas-draw", tool: "select", color: "#ffffff", fontSize: 18, highlight: false })}
+				title="画布标注：文字、箭头、圆角矩形、圆形"
+				className={`group flex h-11 w-11 cursor-pointer flex-col items-center justify-center gap-0.5 rounded-xl transition-colors ${markerActive ? "bg-primary/20 text-primary" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}
+			>
+				<Type className="h-4 w-4" />
+				<span className="text-[9px]">标记</span>
+			</button>
 			
 			<div className="h-[1px] bg-border/40 my-1 w-full" />
 			

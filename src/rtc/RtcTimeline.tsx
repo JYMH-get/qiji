@@ -5,7 +5,7 @@
  * 播放头竖线绝对定位贯穿轨道区（z 低于 sticky 头，标尺上的三角标记补齐视觉）。
  *
  * 交互（全部 pointer 事件，集中在内容层按 data-seg / data-edge / data-ruler / data-track-id 派发）：
- *   - 拖动/裁剪过程只改本地 previewDoc（moveSegment/trimSegment 纯函数试算），**pointerup 才
+ *   - 拖动/裁剪过程只改本地 previewDoc（moveSegmentsTogether/trimSegment 纯函数试算），**pointerup 才
  *     commit 一次**——一次手势 = 一条 undo；期间绝不逐帧 commit；
  *   - 吸附按 snapCandidates 就近（阈值 SNAP_PX 像素换算微秒）；落点重叠由 rtcOps 夹到最近空隙；
  *   - 拖放入轨接 application/x-qiji-asset：视频/音频先探测真实时长（图片默认 3 秒），
@@ -16,7 +16,7 @@
  *
  * 拖到缝隙新建轨道：拖动中指针悬在两行边界的命中带（GAP_HIT_PX）上，**持续 GAP_DWELL_MS**
  *   才判定为「要在此新建轨道」（防跨轨路过误建）→ 高亮该缝隙 → 松手时同一 commit 里
- *   insertTrackAt + moveSegment（一条 undo）。只有能容纳该类型的缝隙才高亮（gapLegalForType）；
+ *   insertTrackAt + moveSegmentsTogether（一条 undo）。只有能容纳该类型的缝隙才高亮（gapLegalForType）；
  *   指针在轨道区之外（标尺上方/底部空白）时收敛到最近的合法缝隙（nearestLegalGap）——
  *   「拖到底部空白新建轨道」的老能力即此情形，视频片段会落到主轨上方（新 video 轨绝不越到主轨之下）。
  */
@@ -32,7 +32,7 @@ import {
 	gapLegalForType,
 	insertTrackAt,
 	mainVideoTrackId,
-	moveSegment,
+	moveSegmentsTogether,
 	nearestLegalGap,
 	nearestSnap,
 	orderTracksForDisplay,
@@ -115,6 +115,8 @@ import {
 	RULER_H,
 	rowHeightOf,
 	marqueeSelectIds,
+	blankClickSeekUs,
+	playheadOffsetPx,
 	SNAP_PX,
 	TRACK_LABELS,
 	imageDefaultUs,
@@ -127,10 +129,11 @@ const US_PER_SEC = 1_000_000;
 
 type DragState =
 	| { kind: "seek" }
-	| { kind: "blank"; startX: number; startY: number; moved: boolean; sx: number; sy: number }
+	| { kind: "blank"; startX: number; startY: number; pointerDownUs: number; moved: boolean; sx: number; sy: number }
 	| {
 			kind: "move";
 			segId: string;
+			segIds: string[];
 			trackType: RtcTrackType;
 			grabOffsetUs: number;
 			durUs: number;
@@ -192,8 +195,9 @@ function PlayheadLine() {
 	const pxPerSec = useRtcStore((s) => s.pxPerSec);
 	return (
 		<div
-			className="absolute top-0 bottom-0 w-px z-10 pointer-events-none"
-			style={{ left: HEADER_W + (playheadUs / US_PER_SEC) * pxPerSec, background: "var(--primary)" }}
+			data-playhead-line
+			className="absolute top-0 bottom-0 w-px pointer-events-none"
+			style={{ left: playheadOffsetPx(playheadUs, pxPerSec), background: "var(--primary)" }}
 		/>
 	);
 }
@@ -218,10 +222,10 @@ export function RtcTimeline() {
 	const laneEpisode = useProjectStore((s) => s.episodes.find((ep) => ep.id === laneEpKey));
 
 	const [previewDoc, setPreviewDoc] = useState<RtcDoc | null>(null);
-	/** 拖动跟手幽灵 + 白色半透明落点预览（ghost=吸附后的指针位置自由跟随；slot=松手将落下的合法位置） */
+	/** 拖动跟手素材 + 白色半透明落点虚影；多选时两层都逐片段绘制。 */
 	const [moveGhost, setMoveGhost] = useState<{
-		ghost: { left: number; top: number; width: number; height: number; label: string };
-		slot: { left: number; top: number; width: number; height: number } | null;
+		ghosts: Array<{ id: string; left: number; top: number; width: number; height: number; label: string }>;
+		slots: Array<{ id: string; left: number; top: number; width: number; height: number }>;
 	} | null>(null);
 	const [dropHint, setDropHint] = useState<string | null>(null);
 	/** 素材拖放命中的「将被原位替换」片段 id（dragover 期间的视觉反馈） */
@@ -521,12 +525,15 @@ export function RtcTimeline() {
 					return;
 				}
 				// 点击选中：带 groupId 的片段选中整组（删除/复制/剪切经 selection 天然作用于整组）
-				if (!st.selection.includes(segId)) st.setSelection(expandSelectionWithGroups(d, [segId]));
+				const activeSelection = st.selection.includes(segId)
+					? st.selection
+					: expandSelectionWithGroups(d, [segId]);
+				if (!st.selection.includes(segId)) st.setSelection(activeSelection);
 
 				const thresholdUs = (SNAP_PX / st.pxPerSec) * US_PER_SEC;
-				const candidates = snapCandidates(d, [segId]);
 				const edgeEl = target.closest<HTMLElement>("[data-edge]");
 				if (edgeEl) {
+					const candidates = snapCandidates(d, [segId]);
 					const edge = edgeEl.dataset.edge as "start" | "end";
 					let sourceTotalUs: number | undefined;
 					if (seg.kind === "media" && (seg.media === "video" || seg.media === "audio") && seg.uri) {
@@ -550,13 +557,16 @@ export function RtcTimeline() {
 						deltaUs: 0,
 					};
 				} else {
+					// Alt 拖动沿用“只复制鼠标下单片”的既有语义；普通拖动携带整个当前选区。
+					const segIds = e.altKey ? [segId] : activeSelection;
 					dragRef.current = {
 						kind: "move",
 						segId,
+						segIds,
 						trackType: track.type,
 						grabOffsetUs: eventUs(e.clientX) - seg.targetStartUs,
 						durUs: seg.targetDurationUs,
-						candidates,
+						candidates: snapCandidates(d, segIds),
 						thresholdUs,
 						startX: e.clientX,
 						startY: e.clientY,
@@ -579,6 +589,7 @@ export function RtcTimeline() {
 					kind: "blank",
 					startX: e.clientX,
 					startY: e.clientY,
+					pointerDownUs: eventUs(e.clientX),
 					moved: false,
 					sx: rect ? e.clientX - rect.left : 0,
 					sy: rect ? e.clientY - rect.top : 0,
@@ -652,57 +663,70 @@ export function RtcTimeline() {
 				const cand = tid ? d.tracks.find((t) => t.id === tid) : undefined;
 				if (cand && cand.type === drag.trackType && !cand.locked) drag.toTrackId = cand.id;
 				drag.desiredStartUs = desired;
-				/* 拖动观感（用户定稿）：素材**跟手**，不在合法空隙间跳（闪来闪去的病根=把 moveSegment 的
+				/* 拖动观感（用户定稿）：素材**跟手**，不在合法空隙间跳（闪来闪去的病根=把最终落位试算
 				 * 夹隙结果直接当预览）。三件套：①原片段从预览里「抬起」（removeSegments 只作预览，落笔仍从
 				 * 真 doc 算）；②幽灵条按吸附后的指针时间+指针所在行自由跟随（跨轨也跟）；③**白色半透明
-				 * 落点预览**画在 moveSegment 试算的合法位置=松手真正落下的地方（悬停缝隙建新轨时不画）。 */
+				 * 落点预览**画在 moveSegmentsTogether 试算的合法位置=松手真正落下的地方（悬停缝隙建新轨时不画）。 */
 				if (!drag.copy && !drag.lifted) {
 					// 复制拖动不「抬起」原片段——原片段留在原地，只有幽灵与落点预览在动
 					drag.lifted = true;
-					setPreviewDoc(removeSegments(d, [drag.segId]));
+					setPreviewDoc(removeSegments(d, drag.segIds));
 				}
 				const rows = orderTracksForDisplay(d.tracks);
 				const rectTop = contentRef.current?.getBoundingClientRect().top;
 				// 幽灵条**逐像素跟随指针**（指针=条的纵向中心；不按行量化、不钳进轨道区——真跟手，勿回退成 ROW_H 取整）
 				const ghostTop = rectTop != null ? e.clientY - rectTop - (drag.rowH - 8) / 2 : RULER_H;
-				const widthPxOf = Math.max(2, (drag.durUs / US_PER_SEC) * st.pxPerSec);
-				let slot: { left: number; top: number; width: number; height: number } | null = null;
-				if (drag.newTrackGap == null) {
-					// 落点试算与松手 commit 同一把尺：移动=moveSegment、复制=addSegment（原片段在场参与夹隙）
-					let landed: RtcSegment | undefined;
-					if (drag.copy) {
-						const clone = dragCopyClone(d, drag.segId, desired, COPY_TRIAL_ID);
-						if (clone) {
-							const trial = addSegment(d, drag.toTrackId, clone);
-							landed = trial.tracks.find((t) => t.id === drag.toTrackId)?.segments.find((sg) => sg.id === COPY_TRIAL_ID);
-						}
-					} else {
-						const trial = moveSegment(d, drag.segId, drag.toTrackId, desired);
-						landed = trial.tracks.find((t) => t.id === drag.toTrackId)?.segments.find((sg) => sg.id === drag.segId);
-					}
-					const slotIdx = rows.findIndex((t) => t.id === drag.toTrackId);
-					if (landed && slotIdx >= 0) {
-						// 目标行顶部按行高累加（文本轨半高——ROW_H 定步长会错位）；基线含原文车道偏移
-						let slotTop = RULER_H + laneHRef.current;
-						for (let i = 0; i < slotIdx; i++) slotTop += rowHeightOf(rows[i]);
-						slot = {
-							left: HEADER_W + (landed.targetStartUs / US_PER_SEC) * st.pxPerSec,
-							top: slotTop,
-							width: widthPxOf,
-							height: rowHeightOf(rows[slotIdx]) - 8,
-						};
-					}
+				const rowTop = (trackId: string) => {
+					const idx = rows.findIndex((t) => t.id === trackId);
+					let top = RULER_H + laneHRef.current;
+					for (let i = 0; i < idx; i++) top += rowHeightOf(rows[i]);
+					return { idx, top };
+				};
+				if (drag.copy) {
+					const clone = drag.newTrackGap == null ? dragCopyClone(d, drag.segId, desired, COPY_TRIAL_ID) : null;
+					const trial = clone ? addSegment(d, drag.toTrackId, clone) : null;
+					const landed = trial?.tracks.find((t) => t.id === drag.toTrackId)?.segments.find((sg) => sg.id === COPY_TRIAL_ID);
+					const destination = rowTop(drag.toTrackId);
+					const width = Math.max(2, (drag.durUs / US_PER_SEC) * st.pxPerSec);
+					setMoveGhost({
+						ghosts: [{ id: drag.segId, left: HEADER_W + (desired / US_PER_SEC) * st.pxPerSec, top: ghostTop, width, height: drag.rowH - 8, label: `${drag.label} · 副本` }],
+						slots: landed && destination.idx >= 0 ? [{ id: drag.segId, left: HEADER_W + (landed.targetStartUs / US_PER_SEC) * st.pxPerSec, top: destination.top, width, height: rowHeightOf(rows[destination.idx]) - 8 }] : [],
+					});
+					return;
 				}
-				setMoveGhost({
-					ghost: {
-						left: HEADER_W + (desired / US_PER_SEC) * st.pxPerSec,
-						top: ghostTop,
-						width: widthPxOf,
-						height: drag.rowH - 8,
-						label: drag.copy ? `${drag.label} · 副本` : drag.label,
-					},
-					slot,
-				});
+
+				const originals = d.tracks.flatMap((track) =>
+					track.segments.filter((seg) => drag.segIds.includes(seg.id)).map((seg) => ({ track, seg })),
+				);
+				const anchorOriginal = originals.find((x) => x.seg.id === drag.segId);
+				const anchorSourceTop = anchorOriginal ? rowTop(anchorOriginal.track.id).top : 0;
+				const rawDelta = anchorOriginal ? desired - anchorOriginal.seg.targetStartUs : 0;
+				const ghosts = originals.map(({ track, seg: original }) => ({
+					id: original.id,
+					left: HEADER_W + ((original.targetStartUs + rawDelta) / US_PER_SEC) * st.pxPerSec,
+					top: ghostTop + rowTop(track.id).top - anchorSourceTop,
+					width: Math.max(2, (original.targetDurationUs / US_PER_SEC) * st.pxPerSec),
+					height: rowHeightOf(track) - 8,
+					label: original.name || (original.kind === "compound" ? "复合片段" : original.kind === "placeholder" ? "占位" : "片段"),
+				}));
+				const trial = drag.newTrackGap == null
+					? moveSegmentsTogether(d, drag.segIds, drag.segId, drag.toTrackId, desired)
+					: null;
+				const slots = trial ? originals.flatMap(({ seg: original }) => {
+					const landedTrack = trial.tracks.find((track) => track.segments.some((seg) => seg.id === original.id));
+					const landed = landedTrack?.segments.find((seg) => seg.id === original.id);
+					if (!landedTrack || !landed) return [];
+					const destination = rowTop(landedTrack.id);
+					if (destination.idx < 0) return [];
+					return [{
+						id: original.id,
+						left: HEADER_W + (landed.targetStartUs / US_PER_SEC) * st.pxPerSec,
+						top: destination.top,
+						width: Math.max(2, (landed.targetDurationUs / US_PER_SEC) * st.pxPerSec),
+						height: rowHeightOf(landedTrack) - 8,
+					}];
+				}) : [];
+				setMoveGhost({ ghosts, slots });
 				return;
 			}
 			// trim
@@ -731,7 +755,11 @@ export function RtcTimeline() {
 		const st = useRtcStore.getState();
 		if (drag.kind === "blank") {
 			setMarquee(null);
-			if (!drag.moved && st.selection.length) st.setSelection([]); // 原地点击=清空选区（框选结果保留）
+			const seekUs = blankClickSeekUs(drag.moved, drag.pointerDownUs);
+			if (seekUs != null) {
+				st.setPlayhead(seekUs);
+				if (st.selection.length) st.setSelection([]); // 原地点击=定位播放头并清空选区（框选结果保留）
+			}
 			return;
 		}
 		if (drag.kind === "seek") return;
@@ -777,10 +805,10 @@ export function RtcTimeline() {
 				commitActiveNow((d) => {
 					const at = gapInsertIndex(d.tracks, gap, drag.trackType); // 现算，不用拖动期间的快照
 					const withTrack = insertTrackAt(d, drag.trackType, at, { id: newTrackId });
-					return pruneEmptyTracks(moveSegment(withTrack, drag.segId, newTrackId, drag.desiredStartUs)); // 源轨空了就回收
+					return pruneEmptyTracks(moveSegmentsTogether(withTrack, drag.segIds, drag.segId, newTrackId, drag.desiredStartUs)); // 源轨空了就回收
 				});
 			} else {
-				commitActiveNow((d) => pruneEmptyTracks(moveSegment(d, drag.segId, drag.toTrackId, drag.desiredStartUs))); // 源轨空了就回收
+				commitActiveNow((d) => pruneEmptyTracks(moveSegmentsTogether(d, drag.segIds, drag.segId, drag.toTrackId, drag.desiredStartUs))); // 源轨空了就回收
 			}
 		} else {
 			commitActiveNow((d) => trimSegment(d, drag.segId, drag.edge, drag.deltaUs, { sourceTotalUs: drag.sourceTotalUs }));
@@ -1038,9 +1066,8 @@ export function RtcTimeline() {
 					)}
 					{displayTracks.map((t) => {
 						/* 主轨常驻（剪映式）：sticky 钉在滚动视口内——上不越 标尺+原文车道（top=RULER_H+laneH）、下不出底边
-						 * （bottom:0），普通滚轮上下翻其它轨道时主轨始终可见。z=22 介于 轨道头(20) 与 标尺(30)
-						 * 之间=钉住时盖过被滚走的行；不透明底防下层行透出；行内再画一段自己的播放头线
-						 * （全局线 z-10 在钉住的主轨之下，行内线在本行叠层里补齐、且仍在本行 sticky 轨道头之下）。 */
+						 * （bottom:0），普通滚轮上下翻其它轨道时主轨始终可见。z=22 介于轨道头(20)与标尺(30)
+						 * 之间=钉住时盖过被滚走的行；不透明底防下层行透出。播放头由外层单一 z=26 覆盖层贯穿。 */
 						const isMain = t.id === mainTrackId;
 						const rowH = rowHeightOf(t); // 文本轨半高（rowTops 同一口径）
 						return (
@@ -1069,26 +1096,25 @@ export function RtcTimeline() {
 									replaceTargetSegId={replaceHint ?? undefined}
 									onSegContextMenu={onSegContextMenu}
 								/>
-								{isMain && <PlayheadLine />}
 							</div>
 						);
 					})}
 					{/* 缝隙高亮：拖动中悬停满 GAP_DWELL_MS 的合法缝隙 → 松手在此新建轨道 */}
 					{/* 拖动落点预览（白色半透明=松手将落下的合法位置）+ 跟手幽灵条——z 23/24 盖过 sticky 主轨(22) */}
-					{moveGhost?.slot && (
-						<div
+					{moveGhost?.slots.map((slot) => (
+						<div key={`slot-${slot.id}`}
 							className="absolute z-[23] rounded-md bg-white/20 border border-white/50 pointer-events-none"
-							style={{ left: moveGhost.slot.left, top: moveGhost.slot.top + 4, width: moveGhost.slot.width, height: moveGhost.slot.height }}
+							style={{ left: slot.left, top: slot.top + 4, width: slot.width, height: slot.height }}
 						/>
-					)}
-					{moveGhost && (
-						<div
+					))}
+					{moveGhost?.ghosts.map((ghost) => (
+						<div key={`ghost-${ghost.id}`}
 							className="absolute z-[24] rounded-md bg-teal-400/40 border border-white/80 shadow-lg pointer-events-none overflow-hidden"
-							style={{ left: moveGhost.ghost.left, top: moveGhost.ghost.top, width: moveGhost.ghost.width, height: moveGhost.ghost.height }}
+							style={{ left: ghost.left, top: ghost.top, width: ghost.width, height: ghost.height }}
 						>
-							<div className="px-1.5 pt-0.5 text-[11px] text-white/90 truncate">{moveGhost.ghost.label}</div>
+							<div className="px-1.5 pt-0.5 text-[11px] text-white/90 truncate">{ghost.label}</div>
 						</div>
-					)}
+					))}
 					{/* 框选矩形（空白拖动多选，用户定稿） */}
 					{marquee && marquee.width + marquee.height > 4 && (
 						<div
@@ -1120,7 +1146,14 @@ export function RtcTimeline() {
 							</span>
 						</div>
 					)}
-					<PlayheadLine />
+					{/* 标尺和贯穿线共用“轨道头右缘=时间画布 0 点”的局部坐标系。
+					 * 单一覆盖层高于 sticky 主轨，避免在不同定位祖先里复制播放线。 */}
+					<div
+						className="absolute bottom-0 z-[26] pointer-events-none"
+						style={{ left: HEADER_W, top: RULER_H, width: widthPx }}
+					>
+						<PlayheadLine />
+					</div>
 					{isEmpty && (
 						<div
 							className="absolute pointer-events-none"

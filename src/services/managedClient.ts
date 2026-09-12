@@ -177,6 +177,10 @@ async function request<T>(
 }
 
 export const managedClient = {
+	async backupLocalPromptUse(body: GenerateRequest): Promise<void> {
+		const response = await fetch(url('/v1/user-prompt-backups'), { method: 'POST', headers: headers(true), body: JSON.stringify(body), signal: AbortSignal.timeout(10000) });
+		if (!response.ok) throw new Error(`预设备份失败 HTTP ${response.status}`);
+	},
 	/** 登录：校验 accessKey 对应启用用户。用当前 connectionStore 的 url+key。 */
 	async login(): Promise<{ ok: boolean; user?: SessionUser; accessKey?: string; error?: string }> {
 		const { accessKey } = useConnectionStore.getState();

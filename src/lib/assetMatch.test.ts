@@ -6,7 +6,7 @@
  *  - 图例前缀「【素材图例】…」在匹配前剥掉（防上一轮提取写入的资产名清单自我循环）。
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { makeTermMatcher, stripLegendForMatch, applyAssetMatchToImageNode, matchNodeDraftAssets } from "./assetMatch";
+import { makeTermMatcher, stripLegendForMatch, applyAssetMatchToImageNode, matchNodeDraftAssets, matchAssetsInText } from "./assetMatch";
 import { useCanvasStore } from "@/store/canvasStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useLibraryStore } from "@/store/libraryStore";
@@ -55,6 +55,57 @@ describe("stripLegendForMatch", () => {
 	it("图例与正文同行时只剥图例，正文仍参与匹配", () => {
 		expect(stripLegendForMatch("【素材图例】@Image1 是 赵三娘，赵三娘和李四吃饭"))
 			.toBe("赵三娘和李四吃饭");
+	});
+});
+
+describe("matchAssetsInText 最长文本唯一匹配", () => {
+	beforeEach(() => {
+		useProjectStore.setState({ characters: [], crowds: [], scenes: [], organisms: [], items: [] } as never);
+		useAssetFormStore.setState({ selForm: {} } as never);
+	});
+
+	it("子场景完整命中后不再用同一段文字匹配父场景", () => {
+		useProjectStore.setState({
+			scenes: [
+				{ id: "S1", name: "医院", image: "mem://hospital", variants: [] },
+				{ id: "S2", name: "医院·会诊室", image: "mem://consult", variants: [] },
+			],
+		} as never);
+		expect(matchAssetsInText("医院·会诊室内正在开会").map((x) => x.assetId)).toEqual(["S2"]);
+	});
+
+	it("包含关系只占用一次，但不同位置再次出现仍可匹配另一个资产", () => {
+		useProjectStore.setState({
+			characters: [
+				{ id: "C1", name: "学生", image: "mem://student", variants: [] },
+				{ id: "C2", name: "医学生", image: "mem://med-student", variants: [] },
+			],
+		} as never);
+		expect(matchAssetsInText("医学生正在值班").map((x) => x.assetId)).toEqual(["C2"]);
+		expect(matchAssetsInText("医学生带着一名学生值班").map((x) => x.assetId)).toEqual(["C1", "C2"]);
+	});
+
+	it("两个资产使用同一个名称时同一文字只归属资产池中的第一项", () => {
+		useProjectStore.setState({
+			items: [
+				{ id: "P1", name: "病历", image: "mem://record-1", variants: [] },
+				{ id: "P2", name: "病历", image: "mem://record-2", variants: [] },
+			],
+		} as never);
+		expect(matchAssetsInText("桌上放着病历").map((x) => x.assetId)).toEqual(["P1"]);
+	});
+
+	it("对白正文不参与匹配，但说话角色和非对白文字继续正常匹配", () => {
+		useProjectStore.setState({
+			characters: [{ id: "C1", name: "张医生", image: "mem://doctor", variants: [] }],
+			scenes: [{ id: "S1", name: "医院", image: "mem://hospital", variants: [] }],
+		} as never);
+		expect(matchAssetsInText("张医生：医院那边来电话了").map((x) => x.assetId)).toEqual(["C1"]);
+		expect(matchAssetsInText("护士：医院那边来电话了").map((x) => x.assetId)).toEqual([]);
+		expect(matchAssetsInText("▲张医生放下病历，说：“医院那边来电话了。”").map((x) => x.assetId)).toEqual(["C1"]);
+		expect(matchAssetsInText("▲张医生正在医院值班").map((x) => x.assetId)).toEqual(["C1", "S1"]);
+		expect(matchAssetsInText("场景：医院").map((x) => x.assetId)).toEqual(["S1"]);
+		expect(matchAssetsInText("镜头1：医院全景").map((x) => x.assetId)).toEqual(["S1"]);
 	});
 });
 

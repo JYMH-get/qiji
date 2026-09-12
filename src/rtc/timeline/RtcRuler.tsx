@@ -13,7 +13,7 @@ import {
 	setMarkerColorById,
 	setMarkerNoteById,
 } from "./rtcMarkerActions";
-import { RULER_H } from "./timelineUtil";
+import { playheadOffsetPx, RULER_H } from "./timelineUtil";
 
 const US_PER_SEC = 1_000_000;
 
@@ -30,9 +30,10 @@ function tickLabel(us: number): string {
 function PlayheadMarker() {
 	const playheadUs = useRtcStore((s) => s.playheadUs);
 	const pxPerSec = useRtcStore((s) => s.pxPerSec);
-	const x = (playheadUs / US_PER_SEC) * pxPerSec;
+	const x = playheadOffsetPx(playheadUs, pxPerSec);
 	return (
 		<div
+			data-playhead-marker
 			className="absolute pointer-events-none"
 			style={{
 				left: x - 5,

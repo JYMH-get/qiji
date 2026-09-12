@@ -12,7 +12,7 @@
  *   一律走 [modelOptions](@/lib/modelOptions)（videoReqOptionsForKey/imageResolutionOptionsForKey/
  *   modelMethodsForKey）——它对 ComfyUI 直连 / LibTV / 即梦 这类**不在 catalog 里**的本地渠道模型
  *   会回退到适配器自己的 paramsSchema，否则显示与提交都会掉回内置三档并把 720p 发给只收 768p 的上游。
- *   出图 size 走 genParams.resolveSize（全客户端唯一一份 SIZE_MAP）。
+ *   出图请求只发比例/分辨率/质量，具体上游 size 由服务端转换。
  */
 import { useProjectStore } from "@/store/projectStore";
 import { useCatalogStore } from "@/store/catalogStore";
@@ -25,7 +25,7 @@ import { buildAssetListVars } from "@/lib/assetVars";
 import { buildNeighborVars } from "@/lib/inferContext";
 import { resolvePresets, countUnifiedShots, gridPresetForShotCount, presetBody, hasGridInstruction } from "@/lib/presetSchemes";
 import { clampMethod, clampToOptions, clampDurationTo } from "@/lib/videoMethods";
-import { clampDuration, clampImageResolution, resolveSize } from "@/lib/genParams";
+import { clampDuration, clampImageResolution, buildImageParams } from "@/lib/genParams";
 import { imageResolutionOptionsForKey, modelMethodsForKey, videoReqOptionsForKey } from "@/lib/modelOptions";
 import { SMART_INFER_SINGLE_TPL, SMART_INFER_UNIFIED_SINGLE_TPL } from "@/lib/smartInferPrompts";
 import type { StoryboardShot } from "@/services/projectFile";
@@ -78,7 +78,7 @@ export async function inferShotPrompts(episodeId: string, shotId: string): Promi
  * 生成故事板（生图）：与 Frame161195.genStoryboard 同尺——
  * 提示词=同源/故事板提示词（回退原文）+ 预设胶囊展开 + 同源宫格补丁；
  * 垫图=素材区全部**图像**素材（保序对齐 @ImageN，⚠ 一张都不许静默丢——不可用即明确报错不发请求）；
- * params={size,quality}，模型=生效图像模型。返回是否已提交。
+ * params={aspect_ratio,resolution,quality}，模型=生效图像模型。返回是否已提交。
  * opts.swapSegId：**图片占位**片段 id——提交后登记「成功即原位替换为 image 片段」监听
  * （placeholderSwap 对 field=storyboard 的台账天然落图片，与视频 swap 同一条机制，补充6）。
  */
@@ -109,12 +109,11 @@ export async function genShotStoryboard(episodeId: string, shotId: string, opts?
 	const resOptions = imageResolutionOptionsForKey(modelKey);
 	const imageAspect = ms.imageAspect ?? "16:9";
 	const imageResolution = clampImageResolution(ms.imageResolution, resOptions);
-	const size = resolveSize(imageAspect, imageResolution);
 	const pendingId = startShotGeneration({
 		episodeId, shotId, field: "storyboard",
 		purpose: "asset.scene.image",
 		prompt, // → variables.prompt（视觉风格由 generationQueue 注入）
-		params: { size, quality: ms.imageQuality ?? "high" },
+		params: buildImageParams({ aspect: imageAspect, resolution: imageResolution, quality: ms.imageQuality ?? "high" }),
 		input: imgs.length ? { images: imgs } : undefined,
 		modelKey: modelKey || undefined,
 		label: `${shot.title || "分镜"}·故事板`,

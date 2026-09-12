@@ -89,12 +89,24 @@ export interface AssetOut {
 // 3. 生成请求 / 任务状态
 // ============================================================
 
+/** 实际用于生成的预设快照；仅供平台管理员的用户反馈备份库。 */
+export interface UsedPromptPreset {
+  kind: 'image' | 'video';
+  source: 'builtin' | 'custom';
+  sourceId: string;
+  name: string;
+  body: string;
+}
+
 export interface GenerateRequest {
   purpose: Purpose;
   /** 逻辑模型 id（来自 catalog），如 "gpt-5.5" / "Image-2" */
   model: string;
   /** 选中的提示词模板 id（来自 catalog）；正文存管理端 */
   templateId?: string;
+  /** 请求场景决定purpose；输出格式内填入原文、剧情引导及提示词或Skills附件。 */
+  inference?: { source: 'template' | 'skill'; skillText?: string; skillName?: string; guidance?: string; outputMode?: 'storyboard' | 'unified'; durationRange?: { min: number; max: number }; durationLimit?: 15 | 30 };
+  usedPresets?: UsedPromptPreset[];
   /** 喂给模板的变量，如 { 视觉风格, 原文, 历史资产, 已有视觉圣经 } */
   variables?: Record<string, string>;
   /** 输入素材（按模态分组） */
@@ -104,7 +116,7 @@ export interface GenerateRequest {
     videos?: AssetRef[];
     audios?: AssetRef[];
   };
-  /** 模型字段，如 { duration, aspect_ratio, size, temperature } */
+  /** 模型字段；图片请求固定为 { aspect_ratio, resolution, quality }，上游 size 由服务端派生 */
   params?: Record<string, unknown>;
   /** 期望返回格式 */
   output?: {
@@ -122,6 +134,25 @@ export interface GenerateRequest {
   projectId: string;
 }
 
+export interface TextTokenRates { input: number; output: number; cachedInput: number }
+export interface TextTokenPricing {
+  multiplier?: number; // Default 1; applied before rounding, including fixed text pricing.
+  enabled: boolean;
+  rates: TextTokenRates;
+  cacheEnabled: boolean;
+  peak: { enabled: boolean; rates: TextTokenRates; schedule?: { days: number[]; periods: { start: string; end: string }[] } };
+  longContext: { enabled: boolean; threshold: number; rates: TextTokenRates; peakRates: TextTokenRates };
+}
+export interface TextTokenUsage {
+  source: 'upstream'; inputTokens: number; outputTokens: number; totalTokens: number;
+  cachedInputTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number; parts?: TextTokenUsage[];
+}
+export interface TextBill {
+  status: 'settled'; precharged: number; cost: number;
+  items?: { input: number; output: number; cache: number };
+  multiplier?: number;
+  yuan?: number; period?: 'peak' | 'offPeak';
+}
 export interface TaskState {
   taskId: string;
   clientTaskId?: string;
@@ -134,6 +165,8 @@ export interface TaskState {
     assets?: AssetOut[];
     /** 文本结构化产物（已按 schema 校验的 JSON） */
     json?: unknown;
+    usage?: TextTokenUsage;
+    billing?: TextBill;
     /** 纯文本产物 */
     text?: string;
   };
@@ -189,6 +222,8 @@ export interface ParamField {
 }
 
 export interface CatalogModel {
+  /** 线路统一的最少图片/视频参考数（包含整体参考图）。 */
+  minVisualMaterials?: number;
   id: string;            // 逻辑模型 id
   label: string;
   capability: Capability;
@@ -213,6 +248,7 @@ export interface CatalogModel {
    *  未设=客户端默认显示该模型参考素材上限（matLimits 派生文案，见 src/lib/modelNote.ts） */
   note?: string;
   params: ParamField[];  // 该模型在面板里暴露的参数表单
+  tokenPricing?: TextTokenPricing;
   cost: number;          // 基准积分（固定/起步价）
   /** 按字段计费：参数键（如视频 "duration"）；扣费 = costPerUnit × 该字段值。空=按 cost 固定扣 */
   costField?: string;
@@ -224,6 +260,8 @@ export interface CatalogModel {
 
 export interface CatalogTemplate {
   id: string;            // 模板 id（提交时用 templateId 引用）
+  aliases?: string[];    // 正文合并后保留的旧模板引用
+  outputDurationLimit?: 15 | 30; // 输出格式档位，与创作方案无关
   name: string;          // 界面显示名（用户选模板）
   capability: Capability;
   /** 用途；画风等"预设类"模板无 purpose（不可执行，仅作配置项下发） */
@@ -296,7 +334,24 @@ export interface CatalogVariantPrefix {
  *  模型不在 catalog，客户端注入时归入该家族（与服务端种子 id 保持一致，勿改） */
 export const SEEDANCE_FAMILY_ID = "fam-seedance";
 
+export const SEEDANCE_ROUTE_FAMILIES = [
+	{ id: SEEDANCE_FAMILY_ID, name: 'Seedance 2.0', version: '2.0' },
+	{ id: 'fam-seedance-2-5', name: 'Seedance 2.5', version: '2.5' },
+	{ id: 'fam-seedance-2-0-fast', name: 'Seedance 2.0 Fast', version: '2.0-fast' },
+	{ id: 'fam-seedance-2-0-mini', name: 'Seedance 2.0 Mini', version: '2.0-mini' },
+];
+/** Stable model identifiers, shared by catalog migration and retired client selections. */
+export function seedanceModelFamily(id: string): string | undefined {
+	if (!/seedance|sd2[.-][05]|dreamina/i.test(id)) return undefined;
+	if (/2[.-]5/.test(id)) return 'fam-seedance-2-5';
+	if (/(?:sd|seedance)[- ]?2[.-]0[- ]fast(?:$|[- ])/i.test(id)) return 'fam-seedance-2-0-fast';
+	if (/(?:sd|seedance)[- ]?2[.-]0[- ]mini(?:$|[- ])/i.test(id)) return 'fam-seedance-2-0-mini';
+	return SEEDANCE_FAMILY_ID;
+}
+
 export interface Catalog {
+  /** 使用服务端线路选择的家族；这些家族不再注入客户端本地渠道。 */
+  routedFamilies?: string[];
   version: string;
   models: CatalogModel[];
   /** 模式注册表投影（第131轮）：id→显示名，客户端模型下拉按模式分组折叠（「源头」级）用 */
@@ -683,6 +738,8 @@ export interface SharedAssetRecord {
 
 /** 本人请求记录条目（GET /v1/logs 列表项） */
 export interface UserLogItem {
+  /** Public family and line names for routed requests; never contains the selected provider model. */
+  modelLabel?: string;
   id: string;
   startedAt: string;
   finishedAt?: string;

@@ -409,7 +409,7 @@ function LogsSection() {
 							{openId === l.id ? <ChevronDown className="h-3 w-3 text-muted-foreground flex-none" /> : <ChevronRight className="h-3 w-3 text-muted-foreground flex-none" />}
 							<span className="text-[10px] text-muted-foreground font-mono whitespace-nowrap">{fmtTime(l.startedAt)}</span>
 							<span className="text-[11px] text-foreground whitespace-nowrap">{l.purposeLabel || l.purpose || "—"}</span>
-							<span className="text-[10px] text-muted-foreground font-mono truncate">{l.model || ""}</span>
+							<span className="text-[10px] text-muted-foreground font-mono truncate">{l.modelLabel || l.model || ""}</span>
 							<span className="flex-1" />
 							{/* 第251轮耗时：有排队时显示「实际生成（排队）」，无排队=原单值口径 */}
 							<span

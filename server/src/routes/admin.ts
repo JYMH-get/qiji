@@ -1,3 +1,8 @@
+import { channelAvailability } from '../channelAvailability.ts';
+import { validateTextPricing } from '../textPricing.ts';
+import { routingConfig, saveRoutingConfig, initialRoutingConfig, routingHealth, resetRouteHealth, accessModes, seedanceFamilyOf, lineModel, highestLinePrices, routingAvailability, routingChannelName, withImageRouting, withSeedanceVariantRouting, routingFamilyOptions } from "../autoRouting.ts";
+import { routingHourlyStats } from '../routeObservations.ts';
+import { routeLogLabel } from '../routeLogDisplay.ts';
 /**
  * 管理端控制台 API + 静态页面。
  *  GET /admin           → 控制台页面（公开，页面内再用 admin token 调 API）
@@ -27,12 +32,13 @@ import {
 } from "../store/agents.ts";
 import { isRelay, relaySourceStatus } from "../relay.ts";
 import { config } from "../config.ts";
+import { userPromptBackups } from '../store/userPromptBackups.ts';
 import {
 	listModels, listEnabledModels, getModelDef, createModel, updateModel, deleteModel, reorderModels, modelVisibleToAgent, modelAllowedForAgent,
 	touchModelsVersion,
 	type ModelDef,
 } from "../store/models.ts";
-import { listModes, createMode, updateMode, deleteMode, reorderModes, modeName } from "../store/modes.ts";
+import { modeName } from "../store/modes.ts";
 import { listFamilies, createFamily, updateFamily, deleteFamily, reorderFamilies } from "../store/families.ts";
 import {
 	listProtocols, createProtocol, updateProtocol, deleteProtocol, isBuiltinProtocol,
@@ -94,17 +100,28 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 	// P3：注入节点角色——relay 模式页面隐藏源站专属页并显示「源站连接」条。
 	app.get("/admin", async (_req, reply) => {
 		const html = readFileSync(ADMIN_HTML, "utf8")
+			.replace("</body>", `<script>${readFileSync(new URL("../admin/prompt-library.js", import.meta.url), "utf8")}</script><script>${readFileSync(new URL("../admin/user-prompt-backups.js", import.meta.url), "utf8")}</script><script>${readFileSync(new URL("../admin/channels.js", import.meta.url), "utf8")}</script><script>${readFileSync(new URL("../admin/auto-routing.js", import.meta.url), "utf8")}</script></body>`)
 			.replace("</title>", `</title>\n<script>window.__NODE_ROLE__=${JSON.stringify(config.role)};</script>`);
-		return reply.header("Content-Type", "text/html; charset=utf-8").send(html);
+		return reply.header("Cache-Control", "no-store").header("Content-Type", "text/html; charset=utf-8").send(html);
 	});
 
 	await app.register(async (api) => {
 		api.addHook("preHandler", requireAdmin);
 
+		api.get('/admin-api/user-prompt-backups', async (req, reply) => {
+			if (isRelay()) return reply.code(403).send({ error: { message: '用户预设备份仅供源站管理员查看' } });
+			return userPromptBackups.list(req.query as Record<string,string>);
+		});
+		api.get('/admin-api/user-prompt-backups/:id', async (req, reply) => {
+			if (isRelay()) return reply.code(403).send({ error: { message: '用户预设备份仅供源站管理员查看' } });
+			const item = userPromptBackups.detail((req.params as {id:string}).id);
+			return item ?? reply.code(404).send({ error: { message: '备份不存在' } });
+		});
+
 		// P3 relay：源站专属管理端点一律 403（模型/渠道/模板/预设/渠道商/OSS/存储/配额/保留策略——
 		// 这些实体都在源站；节点只管本地 用户/团队/兑换码/统计/日志/注册设置）
 		if (isRelay()) {
-			const SOURCE_ONLY = /^\/admin-api\/(channels|models|modes|families|protocols|templates|presets|agents|agent-groups|platform-group|settings\/oss|storage|retention|cleanup|quota|site|membership|qijicloud)/;
+			const SOURCE_ONLY = /^\/admin-api\/(auto-routing|channels|models|modes|families|protocols|templates|presets|agents|agent-groups|platform-group|settings\/oss|storage|retention|cleanup|quota|site|membership|qijicloud)/;
 			api.addHook("preHandler", async (req, reply) => {
 				if (SOURCE_ONLY.test(req.url)) {
 					return reply.code(403).send({ error: { message: "渠道节点不提供该管理功能（源站专属）" } });
@@ -295,14 +312,25 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			if (!b.id || !b.label || !b.capability || !b.protocol) {
 				return reply.code(400).send({ error: { message: "缺少 id/label/capability/protocol" } });
 			}
-			return maskModel(createModel(b as any));
+			try {
+        if ('tokenPricing' in b) validateTextPricing(b.tokenPricing);
+        if (b.tokenPricing && (b.capability !== 'text' || b.hidden)) throw new Error('仅文本生成模型支持 token 计费');
+      } catch(e) { return reply.code(400).send({error:{message:(e as Error).message}}); }
+      return maskModel(createModel(b as any));
 		});
 		api.put("/admin-api/models/:id", async (req, reply) => {
 			const { id } = req.params as { id: string };
 			const body = (req.body ?? {}) as Record<string, unknown>;
 			// apiKey 仅在传入“非掩码”新值时更新；显式 null 清除；掩码值不动（避免 **** 覆盖真值）
 			if (typeof body.apiKey === "string" && body.apiKey.startsWith("****")) delete body.apiKey;
-			const m = updateModel(id, body as any);
+			const existing = getModelDef(id);
+      if (!existing) return reply.code(404).send({error:{message:'模型不存在'}});
+      try {
+        if ('tokenPricing' in body) validateTextPricing(body.tokenPricing);
+        const next = {...existing,...body} as ModelDef;
+        if (next.tokenPricing && (next.capability !== 'text' || next.hidden)) throw new Error('仅文本生成模型支持 token 计费');
+      } catch(e) { return reply.code(400).send({error:{message:(e as Error).message}}); }
+      const m = updateModel(id, body as any);
 			if (!m) return reply.code(404).send({ error: { message: "模型不存在" } });
 			return maskModel(m);
 		});
@@ -312,35 +340,33 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			return { ok: true };
 		});
 
-		// ── 模式（第130轮）：动态视频模式注册表。新建模型选模式、用户/渠道商按模式开关；删除模式清空引用它的模型 modeId ──
-		api.get("/admin-api/modes", async () => ({ items: listModes() }));
-		api.post("/admin-api/modes", async (req, reply) => {
-			const b = (req.body ?? {}) as { id?: string; name?: string };
-			const r = createMode({ id: b.id, name: b.name ?? "" });
-			if (!r.ok) return reply.code(400).send({ error: { message: r.error } });
-			return r.mode;
+    // ── 模式（第130轮）：动态视频模式注册表。新建模型选模式、用户/渠道商按模式开关；删除模式清空引用它的模型 modeId ──
+		api.get("/admin-api/modes", async () => ({ items: accessModes() }));
+		api.get('/admin-api/channel-availability', async () => channelAvailability());
+		api.get("/admin-api/auto-routing", async () => ({
+			families: routingFamilyOptions(withImageRouting(withSeedanceVariantRouting(routingConfig().lines.length ? routingConfig() : initialRoutingConfig()))), config: routingConfig(), initial: withImageRouting(withSeedanceVariantRouting(routingConfig().lines.length ? routingConfig() : initialRoutingConfig())), health: routingHealth(), availability: routingAvailability(),
+			previews: routingConfig().lines.map(l => ({ id: l.id, model: lineModel(l) })),
+			models: listModels().filter(m => ['video','image'].includes(m.capability)).map(m => ({ id: m.id, label: m.label, familyId: seedanceFamilyOf(m), channelId: m.channelId, channelName: routingChannelName(m.channelId ?? ""), enabled: m.enabled, params: m.params }))
+		}));
+		api.get('/admin-api/auto-routing/availability', async (req, reply) => {
+			const hours = Number((req.query as { hours?: string }).hours ?? 24);
+			if (!Number.isInteger(hours) || hours < 1 || hours > 720) return reply.code(400).send({ error: { message: '统计范围应为 1–720 小时' } });
+			return { ...routingHourlyStats(hours), channels: routingAvailability() };
 		});
-		api.put("/admin-api/modes/:id", async (req, reply) => {
-			const { id } = req.params as { id: string };
-			const r = updateMode(id, (req.body ?? {}) as { name?: string; order?: number; enabled?: boolean });
-			if (!r.ok) return reply.code(r.error === "模式不存在" ? 404 : 400).send({ error: { message: r.error } });
-			return r.mode;
+		api.post("/admin-api/auto-routing/prices", async (req, reply) => {
+			try { return highestLinePrices(req.body as any); }
+			catch { return reply.code(400).send({ error: { message: '请先选择有效渠道模型' } }); }
 		});
-		// 第165轮：卡片拖动排序——整表按 id 数组重排（一次落盘一次版本 bump；顺序影响客户端下拉源顺序）
-		api.post("/admin-api/modes/reorder", async (req, reply) => {
-			const b = (req.body ?? {}) as { ids?: string[] };
-			if (!Array.isArray(b.ids) || !b.ids.length) return reply.code(400).send({ error: { message: "缺少 ids" } });
-			if (!reorderModes(b.ids.filter((x) => typeof x === "string"))) return reply.code(400).send({ error: { message: "ids 无有效模式" } });
-			return { ok: true, items: listModes() };
+		api.put("/admin-api/auto-routing", async (req, reply) => {
+			try { return { config: saveRoutingConfig(req.body) }; }
+			catch (e) { return reply.code(400).send({ error: { message: (e as Error).message } }); }
 		});
-		api.delete("/admin-api/modes/:id", async (req, reply) => {
-			const { id } = req.params as { id: string };
-			if (!deleteMode(id)) return reply.code(404).send({ error: { message: "模式不存在" } });
-			return { ok: true };
+		api.post("/admin-api/auto-routing/reset", async (req, reply) => {
+			const b = req.body as { lineId?: string; channelId?: string };
+			if (!b?.lineId || !b.channelId) return reply.code(400).send({ error: { message: '缺少线路或渠道' } });
+			resetRouteHealth(b.lineId, b.channelId); return { ok: true };
 		});
 
-		// ── 家族（第163轮）：模型「家族」注册表（底层模型种类，纯展示分组——客户端一级筛选）。
-		//    删除家族清空引用它的模型 familyId（回落「其他」分组，无门禁/计费影响）──
 		api.get("/admin-api/families", async () => ({ items: listFamilies() }));
 		api.post("/admin-api/families", async (req, reply) => {
 			const b = (req.body ?? {}) as { id?: string; name?: string; capability?: string };
@@ -546,7 +572,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			// 商属范围：每条附「源站实收」（platformCost：带链=根级实扣、无链=用户实扣（统一定价））——
 			// 消耗列显示源站自己的口径，用户扣的售价数仅作参考（cost 保留）
 			const view = logCostViewFor(q);
-			return view ? { total: r.total, items: r.items.map((l) => ({ ...l, platformCost: logCostFor(l, view) })) } : r;
+			return { total:r.total, items:r.items.map(l => ({ ...l, modelLabel:routeLogLabel(l, 'admin'), ...(view ? {platformCost:logCostFor(l, view)} : {}) })) };
 		});
 		api.get("/admin-api/logs/:id", async (req, reply) => {
 			const { id } = req.params as { id: string };
@@ -555,6 +581,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			// 源站全见：链路扣费明细带商名（用户按售价扣 cost + 链上各级结算侧实扣，根级=源站实收）
 			return {
 				...log,
+				modelLabel: routeLogLabel(log, 'admin'),
 				agentCosts: log.agentCosts?.map((a) => ({ ...a, name: getAgent(a.id)?.name || `（已删渠道商 ${a.id}）` })),
 			};
 		});

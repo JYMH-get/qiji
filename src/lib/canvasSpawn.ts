@@ -13,7 +13,9 @@ import { makeNode, NODE_W, NODE_H } from "@/canvas/nodeFactory";
 import { getNodeSpec, type SpawnSpec } from "@/nodes/nodeSpecs";
 import { parseAssetsForSpawn, extractEpisodes, type SpawnAssetCat } from "@/lib/assetExtraction";
 import { parseShotSegments } from "@/lib/storyboardParse";
-import { parseInferCards, parseInferCardsStream, SMART_INFER_MULTI_TPL, SMART_INFER_UNIFIED_SINGLE_TPL } from "@/lib/smartInferPrompts";
+import { parseInferCards, parseInferCardsStream } from "@/lib/smartInferPrompts";
+import { canvasInferenceDuration, normalInferenceStrategy, type InferenceStrategy } from "@/lib/inferenceStrategy";
+import { useCatalogStore } from "@/store/catalogStore";
 
 const GAP_X = 90;
 const GAP_Y = 48;
@@ -100,6 +102,38 @@ function nodeDurationFromCard(d?: number): number | undefined {
 	return Math.min(max, Math.max(min, Math.round(d)));
 }
 
+/** 裂变节点继承创作选择；输出范围按新节点所在的分镜/分集位置设置。 */
+function childInferenceParams(parent: CanvasNode, scope: 'single' | 'multi', unifiedFallback = false): Record<string, unknown> {
+	const params = parent.data.params;
+	const legacyOutput = params.inferenceOutput ?? params.purpose;
+	const unified = params.inferenceMode === 'unified' || params.inferenceMode !== 'storyboard'
+		&& (legacyOutput ? legacyOutput === 'storyboard.unified' || legacyOutput === 'storyboard.unifiedShot' : unifiedFallback);
+	const duration = canvasInferenceDuration(params);
+	const strategy = normalInferenceStrategy(
+		(params.inferenceStrategy as InferenceStrategy | undefined) ?? { templateId: params.templateId as string | undefined },
+		useCatalogStore.getState().catalog?.templates ?? [],
+	);
+	return {
+		inferenceStrategy: structuredClone(strategy),
+		templateId: strategy.templateId,
+		inferenceScope: scope,
+		inferenceMode: unified ? 'unified' : 'storyboard',
+		inferenceDurationPreset: duration.durationPreset,
+		inferenceCustomDuration: structuredClone(duration.customDuration),
+		inferenceDurationLimit: duration.durationLimit,
+		inferenceOutput: scope === 'single' ? unified ? 'storyboard.unifiedShot' : 'storyboard.singleShot' : unified ? 'storyboard.unified' : 'storyboard.toVideoPrompt',
+	};
+}
+
+function isSplitRequest(parent: CanvasNode): boolean {
+	const p = parent.data.params;
+	if (p.inferenceScope === 'single' || p.inferenceScope === 'multi') return false;
+	return p.inferenceScope === 'split' || (p.inferenceOutput ?? p.purpose) === 'storyboard.split';
+}
+function isUnifiedCard(parent: CanvasNode, card: InferCardLike): boolean {
+	return isSplitRequest(parent) ? parent.data.params.inferenceMode === 'unified' : !!card.unifiedPrompt;
+}
+
 /**
  * 卡的媒体段「分镜n故事板(生成图片) → 分镜n视频(生成视频)」，接在 anchor 之后
  * （anchor=本行原文节点；分镜原文节点自跑时 anchor=原文节点自身）。
@@ -117,13 +151,13 @@ function buildCardMedia(
 	// 图视同源：同源提示词独立成节点承载（分镜n同源提示词，text.seed），图片与视频**并联**接在它之后
 	// 且**不内置提示词**（运行时自动取上游同源节点文本，见 pluginRegistry inputText 回退）——
 	// 改同源节点一处 = 图片与视频提示词同时变。链路 原文→同源提示词→图片/视频。
-	if (card.unifiedPrompt) {
+	if (isUnifiedCard(parent, card)) {
 		const uni = makeNode("text.seed", xImg, y);
 		uni.parentScriptId = parent.id;
 		uni.data.title = `分镜${n}同源提示词`;
 		// 只写 params.prompt、**不写 resultText**：显示与下游取文都回退 prompt——用户在面板改提示词即全链生效
 		//（若写了 resultText，下游 collectUpstreamText 会优先读它，编辑后仍拿旧值）。
-		uni.data.params.prompt = card.unifiedPrompt;
+		uni.data.params.prompt = card.unifiedPrompt ?? '';
 		nodes.push(uni);
 		edges.push(mkEdge(anchor, uni));
 		const img = makeNode("image.gen", xImg + (NODE_W + GAP_X), y);
@@ -144,7 +178,7 @@ function buildCardMedia(
 	}
 	// 双结果（现状）：原文→故事板(图)→视频 串联
 	let prev = anchor;
-	if (card.storyboardPrompt) {
+	if (card.storyboardPrompt || isSplitRequest(parent)) {
 		const img = makeNode("image.gen", xImg, y);
 		img.parentScriptId = parent.id;
 		img.data.title = `分镜${n}故事板`;
@@ -153,7 +187,7 @@ function buildCardMedia(
 		edges.push(mkEdge(prev, img));
 		prev = img;
 	}
-	if (card.videoPrompt) {
+	if (card.videoPrompt || isSplitRequest(parent)) {
 		const vid = makeNode("video.gen", xImg + (NODE_W + GAP_X), y);
 		vid.parentScriptId = parent.id;
 		vid.data.title = `分镜${n}视频`;
@@ -184,9 +218,8 @@ function buildCardRow(parent: CanvasNode, card: InferCardLike, n: number, baseX:
 	textNode.parentScriptId = parent.id;
 	textNode.data.title = `分镜${n}原文`;
 	textNode.data.params.prompt = card.script;
+	Object.assign(textNode.data.params, childInferenceParams(parent, 'single', !!card.unifiedPrompt));
 	textNode.data.resultText = card.script;
-	// 图视同源卡：原文节点带同源·单卡模板，自跑重推理仍产同源提示词（图片+视频并联）
-	if (card.unifiedPrompt) textNode.data.params.templateId = SMART_INFER_UNIFIED_SINGLE_TPL;
 	nodes.push(textNode);
 	edges.push(mkEdge(parent, textNode));
 	const media = buildCardMedia(parent, textNode, card, n, baseX + (NODE_W + GAP_X), y);
@@ -217,6 +250,7 @@ export function buildScriptSplitRows(
 		node.parentScriptId = parent.id;
 		node.data.title = `分镜${shotId}-${startSub + i}原文`;
 		node.data.params.prompt = seg;
+		Object.assign(node.data.params, childInferenceParams(parent, 'single'));
 		node.data.resultText = seg;
 		nodes.push(node);
 		edges.push(mkEdge(parent, node));
@@ -280,8 +314,8 @@ export function buildSpawn(
 			});
 		}
 	} else if (spawn?.source === "episodes") {
-		// 剧集分集裂变的每集节点承载**整集**原文 → 智能推理子节点显式带多分镜模板（手动新建的默认单分镜）
-		const epExtra = spawn.childType === "smart.infer" ? { templateId: SMART_INFER_MULTI_TPL } : undefined;
+		// 整集原文显式使用多卡输出，创作方案沿用当前选择。
+		const epExtra = spawn.childType === "smart.infer" ? childInferenceParams(parent, 'multi') : undefined;
 		for (const e of extractEpisodes(resultText)) items.push({ childType: spawn.childType, prompt: e.content, asText: true, extraParams: epExtra });
 	} else if (spawn?.source === "shots") {
 		for (const s of parseShotSegments(resultText)) items.push({ childType: spawn.childType, prompt: s.content, asText: true });
@@ -602,7 +636,7 @@ export function buildRespawn(
 			}
 			// 图视同源：行下游应为 同源提示词节点(text.seed) → 图片/视频 并联（图/视频不内置提示词）。
 			// 缺同源节点则补建（带同源提示词），再对同源节点补缺 图片/视频。
-			if (card.unifiedPrompt) {
+			if (isUnifiedCard(parent, card)) {
 				let patchedU = false;
 				const stepX = (row.w || NODE_W) + GAP_X;
 				let uni = downstreamOf(row.id, "text.seed");
@@ -610,7 +644,7 @@ export function buildRespawn(
 					uni = makeNode("text.seed", row.x + stepX, row.y);
 					uni.parentScriptId = parent.id;
 					uni.data.title = `分镜${n}同源提示词`;
-					uni.data.params.prompt = card.unifiedPrompt; // 不写 resultText：编辑 prompt 即全链生效
+					uni.data.params.prompt = card.unifiedPrompt ?? ''; // 不写 resultText：编辑 prompt 即全链生效
 					out.nodes.push(uni); out.edges.push(mkEdge(row, uni)); patchedU = true;
 				}
 				const uniHas = (type: string) => downstreamOf(uni!.id, type);
@@ -639,7 +673,7 @@ export function buildRespawn(
 			const img = downstreamOf(row.id, "image.gen");
 			if (img) {
 				prev = img;
-			} else if (card.storyboardPrompt) {
+			} else if (card.storyboardPrompt || isSplitRequest(parent)) {
 				const im = makeNode("image.gen", row.x + ((row.w || NODE_W) + GAP_X), row.y);
 				im.parentScriptId = parent.id;
 				im.data.title = `分镜${n}故事板`;
@@ -650,7 +684,7 @@ export function buildRespawn(
 				patchedThis = true;
 			}
 			const vid = downstreamOf(prev.id, "video.gen") ?? (prev !== row ? downstreamOf(row.id, "video.gen") : null);
-			if (!vid && card.videoPrompt) {
+			if (!vid && (card.videoPrompt || isSplitRequest(parent))) {
 				const v = makeNode("video.gen", row.x + ((row.w || NODE_W) + GAP_X) * 2, row.y);
 				v.parentScriptId = parent.id;
 				v.data.title = `分镜${n}视频`;

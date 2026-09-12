@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useCanvasStore } from "@/store/canvasStore";
 import { useLibraryStore } from "@/store/libraryStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -9,6 +9,8 @@ import { addNodeMaterialFiles, removeNodeMaterial, removeUpstreamMaterial, listN
 import { usePendingUploads, uploadKeys } from "@/store/uploadStore";
 import { useDisplayUri } from "@/nodes/ResultView";
 import { IdentityAssetToggle } from "@/components/IdentityAssetToggle";
+import { FolderOpen, MousePointer2, Upload } from "lucide-react";
+import { useUiStore } from "@/store/uiStore";
 
 /** 右键取消垫图是快捷操作：拦住浏览器/画布菜单后立即执行，不再追加确认步骤。 */
 export function removeMaterialOnContextMenu(
@@ -83,7 +85,17 @@ export function NodeMaterialBay({
 	useLibraryStore((s) => s.assets);
 	useProjectStore((s) => s.assetBlobs);
 	const fileRef = useRef<HTMLInputElement>(null);
+	const menuRef = useRef<HTMLDivElement>(null);
+	const [menuOpen, setMenuOpen] = useState(false);
 	const uploading = usePendingUploads(uploadKeys.node(nodeId)); // 在途上传数 → 占位转圈
+	useEffect(() => {
+		if (!menuOpen) return;
+		const close = (e: MouseEvent) => {
+			if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
+		};
+		document.addEventListener("mousedown", close);
+		return () => document.removeEventListener("mousedown", close);
+	}, [menuOpen]);
 	if (!node) return null;
 
 	// 加入顺序 + 与图例/提交一致的编号；名字为友好名（绑定资产名/节点标题，非机器文件名）
@@ -115,12 +127,31 @@ export function NodeMaterialBay({
 					<span className="sb-spin text-white/80 text-sm">↻</span>
 				</div>
 			))}
-			{/* ＋ 打开本地文件资源管理器添加素材 */}
-			<button
-				onClick={() => fileRef.current?.click()}
-				title="添加本地素材（图/视频/音频）——也可拖入文件或在提示词框粘贴"
-				className="w-11 h-11 rounded-xl border border-dashed border-white/25 text-muted-foreground text-lg leading-none flex items-center justify-center hover:border-primary hover:text-foreground transition-colors"
-			>+</button>
+			{/* ＋ 三路添加：本地上传 / 资产助手单选 / 画布多选 */}
+			<div ref={menuRef} className="relative shrink-0">
+				<button
+					onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
+					title="添加参考素材"
+					className="w-11 h-11 rounded-xl border border-dashed border-white/25 text-muted-foreground text-lg leading-none flex items-center justify-center hover:border-primary hover:text-foreground transition-colors"
+				>+</button>
+				{menuOpen && (
+					<div className="absolute left-0 top-full z-[10450] mt-1 w-44 rounded-xl border border-white/10 bg-[#202020] p-1.5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+						<button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[12px] text-white hover:bg-white/10" onClick={() => { setMenuOpen(false); fileRef.current?.click(); }}>
+							<Upload className="h-4 w-4" />上传参考内容
+						</button>
+						<button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[12px] text-white hover:bg-white/10" onClick={() => { setMenuOpen(false); useUiStore.getState().setAssetLibraryTargetNodeId(nodeId); }}>
+							<FolderOpen className="h-4 w-4" />从资产库添加
+						</button>
+						<button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[12px] text-white hover:bg-white/10" onClick={() => {
+							setMenuOpen(false);
+							useUiStore.getState().setActiveNodeId(nodeId);
+							useUiStore.getState().setCanvasMode({ type: "asset-pick", targetNodeId: nodeId, materialGroupId: null });
+						}}>
+							<MousePointer2 className="h-4 w-4" />从画布选择
+						</button>
+					</div>
+				)}
+			</div>
 			<input
 				ref={fileRef}
 				type="file"

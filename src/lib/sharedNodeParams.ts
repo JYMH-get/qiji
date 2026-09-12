@@ -7,14 +7,12 @@
  *
  * 只联动「设置」，不联动「内容/语义」：prompt/assetName/purpose/idPrefix 等字段一律各自独立。
  * 例外：智能推理节点的 templateId 视为「设置」参与联动（用户定：一个节点选了某提示词，
- * 其余智能推理节点跟随切换）——purpose 不随之扇出，执行时由模板决定用途（pluginRegistry 自愈）。
+ * 其余智能推理节点跟随切换）——请求范围和输出模式各自独立，不受创作模板影响。
  * 处理类节点（超分/去字幕/片段 resultOnly）既不作为联动源、也不被联动——它们与
  * 生成节点同为 image.gen/video.gen 类型，但 params 是处理配置，同键不同义。
  */
 
 import { useCanvasStore } from "@/store/canvasStore";
-import { useCatalogStore } from "@/store/catalogStore";
-import { smartInferContext } from "@/lib/inferUpstream";
 import { adaptParamsToSchema, schemaForNodeModel } from "@/lib/modelParamAdapt";
 
 /** 同类型节点共享的设置键（不在表内的节点类型不联动）。
@@ -59,27 +57,14 @@ export function fanOutSharedParams(sourceId: string, patch: Record<string, unkno
 		if (k in patch) shared[k] = patch[k];
 	}
 	if (!Object.keys(shared).length) return;
-	// 智能推理模板联动门禁（第108轮，单卡/多卡分用途）：templateId 只扇出到**允许该模板用途**的节点
-	//（上游智能推理→仅单卡节点、上游剧集分集→仅多卡节点，见 inferUpstream）——多卡模板不会串到单卡原文节点。
-	// 模板不在 catalog（测试桩/热更空窗）→ 维持旧行为原样扇出。
-	const sharedTplPurpose =
-		src.type === "smart.infer" && typeof shared.templateId === "string"
-			? useCatalogStore.getState().catalog?.templates.find((t) => t.id === shared.templateId)?.purpose
-			: undefined;
 	let changed = false;
 	const nodes = { ...s.nodes };
 	for (const [id, n] of Object.entries(s.nodes)) {
 		if (id === sourceId || n.type !== src.type) continue;
 		if (isProcessNodeParams(n.data.params)) continue;
-		let forNode = shared;
-		if (sharedTplPurpose && !smartInferContext(id, s.nodes, s.edges).purposes.includes(sharedTplPurpose)) {
-			const { templateId: _omit, ...rest } = shared;
-			if (!Object.keys(rest).length) continue; // 只有 templateId 且不允许 → 该节点跳过
-			forNode = rest;
-		}
 		// 换模型时，被联动节点的**非共享**参数（如视频 duration）同样收敛到新模型档位——
 		// 否则它们会显示新模型不支持的旧档位（提交层虽再收敛一次，显示与实发不一致）。
-		const merged = { ...n.data.params, ...forNode };
+		const merged = { ...n.data.params, ...shared };
 		const adapted = typeof shared.model === "string"
 			? adaptParamsToSchema(schemaForNodeModel(n.type, shared.model), merged)
 			: {};

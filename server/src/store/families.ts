@@ -14,6 +14,7 @@
  */
 import { loadJson, saveJson, genId } from "./db.ts";
 import { clearFamilyFromModels } from "./models.ts";
+import { SEEDANCE_ROUTE_FAMILIES } from '../contract.ts';
 
 export interface Family {
 	id: string; // 稳定标识（小写 kebab；创建后不可改）
@@ -32,6 +33,8 @@ interface Store {
 	version: number;
 	seeded?: boolean;
 	seedVersion?: number;
+	seedance25Version?: number;
+	seedanceVariantsVersion?: number;
 	families: Family[];
 }
 
@@ -63,6 +66,19 @@ const DEFAULT_FAMILIES: Family[] = [
 ];
 
 let store: Store = loadJson<Store>(FILE, { version: 0, families: [] });
+if (!store.seedanceVariantsVersion) {
+	for (const [i, f] of SEEDANCE_ROUTE_FAMILIES.slice(2).entries()) {
+		if (!store.families.some(existing => existing.id === f.id)) store.families.push(fam(f.id, f.name, 'video', (store.families.find(f => f.id === 'fam-seedance')?.order ?? 1) + (i + 1) / 10));
+	}
+	store.seedanceVariantsVersion = 1;
+	store.version++; saveJson(FILE, store);
+}
+// Dedicated missing-family migration; do not reseed unrelated previously deleted families.
+if (!store.seedance25Version) {
+	if (!store.families.some(f => f.id === 'fam-seedance-2-5')) store.families.push(fam('fam-seedance-2-5', 'Seedance 2.5', 'video', (store.families.find(f => f.id === 'fam-seedance')?.order ?? 1) + 0.5));
+	store.seedance25Version = 1;
+	store.version++; saveJson(FILE, store);
+}
 if (!store.seeded || (store.seedVersion ?? 0) < FAMILIES_SEED_VERSION) {
 	// 按 id 补种缺失的内置家族（不覆盖已有同 id——管理端改过名/序的保留）
 	for (const d of DEFAULT_FAMILIES) if (!store.families.some((f) => f.id === d.id)) store.families.push(d);

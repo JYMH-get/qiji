@@ -38,7 +38,7 @@ type Form = {
 };
 
 // 出图要求常量（模型/质量/比例/分辨率）抽到 @/lib/genParams，画布「生成图片」节点共用、保持一致。
-import { IMAGE_QUALITIES as QUALITIES, IMAGE_ASPECTS as ASPECTS, imageResolutionOptions, clampImageResolution, resolveSize } from "@/lib/genParams";
+import { IMAGE_QUALITIES as QUALITIES, IMAGE_ASPECTS as ASPECTS, imageResolutionOptions, clampImageResolution, buildImageParams } from "@/lib/genParams";
 import { assetImageAspectFrom } from "@/lib/templateAspect";
 import { mediaFilesFromClipboard } from "@/lib/clipboardMedia";
 
@@ -288,7 +288,6 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
     const generateForm = (assetId: string, form: Form) => {
         if (!form.prompt.trim()) { alert("该造型暂无提示词，请先填写出图提示词。"); return; }
         const modelKey = effectiveModelKey("image");
-        const size = resolveSize(aspect, resolution);
         // 有垫图 → 图生图：把参考图作为 input.images 传入（跳过上传中/失败的）。
         // 优先带上资产 id（服务端按 id 直接取字节/OSS直链，最稳，"id 是真理"），url 作双保险。
         const usable = refImages.filter((r) => !r.uploading && !r.error);
@@ -303,20 +302,19 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
             const blob = useProjectStore.getState().blobByUri(r.uri) || useProjectStore.getState().blobByUri(r.url || "");
             return { name: r.name, uri: r.uri, id: blob?.id };
         });
-        startGeneration({ cat, assetId, variantId: form.variantId, purpose: imagePurpose, prompt: form.prompt, modelKey, input, refs, params: { size, quality, idPrefix: CAT_PREFIX[cat], assetName: form.title }, label: form.title });
+		startGeneration({ cat, assetId, variantId: form.variantId, purpose: imagePurpose, prompt: form.prompt, modelKey, input, refs, params: { ...buildImageParams({ aspect, resolution, quality }), idPrefix: CAT_PREFIX[cat], assetName: form.title }, label: form.title });
     };
 
     // 区域2 一键生成：仅为「未生成（无基础形象图）」和「失败」的资产生成基础形象；
     // 已生成且非失败的、正在生成中的、无提示词的，一律跳过（避免重复消耗额度）。
     const generateAllBase = () => {
         const modelKey = effectiveModelKey("image");
-        const size = resolveSize(aspect, resolution);
         let n = 0, skipped = 0;
         for (const a of assets) {
             if (!a.prompt?.trim()) { skipped++; continue; }        // 无提示词不能生成
             if (isRunning(a.id, null)) { skipped++; continue; }     // 已在生成中
             if (a.image && !isFailed(a.id, null)) { skipped++; continue; } // 已生成且未失败
-            startGeneration({ cat, assetId: a.id, variantId: null, purpose: imagePurpose, prompt: a.prompt, modelKey, params: { size, quality, idPrefix: CAT_PREFIX[cat], assetName: a.name }, label: a.name });
+			startGeneration({ cat, assetId: a.id, variantId: null, purpose: imagePurpose, prompt: a.prompt, modelKey, params: { ...buildImageParams({ aspect, resolution, quality }), idPrefix: CAT_PREFIX[cat], assetName: a.name }, label: a.name });
             n++;
         }
         alert(n > 0

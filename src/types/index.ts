@@ -120,6 +120,8 @@ export interface CanvasGroup {
 	childIds: string[];
 	x: number;
 	y: number;
+	/** 普通分组 / 用于画布选素材时导航的绿色素材分组。旧项目缺省为普通分组。 */
+	kind?: "default" | "material";
 }
 
 export interface NodeRuntime {

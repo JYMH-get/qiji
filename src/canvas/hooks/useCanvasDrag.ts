@@ -290,7 +290,7 @@ export function useCanvasDrag() {
         return !!t && getPlugin(t.type)?.displayKind === srcKind && !!t.data.resultAssetId;
       };
       const res = computeBranchPush(
-        dragged.map((x) => ({ id: x.nd.id, x: x.nd.position.x, y: x.nd.position.y, w: x.sn.w, h: x.sn.h })),
+        dragged.map((x) => ({ id: x.nd.id, type: x.sn.type, x: x.nd.position.x, y: x.nd.position.y, w: x.sn.w, h: x.sn.h })),
         baseNodes,
         Object.values(s.edges),
         { skipTarget: isMergeCompat },
@@ -468,9 +468,9 @@ export function useCanvasDrag() {
           if (ids.length === 1 && useUiStore.getState().snapAlign) {
             const id = ids[0];
             const sn = store.nodes[id];
-            if (sn && sn.type !== "group") {
+            if (sn && sn.type !== "group" && sn.type !== "canvas.marker") {
               const r = snapPosition(
-                { id, x: dragUpdates[id].x, y: dragUpdates[id].y, w: sn.w, h: sn.h },
+                { id, type: sn.type, x: dragUpdates[id].x, y: dragUpdates[id].y, w: sn.w, h: sn.h },
                 Object.values(store.nodes),
               );
               dragUpdates[id] = { x: r.x, y: r.y };
@@ -567,9 +567,9 @@ export function useCanvasDrag() {
           // 吸附对齐：单节点拖动的最终落点同样吸附（拖动中只吸附了 store 预览，RF 内部坐标未吸附）
           if (uniqueEnds.length === 1 && useUiStore.getState().snapAlign) {
             const sn = store.nodes[uniqueEnds[0].id];
-            if (sn && sn.type !== "group") {
+            if (sn && sn.type !== "group" && sn.type !== "canvas.marker") {
               const p = snapPosition(
-                { id: sn.id, x: uniqueEnds[0].x, y: uniqueEnds[0].y, w: sn.w, h: sn.h },
+                { id: sn.id, type: sn.type, x: uniqueEnds[0].x, y: uniqueEnds[0].y, w: sn.w, h: sn.h },
                 Object.values(store.nodes),
               );
               uniqueEnds[0].x = p.x;

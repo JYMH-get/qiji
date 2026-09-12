@@ -121,15 +121,14 @@ export const useToolboxStore = create<ToolboxState>((set, get) => ({
 			get().patchCover({ error: "当前没有可用的图像模型（请先连接管理端）" });
 			return;
 		}
-		// size/quality 与资产模式同尺（genParams.resolveSize），分辨率档由组件按模型 catalog 收敛后写入
-		const { resolveSize } = await import("@/lib/genParams");
-		const size = resolveSize(st.aspect, st.resolution || "2k");
+		// 用户端只发送公共比例/分辨率/质量；具体上游尺寸由服务端转换。
+		const { buildImageParams } = await import("@/lib/genParams");
 		get().patchCover({ running: true, progress: 0, error: "" });
 		const r = await runPurpose("image.cover", {
 			variables: { 描述: desc },
 			templateId: st.tplId || undefined,
 			modelKey: effModelKey,
-			params: { size, quality: st.quality || "high" },
+			params: buildImageParams({ aspect: st.aspect, resolution: st.resolution || "2k", quality: st.quality || "high" }),
 			onProgress: (progress) => get().patchCover({ progress }),
 		});
 		if (r.status === "success") {

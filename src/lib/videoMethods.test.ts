@@ -22,6 +22,15 @@ describe("videoMethods 方法层（第131轮）", () => {
 });
 
 describe("videoMethods 要求层（catalog params 服务端控档）", () => {
+	it("线路分辨率只读取能力参数，不从定价规则扩展", () => {
+		const routed = model({
+			params: [{ key: "resolution", label: "分辨率", type: "enum", options: ["720p"] }],
+			costRules: ["480p", "720p", "1080p", "4k"].map(resolution => ({ when: { resolution }, cost: 100 })),
+		});
+		expect(videoReqOptions(routed).resolutions).toEqual(["720p"]);
+		routed.params = [{ key: "resolution", label: "分辨率", type: "enum", options: ["480p", "720p"] }];
+		expect(videoReqOptions(routed).resolutions).toEqual(["480p", "720p"]);
+	});
 	it("videoReqOptions：未声明参数回退内置常量", () => {
 		const r = videoReqOptions(undefined);
 		expect(r.resolutions).toEqual(VIDEO_RESOLUTIONS);

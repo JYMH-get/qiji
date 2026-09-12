@@ -64,7 +64,7 @@ const now = (): string => new Date().toISOString();
 //   （content[] 多模态：9 图 + 3 音频 + 3 视频参考、小写 @imageN 引用、首尾帧 role）归入。
 // v25（2026-09-03）：新增「官方」（official）——dreamina Seedance 2.0 / 2.5 六款模型归入。
 // v26（2026-09-07）：新增「007」（007）——正版 Seedance 2.5 模型归入。
-const MODES_SEED_VERSION = 26;
+const MODES_SEED_VERSION = 27; // 只补缺失模式；版本保持单调
 const DEFAULT_MODES: Mode[] = [
 	{ id: "qiji", name: "Qiji 视频", order: 1, createdAt: now(), updatedAt: now() },
 	{ id: "qiji-img", name: "Qiji 图片", order: 2, createdAt: now(), updatedAt: now() },

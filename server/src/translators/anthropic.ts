@@ -1,3 +1,4 @@
+import { normalizeTextUsage } from '../textPricing.ts';
 /**
  * Claude（Anthropic）文本翻译器（真）。
  *
@@ -69,8 +70,8 @@ export async function translateAnthropicText(req: GenerateRequest, up: Upstream,
 			const final = await stream.finalMessage();
 			const toolUse = final.content.find((b) => b.type === "tool_use");
 			if (toolUse && toolUse.type === "tool_use") {
-				onUpstream?.({ response: { stop_reason: final.stop_reason, tool_use: toolUse.input } });
-				return { status: "success", result: { json: toolUse.input, text: JSON.stringify(toolUse.input) } };
+				onUpstream?.({ response: { usage: final.usage, stop_reason: final.stop_reason, tool_use: toolUse.input } });
+				return { status: "success", result: { usage: normalizeTextUsage(final.usage, "anthropic"), json: toolUse.input, text: JSON.stringify(toolUse.input) } };
 			}
 			return { status: "failed", error: "Claude 未返回 tool_use 结构化结果" };
 		}
@@ -91,8 +92,8 @@ export async function translateAnthropicText(req: GenerateRequest, up: Upstream,
 			.filter((b) => b.type === "text")
 			.map((b) => (b.type === "text" ? b.text : ""))
 			.join("");
-		onUpstream?.({ response: { stop_reason: final.stop_reason, text: full || text } });
-		return { status: "success", result: { text: full || text } };
+		onUpstream?.({ response: { usage: final.usage, stop_reason: final.stop_reason, text: full || text } });
+		return { status: "success", result: { text: full || text, usage: normalizeTextUsage(final.usage, "anthropic") } };
 	} catch (err) {
 		const e = err as { status?: number; message?: string };
 		onUpstream?.({ response: { error: e.message ?? String(err) } });

@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { loadJson, saveJson } from "./db.ts";
 import { audienceChain, audienceGroupId, PLATFORM_AUDIENCE } from "./agents.ts";
+import { INFERENCE_FORMATS, selectInferenceOutputTemplate } from '../inferenceComposition.ts';
 import type { Capability, Purpose } from "../contract.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -34,6 +35,12 @@ function readSkill(relPath: string): string {
 
 export interface TemplateDef {
 	id: string;
+	/** 正文确认一致并合并的旧 id，仅推理请求使用，管理操作仍按真实 id。 */
+	aliases?: string[];
+	/** 正文已移出输出契约；兼容旧客户端没有 inference 参数的请求。 */
+	outputSeparated?: boolean;
+	/** 独立输出格式的请求时长档位，不能从创作模板反推。 */
+	outputDurationLimit?: 15 | 30;
 	name: string;
 	capability: Capability;
 	/** 用途；画风等"预设类"模板可无 purpose（不可执行，仅作配置项） */
@@ -156,6 +163,7 @@ function tpl(
 }
 
 const DEFAULT_TEMPLATES: TemplateDef[] = [
+  ...INFERENCE_FORMATS.map(format => tpl(format)),
 	tpl({
 		id: "asset.extract.basic",
 		name: "资产提取（基础）",
@@ -663,10 +671,18 @@ export function getTemplateDef(id: string): TemplateDef | undefined {
 	return store.templates.find((t) => t.id === id);
 }
 
+export function getInferenceTemplate(id: string): TemplateDef | undefined {
+	return getTemplateDef(id) ?? store.templates.find(t => t.aliases?.includes(id));
+}
+
+export function getInferenceOutputTemplate(purpose: Purpose): TemplateDef | undefined {
+	return selectInferenceOutputTemplate(store.templates, purpose);
+}
+
 /** 按 purpose 取默认可用模板（isDefault 优先，否则 order 最小的启用项）；可选按节点类型过滤 */
 export function getDefaultTemplate(purpose: Purpose, nodeType?: string): TemplateDef | undefined {
 	const pool = store.templates
-		.filter((t) => t.enabled && t.purpose === purpose)
+		.filter((t) => t.enabled && t.purpose === purpose && t.category !== '输出提示词')
 		.filter((t) => !nodeType || !t.nodeTypes?.length || t.nodeTypes.includes(nodeType))
 		.sort((a, b) => a.order - b.order);
 	return pool.find((t) => t.isDefault) ?? pool[0];

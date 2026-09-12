@@ -25,6 +25,17 @@ beforeEach(() => {
 });
 
 describe("目录刷新并发", () => {
+    it("同账号增量同步取得新开放线路，下一次304保留线路", async () => {
+        const next = catalog("platform-route-14");
+        next.models = [{ id: "route:seedance-budget", label: "Seedance 2.0 · 低价", capability: "video", params: [], cost: 45 }];
+        fetchCatalog.mockResolvedValueOnce(next).mockResolvedValueOnce({});
+        await useCatalogStore.getState().syncCatalog();
+        expect(fetchCatalog).toHaveBeenLastCalledWith("platform-before");
+        expect(useCatalogStore.getState().model("route:seedance-budget")?.label).toBe("Seedance 2.0 · 低价");
+        await useCatalogStore.getState().syncCatalog();
+        expect(fetchCatalog).toHaveBeenLastCalledWith("platform-route-14");
+        expect(useCatalogStore.getState().model("route:seedance-budget")).toEqual(next.models[0]);
+    });
     it("迁移后新归属目录先返回，迟到的源站目录不会覆盖它", async () => {
         const oldRequest = deferred<Catalog>();
         const newRequest = deferred<Catalog>();

@@ -2,7 +2,7 @@
  * genParams —— 生图/生视频的**生成参数（以资产模式为准）**，资产模式与画布共用。
  *
  * 资产模式（AssetWorkbench/Frame161195）的出图要求是固定的客户端 UI：模型 + 质量 + 比例 + 分辨率，
- * 出图请求发 `{ size: resolveSize(aspect,resolution), quality }`；视频要求是模型 + 时长 + 分辨率 + 比例，
+ * 出图请求发 `{ aspect_ratio, resolution, quality }`；具体上游 `size`/模型后缀由服务端选定渠道后转换。
  * 发 `{ duration, resolution, aspect_ratio }`。画布的「生成图片/生成视频」节点复用本文件，参数一一对应。
  */
 
@@ -13,7 +13,7 @@ export const IMAGE_ASPECTS = [
 	{ v: "16:9", label: "16：9" },
 	{ v: "9:16", label: "9：16" },
 ];
-// 分辨率档全集（label + SIZE_MAP 解析用）。实际开放哪些档由**服务端控制**：
+// 分辨率档全集。实际开放哪些档由**服务端控制**：
 // 图像模型 catalog params 里 key="resolution" 的 enum options（管理端「模型→参数」可改，catalog 热更零发版）。
 const RES_LABELS: Record<string, string> = { "1k": "1K", "2k": "2K", "4k": "4K" };
 /** 内置回退：模型未声明 resolution 参数时的档位（上游画质映射所致，缺省只开 2K） */
@@ -29,22 +29,13 @@ export function imageResolutionOptions(
 	return opts.length ? opts.map((v) => ({ v, label: RES_LABELS[v] })) : IMAGE_RESOLUTIONS;
 }
 /**
- * (比例, 分辨率档) → 实际请求的具体像素分辨率。
- * ⚠ **全客户端唯一一份**（第251轮）：此前 资产五页/画布 用本表、表格模式 Frame161195 与
- * 实时剪辑 shotGenActions 各自另有一份 `IMG_SIZE`，且 1K 档的 16:9/9:16 取值不同
- * （1024x576 vs 1280x720）——同一功能三份实现。现统一取**表格那份**（主力分镜出图路径，
- * 同档位只升不降；2K/4K 三份本就一致）。新增出图入口一律 import resolveSize，勿再抄表。
- * 键为小写档位；resolveSize 对大小写不敏感（表格侧历史用 "1K" 大写）。
+ * 历史客户端像素尺寸映射已移到服务端；用户端只保留公共比例与分辨率。
+ * 像素映射不再属于客户端，避免不同入口或渠道各自换算产生不一致。
+ * 管理端会在选定实际上游模型后，依据该模型保存的参数枚举完成转换。
+ * 用户端请求中不得再出现 `size`、`imageSize` 或 `aspectRatio`。
+ * 公共字段固定为 `aspect_ratio`、`resolution`、`quality`。
+ * 分辨率在线路协议中统一使用小写 `1k / 2k / 4k`。
  */
-export const SIZE_MAP: Record<string, Record<string, string>> = {
-	"1:1": { "1k": "1024x1024", "2k": "2048x2048", "4k": "4096x4096" },
-	"16:9": { "1k": "1280x720", "2k": "2048x1152", "4k": "3840x2160" },
-	"9:16": { "1k": "720x1280", "2k": "1152x2048", "4k": "2160x3840" },
-};
-export function resolveSize(aspect: string, resolution: string): string {
-	return SIZE_MAP[aspect]?.[String(resolution ?? "").toLowerCase()] ?? "1024x1024";
-}
-
 /** 把分辨率档归一到开放档位（旧节点/旧项目残留的档不在开放集 → 第一档） */
 export function clampImageResolution(v: unknown, options?: { v: string }[]): string {
 	const list = options?.length ? options : IMAGE_RESOLUTIONS;
@@ -52,12 +43,15 @@ export function clampImageResolution(v: unknown, options?: { v: string }[]): str
 	return list.some((r) => r.v === s) ? s : (list[0]?.v ?? "2k");
 }
 
-/** 节点图片参数(质量/比例/分辨率) → 出图请求参数 { size, quality }（与资产模式一致；resOptions=该模型开放档位） */
+/** 节点图片参数 → 公共出图请求参数（与资产模式一致；resOptions=该模型开放档位） */
 export function buildImageParams(p: Record<string, unknown>, resOptions?: { v: string }[]): Record<string, unknown> {
 	const aspect = String(p.aspect ?? "16:9");
-	const resolution = clampImageResolution(p.resolution, resOptions);
+	const rawResolution = String(p.resolution ?? "2k").toLowerCase();
+	const resolution = resOptions?.length
+		? clampImageResolution(rawResolution, resOptions)
+		: (["1k", "2k", "4k"].includes(rawResolution) ? rawResolution : "2k");
 	const quality = String(p.quality ?? "high");
-	return { size: resolveSize(aspect, resolution), quality };
+	return { aspect_ratio: aspect, resolution, quality };
 }
 
 // ── 视频 ──
@@ -80,6 +74,7 @@ export function clampDuration(v: unknown): number {
 // ── 计费预估（与服务端 resolveModelCost 同公式：按字段计费 = 每单位价 × 字段值，否则固定/路由价）──
 interface CostModel {
 	cost: number;
+	tokenPricing?: { enabled: boolean; multiplier?: number };
 	costField?: string;
 	costPerUnit?: number;
 	costRules?: { when: Record<string, string>; cost?: number; costPerUnit?: number }[];
@@ -94,6 +89,8 @@ interface CostModel {
  */
 export function estimateCost(model: CostModel | undefined, params: Record<string, unknown>, refVideoSeconds = 0): number | null {
 	if (!model) return null;
+	if (model.tokenPricing?.enabled) return 10;
+	const scale = (cost: number) => { const raw = cost * (model.tokenPricing?.multiplier ?? 1); return model.tokenPricing ? Math.ceil(raw - Number.EPSILON * Math.max(1, raw) * 4) : cost; };
 	const rule = (model.costRules ?? []).find((r) =>
 		Object.keys(r.when ?? {}).every((k) => String(params[k]) === String(r.when[k])),
 	);
@@ -102,7 +99,7 @@ export function estimateCost(model: CostModel | undefined, params: Record<string
 		const base = Math.max(0, Number(params[model.costField]) || 0);
 		const weight = Number(model.refVideoSecondsWeight) || 0;
 		const unit = base > 0 ? base + weight * Math.max(0, refVideoSeconds) : 0;
-		if (perUnit > 0 && unit > 0) return Math.round(perUnit * unit);
+		if (perUnit > 0 && unit > 0) return model.tokenPricing ? scale(perUnit * unit) : Math.round(perUnit * unit);
 	}
-	return rule?.cost ?? model.cost;
+	return scale(rule?.cost ?? model.cost);
 }

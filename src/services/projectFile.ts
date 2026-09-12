@@ -224,6 +224,7 @@ export interface ShotOverrides {
 
 /** 单个分镜（一行大分镜 ≈ 15s 视频镜头） */
 export interface StoryboardShot {
+  plotGuidance?: string;
   id: string;
   index: number;
   title: string;            // 分镜1（补镜头为「分镜3-1」这类派生编号，见 isSupplement）
@@ -262,6 +263,7 @@ export interface StoryboardShot {
 
 /** 视频/分镜界面的「视频设置」——逐项目持久化（重启不回默认） */
 export interface MediaSettings {
+  inferenceStrategy?: import('@/lib/inferenceStrategy').InferenceStrategy;
   /** 剧集拆分方式（第243轮，新建项目可预设）：快拆 __quick_* id（见 lib/splitChoices）或 catalog「剧集」类模板 id；空=默认 快速·n-n */
   episodeTplId?: string;
   /** 资产拆分模板 id（script.analyze，第243轮起持久化；空=catalog 默认款 isDefault） */

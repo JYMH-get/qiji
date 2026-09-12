@@ -1,3 +1,4 @@
+import { accessModes } from "../autoRouting.ts";
 /**
  * 渠道商门户：/agent（页面）+ /agent-api/*（账密会话鉴权）。
  *
@@ -22,7 +23,7 @@ import {
 } from "../store/agents.ts";
 import { listEnabledModels, getModelDef, modelVisibleToAgent, type ModelDef } from "../store/models.ts";
 import { getChannel } from "../store/channels.ts";
-import { listModes, modeName } from "../store/modes.ts";
+import { modeName } from "../store/modes.ts";
 import {
 	usersByAgent, getUser, updateUser, deleteUser, dailySpentToday, type User,
 } from "../store/users.ts";
@@ -133,7 +134,7 @@ export async function registerAgentRoutes(app: FastifyInstance): Promise<void> {
 				// 第121轮：整商模式硬闸——门户按它隐藏被禁模式的开关
 				features: applyAgentFeatureGate(a.id),
 				// 第136轮：动态模式注册表（id/name）——门户用户管理的模式 chips/开关/签发勾选与源站同步
-				modes: listModes().map((m) => ({ id: m.id, name: m.name })),
+				modes: accessModes().map((m) => ({ id: m.id, name: m.name })),
 			};
 		});
 
@@ -534,7 +535,7 @@ export async function registerAgentRoutes(app: FastifyInstance): Promise<void> {
 			// 归属（落笔固化）=本商才可看；无归属（平台直属/查无归属的存量）一律 404
 			if (!log || log.ownerId !== req.agent!.id) return reply.code(404).send({ error: { message: "记录不存在" } });
 			// 只返回 ①②段（用户请求 / 返回结果）；上游报文与 agentCosts 对渠道商隐藏
-			const { upstreamRequest, upstreamResponse, agentCosts, ...safe } = log as LogEntry & Record<string, unknown>;
+			const { upstreamRequest, upstreamResponse, routing, agentCosts, ...safe } = log as LogEntry & Record<string, unknown>;
 			return { ...safe, cost: logCostFor(log, myCostView(req)) };
 		});
 	});

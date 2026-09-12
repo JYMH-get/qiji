@@ -3,6 +3,13 @@ import { makeNode, avoidOverlap, resolveCollision, NODE_W, NODE_H } from "./node
 
 const at = (type: string, x: number, y: number) => makeNode(type as any, x, y);
 const GAP = 16;
+it("标记与普通节点新增和拖动均可互相覆盖", () => {
+	const marker = at("canvas.marker", 100, 100), business = at("image.gen", 100, 100);
+	expect(avoidOverlap(marker, [business])).toBe(marker);
+	expect(avoidOverlap(business, [marker])).toBe(business);
+	expect(resolveCollision(marker, [business])).toBeNull();
+	expect(resolveCollision(business, [marker])).toBeNull();
+});
 const overlaps = (a: { x: number; y: number }, b: { x: number; y: number }) =>
 	a.x < b.x + NODE_W + GAP && b.x < a.x + NODE_W + GAP && a.y < b.y + NODE_H + GAP && b.y < a.y + NODE_H + GAP;
 

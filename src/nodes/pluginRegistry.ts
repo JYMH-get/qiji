@@ -1,3 +1,4 @@
+import { canvasInference, canvasNeighborVars } from '@/lib/inferenceStrategy';
 import {
 	Type,
 	ScrollText,
@@ -417,7 +418,7 @@ export async function defaultNodeExecute(
 			?? fallbackTemplateId;
 		// 模板决定用途/自愈：模板用途在允许集内 → 按模板用途执行（多用途节点同一套卡解析）；
 		// 不在允许集内（残留/上游改变后失配）→ 回退场景默认模板，并按其用途执行。
-		if (templateId && plugin.useTemplateVars) {
+		if (templateId && plugin.useTemplateVars && node.type !== 'smart.infer') {
 			const { useCatalogStore } = await import("@/store/catalogStore");
 			const catTpls = useCatalogStore.getState().catalog?.templates;
 			const tpl = catTpls?.find((t) => t.id === templateId);
@@ -431,6 +432,14 @@ export async function defaultNodeExecute(
 				else if (allowedPurposes.length) purpose = allowedPurposes[0];
 			}
 		}
+		const inferenceConfig = node.type === 'smart.infer'
+      ? canvasInference(node, useCanvasStore.getState().nodes, useCanvasStore.getState().edges, (await import('@/store/catalogStore')).useCatalogStore.getState().catalog?.templates ?? []) : null;
+    if (inferenceConfig) {
+      purpose = inferenceConfig.purpose;
+      if (!inferenceConfig.durationRange) throw new Error(inferenceConfig.durationError ?? '请输入有效时长');
+      if (inferenceConfig.strategy.source === 'skill' ? !inferenceConfig.strategy.skillText?.trim() : !inferenceConfig.template) throw new Error(`请先选择${purpose === 'storyboard.split' ? '拆分' : '推理'}方案或填写外部 Skills 内容`);
+      templateId = inferenceConfig.strategy.source === 'skill' ? undefined : inferenceConfig.template!.id;
+    }
 		// 合并素材：connectedMedia 已是 上游连线+自加 的**按加入顺序**全量合并（listNodeMaterials），
 		// 按媒体分组整组落入 input；其它非媒体 input 键保留。
 		const selfInput = (node.data.input || {}) as Record<string, unknown>;
@@ -557,7 +566,7 @@ export async function defaultNodeExecute(
 		};
 		const sharedInput = Object.keys(mergedInput).length ? mergedInput : undefined;
 
-		// 出图参数与资产模式一致：质量 + 比例×分辨率→size。视频参数(时长/分辨率/比例)键名已对齐服务端，直接透传。
+		// 出图参数与资产模式一致：比例 + 分辨率 + 质量。上游尺寸由服务端转换。
 		let runParams: Record<string, unknown> = params;
 		if (plugin.capability === "image") {
 			const { buildImageParams, imageResolutionOptions } = await import("@/lib/genParams");
@@ -620,12 +629,13 @@ export async function defaultNodeExecute(
 				const sc = Number(params.shotCount);
 				variables.分镜数量 = sc > 0 ? String(sc) : "自动";
 			}
+			if (inferenceConfig?.single) Object.assign(variables, canvasNeighborVars(node, useCanvasStore.getState().nodes, useCanvasStore.getState().edges, inferenceConfig.unified));
 			run = await runPurpose(purpose, {
 				variables,
 				// 文本参数与资产模式完全一致：固定 temperature/maxTokens（节点不开放温度/长度选择，
 				// 历史节点残留的 temperature/maxTokens 也不生效）
 				params: { ...params, temperature: 0.7, maxTokens: 65535 },
-				input: sharedInput,
+				input: { ...sharedInput, ...(inferenceConfig ? { inference: { source: inferenceConfig.strategy.source ?? 'template', skillText: inferenceConfig.strategy.skillText, skillName: inferenceConfig.strategy.skillName, guidance: inferenceConfig.strategy.guidance, outputMode: inferenceConfig.unified ? 'unified' : 'storyboard', durationRange: inferenceConfig.durationRange } } : {}) },
 				modelKey,
 				templateId,
 				onProgress,

@@ -26,6 +26,7 @@ declare module "fastify" {
 const NODE_ALLOWED_ROUTES = new Set([
 	"/v1/catalog",
 	"/v1/generate",
+	"/v1/user-prompt-backups",
 	"/v1/batch",
 	"/v1/batch/:batchId",
 	"/v1/tasks/:taskId",

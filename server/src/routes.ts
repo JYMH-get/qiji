@@ -1,3 +1,8 @@
+import { prepareTextBilling, type TextPriceSnapshot } from './store/textBilling.ts';
+import { inferenceRequestErrorForCaller } from './inferenceRequestValidation.ts';
+import { userPromptBackups } from './store/userPromptBackups.ts';
+import { dispatchRouted as dispatchGenerate } from "./autoRouteDispatch.ts";
+import { publicModelDef, prepareRoutingRequest } from "./autoRouting.ts";
 /**
  * 用户端路由。
  *  公开：/v1/login（校验 accessKey）、/v1/assets/:id/raw（<img> 直读，无法带头）。
@@ -6,7 +11,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { requireAccessKey, deviceIdOf } from "./auth.ts";
 import { buildCatalog } from "./catalog.ts";
-import { dispatchGenerate, rehostVideo } from "./translators/index.ts";
+import { rehostVideo } from "./translators/index.ts";
 import { getOssConfig } from "./store/settings.ts";
 import { getTaskState, createCompletedTask, setTaskBilling, setBillingReverseHook, rewriteTaskRawResult } from "./store/tasks.ts";
 import { settle, reverse, type SettleResult } from "./store/credits.ts";
@@ -27,7 +32,7 @@ import {
 	inviteToTeam, removeInvite, invitesForUser, acceptInvite, grantedOf, bumpGranted, settleMemberGrant,
 } from "./store/teams.ts";
 import type { Team } from "./store/teams.ts";
-import { getModelDef, resolveModelCost, modelAllowedForAgent } from "./store/models.ts";
+import { resolveModelCost, modelAllowedForAgent } from "./store/models.ts";
 import type { ModelDef } from "./store/models.ts";
 import { familyName } from "./store/families.ts";
 import { refVideoBillingParams } from "./refVideoBilling.ts";
@@ -49,6 +54,7 @@ import { dirname, join } from "node:path";
 import { DATA_DIR } from "./store/db.ts";
 import { redeemCode } from "./store/redeemCodes.ts";
 import { startLog, finishLog, listLogs, getLog, rewriteLogResult, logSummary, PURPOSE_LABELS, type LogEntry } from "./store/logs.ts";
+import { routeLogLabel } from './routeLogDisplay.ts';
 import { buildDownloadManifest, parseDownloadQuery } from "./store/assetExport.ts";
 import type { GenerateRequest, BatchRequest, BatchState, TaskState, Capability } from "./contract.ts";
 
@@ -161,10 +167,11 @@ function planBilling(
 	user: User,
 	md: ModelDef | undefined,
 	params?: Record<string, unknown>,
-): { cost: number; payer: User; reject?: string } {
+): { cost: number; payer: User; reject?: string; tokenSnapshot?: TextPriceSnapshot } {
 	// 共享积分模式：余额校验/扣费对象=团长的池；价格口径不变（统一平台价，catalog 预估仍=实扣）
 	const { payer } = teamPayerFor(user);
-	const cost = membershipDiscounted(payer, md ? resolveModelCost(md, params) : 0, md?.id);
+	const tokenSnapshot = md?.capability === 'text' && md.tokenPricing?.enabled ? {modelId:md.id,pricing:structuredClone(md.tokenPricing),at:Date.now(),discountPercent:membershipDiscounted(payer, 10000, md.id) / 100} : undefined;
+  const cost = tokenSnapshot ? 10 : membershipDiscounted(payer, md ? resolveModelCost(md, params) : 0, md?.id);
 	if (cost > 0 && payer.credits < cost) {
 		return {
 			cost, payer,
@@ -173,7 +180,7 @@ function planBilling(
 				: `团队积分不足：本次需 ${cost}，团队池剩余 ${payer.credits}`,
 		};
 	}
-	return { cost, payer };
+	return { cost, payer, tokenSnapshot };
 }
 
 /**
@@ -190,17 +197,19 @@ function planBilling(
  */
 function chargeBilling(
 	user: User,
-	plan: { cost: number; payer: User },
+	plan: { cost: number; payer: User; tokenSnapshot?: TextPriceSnapshot },
 	ref?: string,
 ): SettleResult {
-	return settle({
+	const outcome = settle({
 		reason: "generate",
 		ref,
 		payerId: plan.payer.id,
 		statsUserId: user.id,
 		userAmount: plan.cost,
 		agents: [],
-	});
+  });
+  if (outcome.ok && ref && plan.tokenSnapshot) prepareTextBilling(ref, outcome.charged, plan.tokenSnapshot);
+  return outcome;
 }
 
 /**
@@ -210,22 +219,24 @@ function chargeBilling(
  *    分销机制），另附 reason 供节点侧管理端识别真因。
  */
 function planNodeBilling(agent: import("./store/agents.ts").Agent, md: ModelDef | undefined, params?: Record<string, unknown>): { cost: number; reject?: string } {
-	const cost = md ? resolveModelCost(md, params) : 0;
+  const cost = md ? resolveModelCost(md, params) : 0;
 	if (cost > 0 && agent.credits < cost) {
 		return { cost, reject: "服务暂不可用，请联系你的服务商" };
 	}
 	return { cost };
 }
 
-function chargeNodeBilling(agent: import("./store/agents.ts").Agent, cost: number, traceUserId: string, ref?: string): SettleResult {
-	return settle({
+function chargeNodeBilling(agent: import("./store/agents.ts").Agent, cost: number, traceUserId: string, ref?: string, md?: ModelDef): SettleResult {
+	const outcome = settle({
 		reason: "generate",
 		ref,
 		payerId: traceUserId,
 		statsUserId: traceUserId,
 		userAmount: 0,
 		agents: cost > 0 ? [{ id: agent.id, cost }] : [],
-	});
+  });
+  if (outcome.ok && ref && md?.tokenPricing?.enabled) prepareTextBilling(ref, outcome.charged, {modelId:md.id,pricing:structuredClone(md.tokenPricing),at:Date.now(),discountPercent:100});
+  return outcome;
 }
 
 /**
@@ -574,6 +585,22 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 	// ── 以下需要 accessKey ──
 	await app.register(async (api) => {
 		api.addHook("preHandler", requireAccessKey);
+		api.post('/v1/user-prompt-backups', {bodyLimit: 2 * 1024 * 1024}, async (req, reply) => {
+			const body = req.body as GenerateRequest;
+			if (!body || typeof body.clientTaskId !== 'string' || !body.clientTaskId || body.clientTaskId.length > 200 || typeof body.model !== 'string' || !/^(libtv-|dreamina-|comfyui-)/.test(body.model) || !Array.isArray(body.usedPresets) || body.usedPresets.length > 100) {
+				return reply.code(400).send({error:{message:'预设备份参数无效'}});
+			}
+			if (isRelay()) {
+				const user=req.user!;
+				const response=await sourceFetch('/v1/user-prompt-backups',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),nodeUser:{id:user.id,name:user.name||user.account}});
+				return reply.code(response.status).send(await jsonOf(response));
+			}
+			const userId=req.agentNode?nodeUserTrace(req):req.user!.id;
+			// 本地渠道仅提交已使用的预设快照，不提交剧本和其它生成正文。
+			const variables={prompt:body.usedPresets.map(p=>typeof p?.body==='string'?p.body:'').join('\n')};
+			const count=userPromptBackups.capture({...body,variables,inference:undefined,promptOverride:undefined},{userId,userName:req.agentNode?nodeUserName(req):req.user!.name,agentId:req.agentNode?.id??req.user?.agentId,requestId:'local:'+body.clientTaskId,projectId:body.projectId,model:body.model,purpose:body.purpose});
+			return {ok:true,count};
+		});
 
 		// 心跳：能进到这里说明 requireAccessKey 已校验 accessKey 启用 + 机器码激活匹配。
 		// 任一不符（被禁用/未激活/换机）→ requireAccessKey 直接 401/403 → 用户端登出。
@@ -653,7 +680,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 				// 模型 id → ModelDef.familyId → 家族名；已删模型/无家族/hidden 内部模型归「其他」。
 				const fam = new Map<string, { familyId: string; familyName: string; count: number; success: number; credits: number; models: typeof byModel }>();
 				for (const m of byModel) {
-					const fid = getModelDef(m.model)?.familyId || "";
+					const fid = publicModelDef(m.model)?.familyId || "";
 					const key = fid || "__other";
 					const g = fam.get(key) ?? { familyId: fid, familyName: fid ? familyName(fid) : "其他", count: 0, success: 0, credits: 0, models: [] };
 					g.count += m.count; g.success += m.success; g.credits += m.credits;
@@ -766,6 +793,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 		api.post("/v1/generate", async (req, reply) => {
 			const body = req.body as GenerateRequest;
 			if (!body?.model) return reply.code(400).send({ error: { message: "缺少 model" } });
+      if (!isRelay()) {
+        const error = inferenceRequestErrorForCaller(body, req);
+        if (error) return reply.code(400).send({ error: { message: error } });
+      }
 
 			// ── P3 relay：预检（目录预估价）→ 转发源站 → 按源站回传实扣镜像本地扣款 ──
 			// ⚠ 勿改成「先扣本地再转发」：预估（目录价）与源站实扣可能有差（参考视频按秒加权），
@@ -822,10 +853,13 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 				return reply.code(200).send({ status: "failed", error: errText });
 			}
 
+			const routeError = prepareRoutingRequest(body, req.agentNode?.id ?? req.user?.agentId, applyAgentFeatureGate(req.agentNode?.id ?? req.user?.agentId, req.user?.features)?.modes);
+			if (routeError) return reply.code(400).send({ error: { message: routeError } });
+
 			// ── P3 渠道节点分支：计费=商积分池（平台价），响应回传实扣 cost 供节点镜像扣本地用户 ──
 			if (req.agentNode) {
 				const agent = req.agentNode;
-				const md = getModelDef(body.model);
+				const md = publicModelDef(body.model);
 				if (md && !modelAllowedForAgent(md, agent.id)) {
 					return reply.code(403).send({ error: { message: `模型「${md.label}」未对当前账号开放` } });
 				}
@@ -850,12 +884,12 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 				// 节点日志：cost=0（源站无用户侧扣款）+ agentCosts=[池实扣]——门户/管理端经 logCostFor
 				// 取到池实扣；启动对账孤儿退款按 agentCosts 原路退池（userAmount 0 对留痕 userId 天然 no-op）。
 				const log = startLog({ req: body, userId: trace, userName: nodeUserName(req), cost: 0, agentCosts: plan.cost > 0 ? [{ id: agent.id, cost: plan.cost }] : undefined, ownerId: agent.id, headers: req.headers });
-				const billed = chargeNodeBilling(agent, plan.cost, trace, log.id);
+				const billed = chargeNodeBilling(agent, plan.cost, trace, log.id, md);
 				if (!billed.ok) {
 					finishLog(log.id, { status: "failed", error: billed.error });
 					return reply.code(402).send({ error: { message: billed.error }, reason: "pool_insufficient" });
 				}
-				const r = await runWithAssetOwner({ userId: trace, agentId: agent.id }, () => dispatchGenerate(body, log.id));
+				const r = await runWithAssetOwner({ userId: trace, agentId: agent.id }, () => dispatchGenerate(body, log.id, req.agentNode?.id ?? req.user?.agentId, applyAgentFeatureGate(req.agentNode?.id ?? req.user?.agentId, req.user?.features)?.modes));
 				if (r.kind === "sync" && r.status === "failed") {
 					reverse(billed.charged, "refund", log.id);
 				} else if (r.kind === "async") {
@@ -869,7 +903,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			// 额度前置校验：不足则拒绝、不下单
 			const user = req.user!;
 			const requestAgentId = user.agentId;
-			const md = getModelDef(body.model);
+			const md = publicModelDef(body.model);
 			// 模型可用性校验：开放范围（第110轮 shareScope）+ 渠道商禁用清单（第121轮）双闸，任一不过直接拒绝，不下单不记账
 			if (md && !modelAllowedForAgent(md, user.agentId)) {
 				return reply.code(403).send({ error: { message: `模型「${md.label}」未对当前账号开放` } });
@@ -921,7 +955,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 				return reply.code(402).send({ error: { message: billed.error } });
 			}
 			// 归属上下文：整条生成链（含后台轮询循环里 rehostVideo 产出的成片）落台账时自动带上 user_id/agent_id
-			const r = await runWithAssetOwner({ userId: user.id, agentId: user.agentId }, () => dispatchGenerate(body, log.id));
+			const r = await runWithAssetOwner({ userId: user.id, agentId: user.agentId }, () => dispatchGenerate(body, log.id, req.agentNode?.id ?? req.user?.agentId, applyAgentFeatureGate(req.agentNode?.id ?? req.user?.agentId, req.user?.features)?.modes));
 
 			// 同步失败 → 原路同退（用户与渠道商两侧同进同退）；异步 → 登记**实扣**金额供失败退款
 			if (r.kind === "sync" && r.status === "failed") {
@@ -966,6 +1000,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 		// 批量提交（每个子任务也记录请求）
 		api.post("/v1/batch", async (req, reply) => {
 			const body = req.body as BatchRequest;
+      if (!isRelay() && Array.isArray(body?.tasks)) for (const task of body.tasks) {
+        const error = inferenceRequestErrorForCaller(task, req);
+        if (error) return reply.code(400).send({ error: { message: error } });
+      }
 			if (!Array.isArray(body?.tasks)) return reply.code(400).send({ error: { message: "缺少 tasks" } });
 
 			// ── P3 relay：整批转发源站，按回传 costs（与 taskIds 对位）逐任务镜像扣本地 ──
@@ -1013,11 +1051,13 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 				const costs: number[] = [];
 				const effGate = applyAgentFeatureGate(agent.id, undefined)?.modes;
 				for (const t of body.tasks) {
-					const tmd = getModelDef(t.model);
+					const tmd = publicModelDef(t.model);
 					const fail = (msg: string) => {
 						taskIds.push(createCompletedTask("text", "failed", undefined, msg, t.clientTaskId).taskId);
 						costs.push(0);
 					};
+					const routeError = prepareRoutingRequest(t, agent.id, effGate);
+					if (routeError) { fail(routeError); continue; }
 					if (tmd && !modelAllowedForAgent(tmd, agent.id)) { fail(`模型「${tmd.label}」未对当前账号开放`); continue; }
 					if (tmd?.modeId && !tmd.hidden && modeDisabled(tmd.modeId)) { fail(`模式「${modeName(tmd.modeId)}」已停用`); continue; }
 					if (tmd?.modeId && !tmd.hidden && effGate?.[tmd.modeId] === false) { fail(`模式「${modeName(tmd.modeId)}」未对当前账号开放`); continue; }
@@ -1030,13 +1070,13 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 					const plan = planNodeBilling(agent, tmd, rb.params);
 					if (plan.reject) { fail(plan.reject); continue; }
 					const log = startLog({ req: t, userId: trace, userName: uname, cost: 0, agentCosts: plan.cost > 0 ? [{ id: agent.id, cost: plan.cost }] : undefined, ownerId: agent.id, headers: req.headers });
-					const billed = chargeNodeBilling(agent, plan.cost, trace, log.id);
+					const billed = chargeNodeBilling(agent, plan.cost, trace, log.id, tmd);
 					if (!billed.ok) {
 						finishLog(log.id, { status: "failed", error: billed.error });
 						fail(billed.error);
 						continue;
 					}
-					const r = await runWithAssetOwner({ userId: trace, agentId: agent.id }, () => dispatchGenerate(t, log.id));
+					const r = await runWithAssetOwner({ userId: trace, agentId: agent.id }, () => dispatchGenerate(t, log.id, req.agentNode?.id ?? req.user?.agentId, applyAgentFeatureGate(req.agentNode?.id ?? req.user?.agentId, req.user?.features)?.modes));
 					if (r.kind === "sync" && r.status === "failed") {
 						reverse(billed.charged, "refund", log.id);
 						taskIds.push(createCompletedTask("text", r.status, r.result, r.error, t.clientTaskId).taskId);
@@ -1068,7 +1108,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 					continue;
 				}
 				// 逐任务校验：模型未开放/模式已禁/任一侧额度不足 → 记一条 failed 任务、跳过下单
-				const tmd = getModelDef(t.model);
+				const tmd = publicModelDef(t.model);
+				const routeError = prepareRoutingRequest(t, user.agentId, effModes);
+				if (routeError) { taskIds.push(createCompletedTask("video", "failed", undefined, routeError, t.clientTaskId).taskId); continue; }
 				if (tmd && !modelAllowedForAgent(tmd, user.agentId)) {
 					taskIds.push(createCompletedTask("text", "failed", undefined, `模型「${tmd.label}」未对当前账号开放`, t.clientTaskId).taskId);
 					continue;
@@ -1113,7 +1155,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 					taskIds.push(createCompletedTask("text", "failed", undefined, billed.error, t.clientTaskId).taskId);
 					continue;
 				}
-				const r = await runWithAssetOwner({ userId: user.id, agentId: user.agentId }, () => dispatchGenerate(t, log.id));
+				const r = await runWithAssetOwner({ userId: user.id, agentId: user.agentId }, () => dispatchGenerate(t, log.id, req.agentNode?.id ?? req.user?.agentId, applyAgentFeatureGate(req.agentNode?.id ?? req.user?.agentId, req.user?.features)?.modes));
 				if (r.kind === "sync" && r.status === "failed") {
 					reverse(billed.charged, "refund", log.id);
 				} else if (r.kind === "async") {
@@ -1399,6 +1441,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 					purpose: l.purpose,
 					purposeLabel: l.purpose ? PURPOSE_LABELS[l.purpose] || l.purpose : "",
 					model: l.model,
+					modelLabel: routeLogLabel(l, 'user'),
 					status: l.status,
 					cost: l.cost,
 					refunded: l.status === "failed" && (l.cost ?? 0) > 0, // 失败即退款（异步退回预扣/同步未扣）
@@ -1426,8 +1469,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			if (!log || log.userId !== req.user!.id) return reply.code(404).send({ error: { message: "记录不存在" } });
 			// 只返回 ①（客户端→服务端：requestHeaders+request）②（服务端→客户端：response）；③④上游报文不下发；
 			// agentCosts（归属链各级结算价）与 ownerId（归属渠道商内部 id）对用户保密，一并剥除
-			const { upstreamRequest, upstreamResponse, agentCosts, ownerId, ...safe } = log as LogEntry & Record<string, unknown>;
-			return { ...safe, purposeLabel: log.purpose ? PURPOSE_LABELS[log.purpose] || log.purpose : "" };
+			const { upstreamRequest, upstreamResponse, routing, agentCosts, ownerId, ...safe } = log as LogEntry & Record<string, unknown>;
+			return { ...safe, modelLabel:routeLogLabel(log, 'user'), purposeLabel: log.purpose ? PURPOSE_LABELS[log.purpose] || log.purpose : "" };
 		});
 
 		// ── 共享素材库（第120轮）：三级=库/文件夹/素材；素材只存 OSS 记录，字节不复制 ──

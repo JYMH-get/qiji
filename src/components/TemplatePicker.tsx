@@ -19,7 +19,7 @@ interface TemplatePickerProps {
 
 export default function TemplatePicker({ purpose, value, onChange, label = "提示词模板", style }: TemplatePickerProps) {
 	const all = useCatalogStore((s) => s.catalog?.templates);
-	const opts = useMemo(() => (all ?? []).filter((t) => t.purpose === purpose), [all, purpose]);
+	const opts = useMemo(() => (all ?? []).filter((t) => t.purpose === purpose && t.category !== '输出提示词'), [all, purpose]);
 	// 空值=用默认模板；直接显示「实际使用」的模板名（空值映射到默认模板），不再显示「跟随默认」这类占位
 	const def = useMemo(() => opts.find((t) => t.isDefault) ?? opts[0], [opts]);
 	const displayValue = value || def?.id || "";

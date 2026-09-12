@@ -15,7 +15,7 @@ import { useToolboxStore } from "@/store/toolboxStore";
 import { useCatalogStore } from "@/store/catalogStore";
 import ModelPicker, { useCapModelOptions } from "@/components/ModelPicker";
 import TemplatePicker from "@/components/TemplatePicker";
-import { IMAGE_QUALITIES, IMAGE_ASPECTS, imageResolutionOptions, clampImageResolution, resolveSize, estimateCost } from "@/lib/genParams";
+import { IMAGE_QUALITIES, IMAGE_ASPECTS, imageResolutionOptions, clampImageResolution, buildImageParams, estimateCost } from "@/lib/genParams";
 import { saveTextToLocal, saveUriToLocal } from "@/lib/saveMedia";
 
 /** 工具卡（首页网格） */
@@ -70,7 +70,7 @@ function NovelTool() {
 				<ModelPicker cap="text" label="文本模型" value={novel.modelKey} onChange={(id) => patchNovel({ modelKey: id })} style={{ minWidth: 220 }} />
 				<TemplatePicker purpose="script.toScenes" value={novel.tplId} onChange={(id) => patchNovel({ tplId: id })} style={{ minWidth: 160 }} />
 				<div className="ml-auto flex items-center gap-3">
-					{cost != null && <span className="text-[10px] text-muted-foreground">预计消耗 {cost} 积分</span>}
+					{cost != null && <span className="text-[10px] text-muted-foreground">{model?.tokenPricing?.enabled ? "预扣" : "预计消耗"} {cost} 积分</span>}
 					<button
 						onClick={() => void runNovel(effKey)}
 						disabled={novel.running || !novel.input.trim()}
@@ -143,7 +143,7 @@ function CoverTool() {
 	// 分辨率档随生效模型 catalog 收敛（与资产模式一把尺）
 	const resOpts = imageResolutionOptions(model);
 	const resolution = clampImageResolution(cover.resolution, resOpts);
-	const cost = estimateCost(model, { size: resolveSize(cover.aspect, resolution), quality: cover.quality });
+	const cost = estimateCost(model, buildImageParams({ aspect: cover.aspect, resolution, quality: cover.quality }, resOpts));
 	// 预览选中的历史项（-1=最新）
 	const [selIdx, setSelIdx] = useState(0);
 	const sel = cover.results[selIdx] ?? cover.results[0];
@@ -200,7 +200,7 @@ function CoverTool() {
 				<ModelPicker cap="image" label="图像模型" value={cover.modelKey} onChange={(id) => patchCover({ modelKey: id })} />
 				<TemplatePicker purpose="image.cover" value={cover.tplId} onChange={(id) => patchCover({ tplId: id })} />
 				<div className="flex items-center justify-between">
-					{cost != null ? <span className="text-[10px] text-muted-foreground">预计消耗 {cost} 积分</span> : <span />}
+					{cost != null ? <span className="text-[10px] text-muted-foreground">{model?.tokenPricing?.enabled ? "预扣" : "预计消耗"} {cost} 积分</span> : <span />}
 				</div>
 				<button
 					onClick={handleRun}

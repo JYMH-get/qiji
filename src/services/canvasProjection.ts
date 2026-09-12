@@ -25,7 +25,7 @@ import { useLibraryStore } from "@/store/libraryStore";
 import { syncNodeLegend } from "@/canvas/nodeMaterials";
 import { makeNode, NODE_W, NODE_H } from "@/canvas/nodeFactory";
 import { getNodeSpec } from "@/nodes/nodeSpecs";
-import { SMART_INFER_MULTI_TPL, SMART_INFER_UNIFIED_TPL, SMART_INFER_UNIFIED_SINGLE_TPL } from "@/lib/smartInferPrompts";
+import { inferenceDurationLimit, projectInferenceStrategy } from "@/lib/inferenceStrategy";
 import { genId } from "@/lib/id";
 import type { CanvasNode, CanvasEdge, NodeRuntime } from "@/types";
 
@@ -174,7 +174,7 @@ export function syncCanvasFromProject(episodeIdArg?: string | null): boolean {
 	// 3+4. 全文 → 剧集分集 → 每集「智能推理」节点 → 该集每分镜一条流水线(文本→故事板图→视频)。
 	//      逻辑：全文→剧集→分镜。智能推理基于已分好集的本集文案，是剧集分集的**下游**(每集一个)，非与之平级。
 	type ProjMat = { id: string; assetId?: string; media?: "image" | "video" | "audio"; name?: string; uri: string; voiceForAssetId?: string };
-	type ProjShot = { id: string; index?: number; scriptSegment?: string; prompt?: string; storyboardPrompt?: string; videoPrompt?: string; unifiedPrompt?: string; storyboardUri?: string; videoUri?: string; materials?: ProjMat[] };
+	type ProjShot = { plotGuidance?: string; id: string; index?: number; scriptSegment?: string; prompt?: string; storyboardPrompt?: string; videoPrompt?: string; unifiedPrompt?: string; storyboardUri?: string; videoUri?: string; materials?: ProjMat[]; durationSec?: number; overrides?: { duration?: number } };
 	// 分镜垫素材 → 节点 input（图/视频/音频分组；故事板节点只取图像，视频节点取全部），供节点显示+下游引用。
 	// ⚠ ref 键空间必须与画布「匹配素材」（assetMatch）完全一致，两侧才互认（判重/matOrder/素材编号）：
 	//   id=**台账 blob id**（图生图按 id 取字节；勿写资产实体 id——键互不相认正是「再同步后画布编号错乱」的根源之一）、
@@ -213,9 +213,16 @@ export function syncCanvasFromProject(episodeIdArg?: string | null): boolean {
 			const ep = targetEp;
 			const epContent = [ep.title, ep.scriptText].filter(Boolean).join("\n");
 			const shots = (ep.shots as ProjShot[]) || [];
-			// 投影的分集级推理节点承载**整集**原文 → 显式带多分镜模板（同源模式=同源多卡；手动新建默认单分镜）
-			const epTpl = sameSource ? SMART_INFER_UNIFIED_TPL : SMART_INFER_MULTI_TPL;
-			const infer = ensure(`episode:${ep.id}`, "smart.infer", COL2, EPISODE_Y, (d) => { d.params.prompt = epContent; d.resultText = epContent; d.episodeRef = ep.id; d.params.templateId = epTpl; });
+			const strategy = projectInferenceStrategy(ps.mediaSettings);
+			const infer = ensure(`episode:${ep.id}`, "smart.infer", COL2, EPISODE_Y, (d) => {
+				d.params.prompt = epContent; d.resultText = epContent; d.episodeRef = ep.id;
+				d.params.inferenceStrategy = structuredClone(strategy);
+				d.params.inferenceScope = 'multi';
+				d.params.inferenceMode = sameSource ? 'unified' : 'storyboard';
+				d.params.inferenceDurationLimit = inferenceDurationLimit(ps.mediaSettings.maxDuration);
+				d.params.inferenceDurationPreset = d.params.inferenceDurationLimit === 30 ? '4-30' : '4-15';
+				d.params.inferenceOutput = sameSource ? 'storyboard.unified' : 'storyboard.toVideoPrompt';
+			});
 			connect(epSplit, infer);
 			shots.forEach((sh, i) => {
 				const y = EPISODE_Y + i * (H + GY);
@@ -223,10 +230,14 @@ export function syncCanvasFromProject(episodeIdArg?: string | null): boolean {
 				const content = sh.scriptSegment || sh.prompt || "";
 				// 原文节点=**智能推理节点**（分镜n原文，带推理功能）：内容既是展示也是推理输入，上游为分集智能推理
 				// 节点 → 满足自跑重推理（SHOT_SCRIPT_TITLE_RE + 上游 smart.infer），与画布裂变的原文节点同构。
-				// 同源模式：原文节点带同源·单卡模板，自跑重推理仍产同源提示词。
 				const shotNode = ensure(`shot:${sh.id}`, "smart.infer", COL3, y, (d) => {
 					d.title = `分镜${n}原文`; d.params.prompt = content; d.resultText = content; d.episodeRef = ep.id;
-					if (sameSource) d.params.templateId = SMART_INFER_UNIFIED_SINGLE_TPL; else delete d.params.templateId;
+					d.params.inferenceScope = 'single';
+					d.params.inferenceMode = sameSource ? 'unified' : 'storyboard';
+					d.params.inferenceDurationLimit = inferenceDurationLimit(sh.overrides?.duration ?? sh.durationSec ?? ps.mediaSettings.maxDuration);
+					d.params.inferenceDurationPreset = d.params.inferenceDurationLimit === 30 ? '4-30' : '4-15';
+					d.params.inferenceOutput = sameSource ? 'storyboard.unifiedShot' : 'storyboard.singleShot';
+					d.params.inferenceStrategy = { ...structuredClone(strategy), guidance: [strategy.guidance, sh.plotGuidance].filter(Boolean).join('\n\n') };
 				});
 				connect(infer, shotNode);
 				if (sameSource) {

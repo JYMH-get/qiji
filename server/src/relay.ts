@@ -1,3 +1,5 @@
+import { updateTextBillingLog } from './store/logs.ts';
+import type { TaskState } from './contract.ts';
 /**
  * 渠道节点 relay 模式（P3 商业化改造，docs/商业化改造方案.md §5）。
  *
@@ -168,8 +170,15 @@ export function ledgerSettleTerminal(taskId: string, status: "success" | "failed
 	if (status === "failed") {
 		refundLocalMirror(e.p ?? e.u, e.u, e.c, taskId);
 		if (e.log) finishLog(e.log, { status: "failed", error: opts?.error ? `${opts.error}（已退回 ${e.c} 积分）` : `生成失败（已退回 ${e.c} 积分）` });
-	} else if (e.log) {
-		finishLog(e.log, { status: "success", response: opts?.response, taskId });
+	} else {
+    const result=opts?.response as TaskState['result'];
+    if(result?.billing?.status==='settled') {
+      const final=result.billing.cost;
+      const r=settle({reason:'text-token-mirror',idempotencyKey:'text-mirror:'+taskId,ref:e.log,payerId:e.p??e.u,statsUserId:e.u,userAmount:final-e.c,agents:[]});
+      if(!r.ok){e.done=false;throw new Error(r.error);}
+      e.c=final;if(e.log) updateTextBillingLog(e.log,result.billing,result.usage);
+    }
+		if(e.log) finishLog(e.log, { status: "success", response: opts?.response, taskId });
 	}
 	persistLedger();
 }

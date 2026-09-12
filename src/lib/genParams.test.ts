@@ -1,5 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { estimateCost } from "./genParams";
+import { buildImageParams, estimateCost } from "./genParams";
+
+it("文本按 token 计费显示预扣10积分，忽略保留的旧按次价格", () => {
+  expect(estimateCost({ cost: 99, tokenPricing: { enabled: true } }, {})).toBe(10);
+  expect(estimateCost({ cost: 7, tokenPricing: { enabled: false } }, {})).toBe(7);
+});
+
+describe("图片生成公共请求参数", () => {
+	it("用户端只发送比例、分辨率和质量，不发送上游像素尺寸", () => {
+		expect(buildImageParams({ aspect: "16:9", resolution: "2k", quality: "high" }, [
+			{ v: "1k" }, { v: "2k" }, { v: "4k" },
+		])).toEqual({ aspect_ratio: "16:9", resolution: "2k", quality: "high" });
+	});
+});
 
 /** 与服务端 resolveModelCost + refVideoBilling 同尺（第143轮）：预估必须等于实扣 */
 describe("estimateCost 参考视频按秒折算", () => {

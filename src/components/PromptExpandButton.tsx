@@ -39,7 +39,7 @@ export function PromptExpandButton({
 	onImport?: ImportAssetFn;
 	/** 「匹配资产」：委托宿主现成匹配逻辑（画布/资产模式各自的匹配函数） */
 	onMatchAssets?: MatchAssetsFn;
-	/** 出图预设方案（每次读最新）：有则弹窗显示「预设方案」插入按钮（图片节点用） */
+	/** 提示词预设方案（每次读最新）：有则弹窗显示「预设方案」插入按钮 */
 	getPresets?: () => PresetOption[];
 }) {
 	return (

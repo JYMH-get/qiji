@@ -22,9 +22,13 @@ import { NodeCountWarnToast } from "./NodeCountWarnToast";
 import { listPlugins } from "@/nodes/pluginRegistry";
 import { reactFlowNodeTypes } from "@/nodes/registry";
 import { GroupNode } from "@/nodes/GroupNode";
+import { CanvasTextMarker } from "@/nodes/CanvasTextMarker";
+import { MarkerStyleControls } from "@/nodes/MarkerStyleControls";
 import { ButtonEdge } from "./ButtonEdge";
 import { makeIsValidConnection } from "@/dag/validate";
 import { useCanvasStore } from "@/store/canvasStore";
+import { useLibraryStore } from "@/store/libraryStore";
+import { useProjectStore } from "@/store/projectStore";
 import { useUiStore } from "@/store/uiStore";
 import { dispatchCommand } from "@/command/dispatch";
 import { AnimatePresence } from "motion/react";
@@ -33,7 +37,7 @@ import { VideoOperationPanel } from "@/panel/VideoOperationPanel";
 import { ChatPanel } from "@/panel/ChatPanel";
 import { SimplePanel } from "@/panel/SimplePanel";
 import { getPlugin } from "@/nodes/pluginRegistry";
-import { Combine, Trash2, Ungroup, Play, Sparkles, Network, LayoutGrid, ShieldCheck, Palette } from "lucide-react";
+import { Combine, Trash2, Ungroup, Play, Sparkles, Network, LayoutGrid, ShieldCheck, Palette, X, LocateFixed, Type, ArrowUpRight, Square, Circle, Layers, MousePointer2 } from "lucide-react";
 import { listPresetSchemes } from "@/lib/presetSchemes";
 import { imageNodeCount, addPresetToNodes, checkNodesAssets } from "@/canvas/multiSelectOps";
 import { ImageEditPanel } from "@/panel/ImageEditPanel";
@@ -43,6 +47,9 @@ import { tidyLayout, mapEdgesToUnits } from "@/lib/tidyLayout";
 import { useSettingsStore } from "@/store/settingsStore";
 import { pickEdgesInRect } from "@/lib/edgePick";
 import type { CanvasNode, CanvasEdge } from "@/types";
+import { genId } from "@/lib/id";
+import { addNodeMaterialFromAsset, listNodeMaterials } from "@/canvas/nodeMaterials";
+import { isCanvasMediaAlreadyAdded, nextMaterialGroupId, resolveCanvasMediaRef } from "@/canvas/canvasInteraction";
 import {
   useCanvasKeyboard,
   useCanvasViewport,
@@ -60,6 +67,7 @@ const defaultEdgeOptions: DefaultEdgeOptions = {
 const nodeTypes = new Proxy(
   {
     group: GroupNode,
+    "canvas.marker": CanvasTextMarker,
   },
   {
     get(target, prop) {
@@ -127,6 +135,20 @@ export function Canvas() {
   const closeContextMenu = useUiStore((s) => s.closeContextMenu);
   const showGrid = useUiStore((s) => s.showGrid);
   const showMinimap = useUiStore((s) => s.showMinimap);
+  const canvasMode = useUiStore((s) => s.canvasMode);
+  // 退出标注模式时清走放弃输入的空标记（也处理旧版本遗留的占位标记）。
+  useEffect(() => {
+    if (canvasMode?.type === "canvas-draw") return;
+    const emptyIds = Object.values(useCanvasStore.getState().nodes)
+      .filter((n) => n.type === "canvas.marker" && (n.data.params.shape ?? "text") === "text" && !String(n.data.params.text ?? "").trim())
+      .map((n) => n.id);
+    if (!emptyIds.length) return;
+    emptyIds.forEach((id) => useCanvasStore.getState().removeNode(id));
+    const ui = useUiStore.getState();
+    ui.setSelection(ui.selectedNodeIds.filter((id) => !emptyIds.includes(id)));
+    if (ui.activeNodeId && emptyIds.includes(ui.activeNodeId)) ui.setActiveNodeId(null);
+    useProjectStore.getState().scheduleAutoSave("canvas");
+  }, [canvasMode]);
   const { getViewport, setCenter, fitView, screenToFlowPosition } = useReactFlow();
   const rfStoreApi = useStoreApi();
 
@@ -302,19 +324,29 @@ export function Canvas() {
   // 按「store 节点对象引用 + zIndex + 选中态」缓存 wrapper：未变的节点复用旧引用，只有真正变化的节点重渲染。
   // selected 必须由 wrapper 携带（受控模式选中闭环：onNodesChange 应用 select 变化 → uiStore → 这里回填），
   // 否则 RF 内部选中态与渲染脱节（选中显示慢一拍）。
-  const nodeWrapperCache = useRef(new Map<string, { src: CanvasNode; z: number; sel: boolean; wrapper: Node }>());
+  const selectedMarker = selectedNodeIds.length === 1 ? nodesMap[selectedNodeIds[0]] : undefined;
+  const editableMarkerId = selectedMarker?.type === "canvas.marker" && (selectedMarker.data.params.shape ?? "text") === "text" ? selectedMarker.id : null;
+  const nodeWrapperCache = useRef(new Map<string, { src: CanvasNode; z: number; sel: boolean; dim: boolean; locked: boolean; wrapper: Node }>());
   const rfNodes = useMemo<Node[]>(() => {
     const cache = nodeWrapperCache.current;
     const selSet = new Set(selectedNodeIds);
     const seen = new Set<string>();
     const out: Node[] = [];
+    const pickTarget = canvasMode?.type === "asset-pick" ? canvasMode.targetNodeId : null;
+    const pickedMaterials = pickTarget ? listNodeMaterials(pickTarget) : [];
     for (const n of Object.values(nodesMap)) {
       seen.add(n.id);
       const isGroup = n.type === "group";
       const z = isGroup ? -100 : activeNodeId === n.id || stackDrawerNodeId === n.id ? 10000 : 1;
       const sel = selSet.has(n.id);
+      const asset = n.data.resultAssetId ? useLibraryStore.getState().assets[n.data.resultAssetId] : null;
+      const ref = resolveCanvasMediaRef(n, asset, getPlugin(n.type)?.displayKind);
+      const dim = !!(pickTarget && ref && isCanvasMediaAlreadyAdded(ref, pickedMaterials));
+      const locked = !!canvasMode && !(canvasMode.type === "canvas-draw" && n.type === "canvas.marker");
+      const draggable = !locked && !(canvasMode?.type === "canvas-draw" && canvasMode.tool !== "select");
       const prev = cache.get(n.id);
-      if (prev && prev.src === n && prev.z === z && prev.sel === sel) {
+      // 临时模式只在交互属性变化时换 wrapper，拖动不能使全部节点的缓存失效。
+      if (prev && prev.src === n && prev.z === z && prev.sel === sel && prev.dim === dim && prev.locked === locked && prev.wrapper.draggable === draggable) {
         out.push(prev.wrapper);
         continue;
       }
@@ -324,12 +356,16 @@ export function Canvas() {
         position: { x: n.x, y: n.y },
         style: { width: n.w, height: n.h, zIndex: z },
         selected: sel,
+        draggable,
+        connectable: !locked,
+        selectable: !locked,
+        className: [n.type === "canvas.marker" ? "Qiji-canvas-marker-node" : "", dim ? "Qiji-canvas-pick--added" : ""].filter(Boolean).join(" ") || undefined,
         // data 对象按 id 稳定复用：避免 data 引用变化触发节点组件不必要的重渲染
         data: prev?.wrapper.data ?? { nodeId: n.id },
         parentId: undefined,
         extent: undefined,
       };
-      cache.set(n.id, { src: n, z, sel, wrapper });
+      cache.set(n.id, { src: n, z, sel, dim, locked, wrapper });
       out.push(wrapper);
     }
     // 清掉已删除节点的缓存（含切换分集画布后的整批失效）
@@ -339,7 +375,7 @@ export function Canvas() {
       if (a.type !== "group" && b.type === "group") return 1;
       return 0;
     });
-  }, [nodesMap, activeNodeId, selectedNodeIds, stackDrawerNodeId]);
+  }, [nodesMap, activeNodeId, selectedNodeIds, stackDrawerNodeId, canvasMode]);
 
   // 边 wrapper 同样按引用缓存：选中/激活变化时只有 active/picked 标志翻转的少数边换新对象，
   // 其余复用旧引用——否则点选/起拖瞬间全部边重渲染（起拖卡顿源之一）。
@@ -393,6 +429,41 @@ export function Canvas() {
   // 不开面板、不居中视口——避免多选途中面板弹出/视口跳动打断操作。
   const onNodeClick = useCallback(
     (event: React.MouseEvent, node: Node) => {
+      const mode = useUiStore.getState().canvasMode;
+      if (node.type === "canvas.marker") return;
+      if (mode?.type === "canvas-draw" && mode.tool === "text") {
+        event.preventDefault();
+        event.stopPropagation();
+        const pos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+        const id = genId("marker");
+        dispatchCommand({
+          type: "addNode",
+          node: {
+            id, type: "canvas.marker", x: pos.x, y: pos.y, w: 220, h: 44,
+            parentId: null, parentScriptId: null,
+            data: { input: {}, params: { text: "", shape: "text", color: mode.color, fontSize: mode.fontSize, highlight: mode.highlight }, resultAssetId: null },
+          },
+        });
+        useUiStore.getState().setSelection([id]);
+        useUiStore.getState().setCanvasMode({ ...mode, tool: "select" });
+        useUiStore.getState().setEditingMarkerId(id);
+        return;
+      }
+      if (mode?.type === "canvas-draw") return;
+      if (mode?.type === "asset-pick") {
+        event.preventDefault();
+        event.stopPropagation();
+        const storeNode = useCanvasStore.getState().nodes[node.id];
+        if (!storeNode || node.id === mode.targetNodeId) return;
+        const explicitId = (event.target as HTMLElement | null)?.closest<HTMLElement>("[data-canvas-asset-id]")?.dataset.canvasAssetId;
+        const resultId = explicitId || storeNode.data.resultAssetId || "";
+        const asset = resultId ? useLibraryStore.getState().assets[resultId] : null;
+        const ref = resolveCanvasMediaRef(storeNode, asset, getPlugin(storeNode.type)?.displayKind);
+        if (!ref || isCanvasMediaAlreadyAdded(ref, listNodeMaterials(mode.targetNodeId))) return;
+        addNodeMaterialFromAsset(mode.targetNodeId, ref);
+        useUiStore.getState().setActiveNodeId(mode.targetNodeId);
+        return;
+      }
       if (event.ctrlKey || event.metaKey) return; // Ctrl/⌘ 多选中：不开面板、不居中
       const selectedIds = useUiStore.getState().selectedNodeIds;
       if (selectedIds.length <= 1) {
@@ -408,7 +479,7 @@ export function Canvas() {
         }
       }
     },
-    [setCenter, getViewport],
+    [setCenter, getViewport, screenToFlowPosition],
   );
 
   const onSelectionChange = useCallback(
@@ -428,6 +499,36 @@ export function Canvas() {
 
   const onMouseDown = useCallback(
     (e: ReactMouseEvent) => {
+      const drawMode = useUiStore.getState().canvasMode;
+      const drawTarget = e.target as HTMLElement;
+      if (drawMode?.type === "canvas-draw" && drawMode.tool !== "select" && drawMode.tool !== "text" && e.button === 0 && !drawTarget.closest(".nodrag, .react-flow__resize-control") && (drawTarget.closest(".react-flow__pane") || drawTarget.closest(".react-flow__node"))) {
+        e.preventDefault();
+        const start = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+        const id = genId("marker");
+        dispatchCommand({
+          type: "addNode",
+          node: {
+            id, type: "canvas.marker", x: start.x, y: start.y, w: 8, h: 8,
+            parentId: null, parentScriptId: null,
+            data: { input: {}, params: { shape: drawMode.tool, color: drawMode.color, highlight: drawMode.highlight }, resultAssetId: null },
+          },
+        });
+        const onMove = (me: MouseEvent) => {
+          const end = screenToFlowPosition({ x: me.clientX, y: me.clientY });
+          const s = useCanvasStore.getState();
+          const n = s.nodes[id];
+          if (!n) return;
+          useCanvasStore.setState({ nodes: { ...s.nodes, [id]: { ...n, x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), w: Math.max(1, Math.abs(end.x - start.x)), h: Math.max(1, Math.abs(end.y - start.y)), data: { ...n.data, params: { ...n.data.params, flipX: end.x < start.x, flipY: end.y < start.y } } } } });
+        };
+        const onUp = () => {
+          window.removeEventListener("mousemove", onMove);
+          window.removeEventListener("mouseup", onUp);
+          useProjectStore.getState().scheduleAutoSave("canvas");
+        };
+        window.addEventListener("mousemove", onMove);
+        window.addEventListener("mouseup", onUp);
+        return;
+      }
       if (e.button === 1) {
         e.preventDefault();
         return;
@@ -445,7 +546,7 @@ export function Canvas() {
         closeContextMenu();
       }
     },
-    [closeContextMenu],
+    [closeContextMenu, screenToFlowPosition],
   );
 
   const onNodeContextMenu = useCallback(
@@ -527,7 +628,31 @@ export function Canvas() {
     [screenToFlowPosition],
   );
 
-  const onPaneClick = useCallback(() => {
+  const onPaneClick = useCallback((event: React.MouseEvent) => {
+    const mode = useUiStore.getState().canvasMode;
+    if (mode?.type === "canvas-draw" && mode.tool === "text") {
+      const pos = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      const id = genId("marker");
+      dispatchCommand({
+        type: "addNode",
+        node: {
+          id,
+          type: "canvas.marker",
+          x: pos.x,
+          y: pos.y,
+          w: 220,
+          h: 44,
+          parentId: null,
+          parentScriptId: null,
+          data: { input: {}, params: { text: "", shape: "text", color: mode.color, fontSize: mode.fontSize, highlight: mode.highlight }, resultAssetId: null },
+        },
+      });
+      useUiStore.getState().setSelection([id]);
+      useUiStore.getState().setCanvasMode({ ...mode, tool: "select" });
+      useUiStore.getState().setEditingMarkerId(id);
+      return;
+    }
+    if (mode?.type === "asset-pick") return;
     closeContextMenu();
     useUiStore.getState().setActiveNodeId(null);
     useUiStore.getState().setStackDrawerNodeId(null); // 点空白收起堆叠抽屉
@@ -537,7 +662,30 @@ export function Canvas() {
     rfStoreApi.getState().unselectNodesAndEdges();
     useUiStore.getState().setSelection([]);
     useUiStore.getState().setEdgeSelection([]);
-  }, [closeContextMenu, rfStoreApi]);
+  }, [closeContextMenu, rfStoreApi, screenToFlowPosition]);
+
+  const exitCanvasMode = useCallback(() => {
+    const mode = useUiStore.getState().canvasMode;
+    useUiStore.getState().setCanvasMode(null);
+    if (mode?.type !== "asset-pick") return;
+    const target = useCanvasStore.getState().nodes[mode.targetNodeId];
+    if (!target) return;
+    useUiStore.getState().setActiveNodeId(target.id);
+    const { zoom } = getViewport();
+    setCenter(target.x + target.w / 2, target.y + target.h / 2 + (window.innerHeight * 0.1) / zoom, { zoom, duration: 450 });
+  }, [getViewport, setCenter]);
+
+  const goNextMaterialGroup = useCallback(() => {
+    const mode = useUiStore.getState().canvasMode;
+    if (mode?.type !== "asset-pick") return;
+    const s = useCanvasStore.getState();
+    const id = nextMaterialGroupId(mode.materialGroupId, s.groups, s.nodes);
+    if (!id) return;
+    const groupNode = s.nodes[id];
+    useUiStore.getState().setCanvasMode({ ...mode, materialGroupId: id });
+    const { zoom } = getViewport();
+    setCenter(groupNode.x + groupNode.w / 2, groupNode.y + groupNode.h / 2, { zoom, duration: 450 });
+  }, [getViewport, setCenter]);
 
   const isValidConnection = useMemo(
     () => makeIsValidConnection(getEdges),
@@ -545,7 +693,7 @@ export function Canvas() {
   );
 
   return (
-    <div className="relative w-full h-full">
+    <div className={`relative w-full h-full ${canvasMode?.type === "asset-pick" ? "Qiji-canvas--asset-pick" : canvasMode?.type === "canvas-draw" ? `Qiji-canvas--marker ${canvasMode.tool === "text" ? "Qiji-canvas--text-marker" : ""}` : ""}`}>
       <ReactFlow
         className="Qiji-flow"
         nodeTypes={nodeTypes}
@@ -584,8 +732,8 @@ export function Canvas() {
         onMoveEnd={onMoveEnd}
         onMove={onMove}
         // 平移按钮集：中键(1)/右键(2)拖动恒可平移；Space 长按时左键(0)也加入
-        panOnDrag={isSpacePressed ? [0, 1, 2] : [1, 2]}
-        selectionOnDrag={!isSpacePressed}
+        panOnDrag={isSpacePressed || canvasMode?.type === "asset-pick" ? [0, 1, 2] : [1, 2]}
+        selectionOnDrag={!isSpacePressed && !canvasMode}
         selectionMode={SelectionMode.Partial}
         selectionKeyCode={null}
         // 长按 Ctrl/⌘ 单击多选节点（累加/再点取消）；显式声明避免依赖平台探测（Tauri WebView 更稳）
@@ -620,6 +768,40 @@ export function Canvas() {
           </button>
         </Panel>
       </ReactFlow>
+
+      {canvasMode && (
+        <div className={`pointer-events-auto absolute left-1/2 top-16 z-[10400] flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap text-[11px] text-white ${canvasMode.type === "asset-pick" ? "flex-row" : "flex-col"}`}>
+          <div className="rounded-full border border-white/10 bg-black/55 p-1 shadow-xl">
+            <button onClick={exitCanvasMode} className="flex items-center gap-1 rounded-full px-3 py-1.5 hover:bg-white/12 cursor-pointer">
+              <X className="h-3.5 w-3.5" />退出{canvasMode.type === "asset-pick" ? "画布选择" : "标记"}
+            </button>
+          </div>
+          <div className="flex items-center gap-1 rounded-full border border-white/10 bg-black/55 p-1 shadow-xl">
+            {canvasMode.type === "asset-pick" && (
+              <button onClick={goNextMaterialGroup} className="flex items-center gap-1 rounded-full px-3 py-1.5 hover:bg-white/12 cursor-pointer" title="平滑移动到下一素材分组">
+                <LocateFixed className="h-3.5 w-3.5 text-emerald-300" />下一素材组
+              </button>
+            )}
+            {canvasMode.type === "canvas-draw" && (
+              <>
+                {([
+                  ["select", MousePointer2, "选择"], ["text", Type, "文本输入"], ["arrow", ArrowUpRight, "箭头"], ["rect", Square, "圆角框"], ["ellipse", Circle, "圆形"],
+                ] as const).map(([tool, Icon, label]) => (
+                  <button key={tool} onClick={() => useUiStore.getState().setCanvasMode({ ...canvasMode, tool })} className={`flex items-center gap-1 rounded-full px-2.5 py-1.5 cursor-pointer ${canvasMode.tool === tool ? "bg-white/18 text-white" : "hover:bg-white/10 text-white/70"}`}>
+                    <Icon className="h-3.5 w-3.5" />{label}
+                  </button>
+                ))}
+                <button type="button" disabled={!editableMarkerId} title="选中文字标记后编辑内容"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => { if (editableMarkerId) useUiStore.getState().setEditingMarkerId(editableMarkerId); }}
+                  className="rounded-full px-2.5 py-1.5 text-white/70 hover:bg-white/10 disabled:opacity-35 disabled:cursor-not-allowed">编辑</button>
+                <span className="mx-1 h-4 w-px bg-white/15" />
+                <MarkerStyleControls color={canvasMode.color} highlight={canvasMode.highlight} onChange={(patch) => useUiStore.getState().setCanvasMode({ ...canvasMode, ...patch })} />
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {showMinimap && (
         <div
@@ -734,6 +916,7 @@ export function Canvas() {
 function SelectionToolbar() {
   const selectedNodeIds = useUiStore((s) => s.selectedNodeIds);
   const nodesMap = useCanvasStore((s) => s.nodes);
+  const groupsMap = useCanvasStore((s) => s.groups);
   const storeViewport = useCanvasStore((s) => s.viewport);
   const { getViewport } = useReactFlow();
 
@@ -801,6 +984,14 @@ function SelectionToolbar() {
     });
     useUiStore.getState().setSelection([]);
   }, [associatedGroupIds]);
+
+  const selectedGroup = selectedNodes.length === 1 && selectedNodes[0].type === "group"
+    ? groupsMap[selectedNodes[0].id]
+    : null;
+  const onToggleMaterialGroup = useCallback(() => {
+    if (!selectedGroup) return;
+    dispatchCommand({ type: "setGroupKind", groupId: selectedGroup.id, kind: selectedGroup.kind === "material" ? "default" : "material" });
+  }, [selectedGroup]);
 
   // 多选：全部启动（逐个运行选中节点）
   const onRunSelected = useCallback(() => {
@@ -922,6 +1113,15 @@ function SelectionToolbar() {
       )}
       {associatedGroupIds.length > 0 && (
         <>
+          {selectedGroup && (
+            <button
+              onClick={onToggleMaterialGroup}
+              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 hover:bg-secondary cursor-pointer transition-colors font-medium text-[11px] ${selectedGroup.kind === "material" ? "text-emerald-300" : "text-foreground"}`}
+            >
+              <Layers className="h-3.5 w-3.5" />
+              <span>{selectedGroup.kind === "material" ? "转普通组" : "转素材组"}</span>
+            </button>
+          )}
           <button
             onClick={onUngroupSelected}
             className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-orange-400 hover:bg-secondary cursor-pointer transition-colors font-medium text-[11px]"

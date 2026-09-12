@@ -13,7 +13,7 @@ export function registerNodeHandlers(): void {
     // 不重合：顶层节点(无 parent)若与现有节点相交，沿对角线错位到空位再落子；
     // 分组内子节点保持给定位置（粘贴/裂变/投影走各自命令与布局，不经此）。
     // 「重叠」开关（allowOverlap）开着时不避让，按给定坐标原样落子。
-    const node = c.node.parentId || useUiStore.getState().allowOverlap
+    const node = c.node.parentId || c.node.type === "canvas.marker" || useUiStore.getState().allowOverlap
       ? c.node
       : avoidOverlap(c.node, Object.values(s.nodes));
     s.addNode(node);

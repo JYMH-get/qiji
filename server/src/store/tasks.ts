@@ -9,7 +9,9 @@
  * （reconcile.ts）处理：视频有上游 task_id 的续轮询，其余判失败并凭落盘的计费信息退款。
  */
 import { loadJson, scheduleSave } from "./db.ts";
+import { recordRouteResult, isChannelFailure, type RouteTicket } from '../autoRouting.ts';
 import { scrubChannelInfo } from "../errorScrub.ts";
+import { finishRouteObservation, observeAccepted } from '../routeObservations.ts';
 import type { Capability, TaskState, TaskStatus, AssetOut } from "../contract.ts";
 
 /** 视频续轮询信息：重启后凭此恢复对上游的轮询（不重提交、不重扣费） */
@@ -28,6 +30,7 @@ export interface TaskResume {
 }
 
 export interface TaskRecord {
+	routing?: RouteTicket & { recorded?: boolean };
 	taskId: string;
 	clientTaskId?: string;
 	capability: Capability;
@@ -127,6 +130,7 @@ export function listPendingTasks(): TaskRecord[] {
 
 /** 视频提交上游成功后登记续轮询信息（随任务落盘） */
 export function setTaskResume(taskId: string, resume: TaskResume): void {
+  observeAccepted(tasks.get(taskId)?.logId);
 	const rec = tasks.get(taskId);
 	if (!rec) return;
 	rec.resume = resume;
@@ -174,7 +178,11 @@ export function setTaskBilling(taskId: string, userId: string, cost: number, age
 	const rec = tasks.get(taskId);
 	const charged = (agents ?? []).filter((a) => a.cost > 0);
 	if (rec && (cost > 0 || charged.length > 0)) {
-		rec.billing = { userId, cost, refunded: false, agents: charged.length ? charged : undefined, payerId: payerId && payerId !== userId ? payerId : undefined };
+		const finalCost = rec.doneResult?.billing?.cost;
+    if (rec.doneResult?.billing && finalCost !== undefined) {
+      if (charged.length) charged.forEach(a => a.cost = finalCost); else cost = finalCost;
+    }
+    rec.billing = { userId, cost, refunded: false, agents: charged.length ? charged : undefined, payerId: payerId && payerId !== userId ? payerId : undefined };
 		// ⚠ 快失败竞态补退（2026-07-23 实锤，勿回退）：翻译器**同步守卫**失败（未配上游密钥/素材守卫/
 		// 缺 Base URL 等不经 await 直接返回的错误）时，failTask 以微任务身份抢在 routes 的 applyBilling/
 		// 本函数之前执行——那一刻 billing 还没挂上、退款空转，随后这里才把用户+渠道商链的钱扣实，
@@ -269,10 +277,17 @@ export function setTaskProgress(
 
 export function completeTask(taskId: string, result: TaskState["result"]): void {
 	const rec = tasks.get(taskId);
+	if (rec?.doneStatus) return;
+	if (rec?.routing && result?.assets) result = { ...result, assets: result.assets.map(a => ({ ...a, meta: { ...a.meta, model: rec.routing!.publicModel } })) };
 	if (rec) {
-		rec.doneStatus = "success";
+		 rec.doneStatus = "success";
 		rec.doneResult = result;
+    if (rec.billing && result?.billing) {
+      if (rec.billing.agents?.length) rec.billing.agents.forEach(a => a.cost = result.billing!.cost);
+      else rec.billing.cost = result.billing.cost;
+    }
 		rec.finishedAt = Date.now();
+		settleRouting(rec);
 		persist();
 	}
 }
@@ -324,7 +339,7 @@ export function getTaskState(taskId: string): TaskState | undefined {
 			submittedAt: new Date(rec.submittedAt).toISOString(),
 			finishedAt: new Date(rec.finishedAt ?? Date.now()).toISOString(),
 			result: rec.doneResult,
-			error: rec.error,
+			error: rec.error && rec.routing ? scrubChannelInfo(rec.error, false) : rec.error,
 		};
 	}
 
@@ -372,14 +387,30 @@ export function getTaskState(taskId: string): TaskState | undefined {
 
 export function failTask(taskId: string, error: string): void {
 	const rec = tasks.get(taskId);
-	if (!rec) return;
+	if (!rec || rec.doneStatus) return;
 	rec.doneStatus = "failed";
 	// 第168轮：错误文案落盘前擦除渠道识别信息（会经 /v1/tasks 下发给用户/渠道商）
 	rec.error = scrubChannelInfo(error);
 	rec.finishedAt = Date.now();
+	settleRouting(rec, error);
 	// 失败退款：异步任务受理时已预扣，后台失败则退回（一次性；refunded 随盘防重启后重复退）。
 	// 渠道商用户链式扣费（第124轮）：用户积分与归属链各级渠道商的结算积分同退。
 	// 快失败竞态（billing 尚未挂上就走到这里）由 setTaskBilling 侧补退，两处共用 refundBilling 一把尺。
 	refundBilling(rec);
 	persist();
 }
+
+function settleRouting(rec: TaskRecord, originalError?: string) {
+	if (!rec.routing || rec.routing.recorded || !rec.doneStatus) return;
+	finishRouteObservation(rec.routing.observationId ?? rec.logId, rec.doneStatus === 'success', originalError ?? rec.error);
+	if (rec.doneStatus === 'success' || isChannelFailure(originalError ?? rec.error, rec.routing.observationId ?? rec.logId)) recordRouteResult(rec.routing, rec.doneStatus === 'success');
+	rec.routing.recorded = true;
+}
+export function setTaskRouting(taskId: string, ticket: RouteTicket) {
+	const rec = tasks.get(taskId);
+	if (!rec) return;
+	rec.routing = ticket;
+	if (rec.doneResult?.assets) rec.doneResult.assets = rec.doneResult.assets.map(a => ({ ...a, meta: { ...a.meta, model: ticket.publicModel } }));
+	settleRouting(rec); persist();
+}
+export function taskPublicModel(taskId: string): string | undefined { return tasks.get(taskId)?.routing?.publicModel; }

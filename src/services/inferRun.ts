@@ -25,15 +25,8 @@ import { setJobProgress, clearJobProgress } from "./generationQueue";
 import { parseInferCards, parseInferCardsStream } from "@/lib/smartInferPrompts";
 import { stripBlankLines } from "@/lib/storyboardParse";
 import { reindexShots } from "@/lib/shotReindex";
-import type { Purpose } from "@/contract";
+import { inferencePurpose } from "@/lib/inferenceStrategy";
 
-const INFER_PURPOSE: Purpose = "storyboard.toVideoPrompt";
-/** 单卡推理独立用途（第108轮）：表格单镜按键/一键单卡走它（smart.infer.single 模板的归属用途） */
-const SINGLE_PURPOSE: Purpose = "storyboard.singleShot";
-const SPLIT_PURPOSE: Purpose = "storyboard.split";
-/** 图视同源·多卡/单卡 用途（图片与视频共用一段同源提示词） */
-const UNIFIED_PURPOSE: Purpose = "storyboard.unified";
-const UNIFIED_SINGLE_PURPOSE: Purpose = "storyboard.unifiedShot";
 const INFER_DURATION = 15;
 
 let _seq = 0;
@@ -53,6 +46,7 @@ interface InferTarget {
 /** 新起一次推理需要的输入（templateId/variables/modelKey 仅运行用，找回不需要）。
  *  sameSource 继承自 InferTarget：图视同源模式产出同源提示词。 */
 export interface StartInferSpec extends InferTarget {
+  inference?: import('@/contract').GenerateRequest['inference'];
 	templateId: string;
 	variables: Record<string, string>;
 	modelKey?: string;
@@ -65,14 +59,15 @@ const reindex = reindexShots;
 
 /** cards → 分镜补丁（只下发非空字段，避免空串覆盖已填单元格；原文去空行——空行不是分格；
  *  时长：卡带 duration 字段则用它（模板产出的指定时长），缺失回退默认 15s）。
- *  sameSource=true（图视同源）：写 unifiedPrompt（图片与视频共用），不写 storyboard/video 两段。 */
-function cardsToPatch(cards: { script: string; storyboardPrompt: string; videoPrompt: string; unifiedPrompt: string; duration?: number }[], sameSource: boolean): ShotPatch[] {
+ *  sameSource=true（图视同源）：写 unifiedPrompt（图片与视频共用），不写 storyboard/video 两段。
+ *  splitOnly=true：只接受原文与时长，忽略模型意外返回的提示词字段。 */
+function cardsToPatch(cards: { script: string; storyboardPrompt: string; videoPrompt: string; unifiedPrompt: string; duration?: number }[], sameSource: boolean, splitOnly = false): ShotPatch[] {
 	return cards.map((c, i) => ({
 		index: i + 1,
 		scriptSegment: stripBlankLines(c.script) || undefined,
-		storyboardPrompt: sameSource ? undefined : (c.storyboardPrompt || undefined),
-		videoPrompt: sameSource ? undefined : (c.videoPrompt || undefined),
-		unifiedPrompt: sameSource ? (c.unifiedPrompt || undefined) : undefined,
+		storyboardPrompt: splitOnly || sameSource ? undefined : (c.storyboardPrompt || undefined),
+		videoPrompt: splitOnly || sameSource ? undefined : (c.videoPrompt || undefined),
+		unifiedPrompt: !splitOnly && sameSource ? (c.unifiedPrompt || undefined) : undefined,
 		durationSec: c.duration ?? INFER_DURATION,
 	}));
 }
@@ -155,10 +150,8 @@ function applyInferText(target: InferTarget, text: string, fillOnly: boolean, st
 		if (Object.keys(patch).length) st.updateShot(target.episodeId, target.shotId!, patch);
 		return;
 	}
-	// 多镜推理(multi) 与 智能拆分(split) **同一套流式落盘**（cardsToPatch 不过滤）：
-	// 每卡 → 一行（card_number 一出现即建行）、字段出现即填（split 模板通常只产 original_script→只填原文，
-	// infer 模板还产故事板/视频提示词→一并填；图视同源产 unified_prompt→填 unifiedPrompt）。逐字段就位。
-	mergeShots(target.episodeId, cardsToPatch(cards, !!target.sameSource), fillOnly);
+	// 每卡增量建行；仅拆分只填原文与时长，推理按同源开关填对应提示词。
+	mergeShots(target.episodeId, cardsToPatch(cards, !!target.sameSource, target.mode === "split"), fillOnly);
 }
 
 /** 收尾：整集操作（多镜推理 / 智能拆分）重排编号(保留 id) + 落盘；单镜仅落盘 */
@@ -199,13 +192,12 @@ export function startInfer(spec: StartInferSpec): string {
 
 	const target: InferTarget = { episodeId: spec.episodeId, mode: spec.mode, sameSource: spec.sameSource, shotId: spec.shotId };
 	// 用途：拆分=storyboard.split；单镜=单卡（同源→unifiedShot）；多镜=多卡（同源→unified）
-	const purpose: Purpose =
-		spec.mode === "split" ? SPLIT_PURPOSE
-			: spec.mode === "single" ? (spec.sameSource ? UNIFIED_SINGLE_PURPOSE : SINGLE_PURPOSE)
-				: (spec.sameSource ? UNIFIED_PURPOSE : INFER_PURPOSE);
+	const purpose = spec.mode === "split" ? "storyboard.split" : inferencePurpose(spec.mode === "single", !!spec.sameSource);
+	const inference = spec.mode === "split" ? { ...spec.inference, source: spec.inference?.source ?? "template", outputMode: spec.sameSource ? "unified" : "storyboard" } as const : spec.inference;
 	runPurpose(purpose, {
 		modelKey: spec.modelKey || undefined,
 		templateId: spec.templateId,
+		input: { inference },
 		variables: spec.variables,
 		params: { temperature: 0.7, maxTokens: 65535 },
 		onTaskId: (taskId, adapterKey) => {

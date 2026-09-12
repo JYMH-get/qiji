@@ -392,10 +392,10 @@ function bumpSpendStats(u: User, delta: number): void {
 // 单账户的日常增减（充值/转账/管理端调整）仍走下面各自带 persist 的函数，不受影响。
 
 /** 只改内存余额与消耗统计，不落盘。delta<0=扣、>0=退。返回 false=账户不存在或会透支。 */
-export function applyUserCreditsDelta(payerId: string, statsUserId: string, delta: number): boolean {
+export function applyUserCreditsDelta(payerId: string, statsUserId: string, delta: number, allowDebt = false): boolean {
 	const payer = getUser(payerId);
 	if (!payer) return false;
-	if (payer.credits + delta < 0) return false;
+	if (payer.credits + delta < 0 && !allowDebt) return false;
 	payer.credits += delta;
 	payer.updatedAt = new Date().toISOString();
 	const stats = payerId === statsUserId ? payer : getUser(statsUserId);

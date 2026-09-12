@@ -27,6 +27,7 @@ export type Command =
       nodeType: NodeType;
     }
   | { type: "group"; nodeIds: string[] }
+  | { type: "setGroupKind"; groupId: string; kind: "default" | "material" }
   | { type: "ungroup"; groupId: string; nodeId?: string }
   | {
       type: "burstScript";
@@ -78,6 +79,7 @@ export const STRUCTURAL_COMMANDS: ReadonlySet<CommandType> =
     "pasteNodes",
     "insertOnEdge",
     "group",
+    "setGroupKind",
     "ungroup",
     "burstScript",
     "spawnNodes",

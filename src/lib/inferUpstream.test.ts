@@ -11,7 +11,7 @@ import type { CanvasNode, CanvasEdge, NodeData } from "@/types";
  * 单卡/多卡重做（第108轮）语义锁定：
  *  - 上游类型 → 可用用途：上游智能推理→仅单卡（storyboard.singleShot）；上游剧集分集→仅多卡+拆分；
  *    无/其他上游→全部；智能推理上游优先于剧集分集（原文节点场景）；
- *  - 106轮模板联动加门禁：templateId 只扇出到允许该模板用途的节点（多卡模板不串单卡原文节点）；
+ *  - 创作模板联动与请求范围独立：templateId 跨单卡/多卡节点共享；
  *  - 模板不在 catalog → 维持旧行为原样扇出（向后兼容）。
  */
 
@@ -58,7 +58,7 @@ describe("smartInferContext（上游类型 → 可用用途）", () => {
 	});
 });
 
-describe("模板联动门禁（106联动 × 单卡/多卡用途）", () => {
+describe("创作模板联动不受单卡/多卡输出范围影响", () => {
 	const TPLS = [
 		{ id: "tpl.multi", name: "官方3多卡", capability: "text", purpose: "storyboard.toVideoPrompt", variables: [] },
 		{ id: "tpl.single", name: "官方3单卡", capability: "text", purpose: "storyboard.singleShot", variables: [] },
@@ -73,7 +73,7 @@ describe("模板联动门禁（106联动 × 单卡/多卡用途）", () => {
 	const setParams = (id: string, params: Record<string, unknown>) =>
 		commandBus.dispatch({ type: "updateNodeParams", id, params }, { source: "gui" });
 
-	it("多卡模板扇出：多卡/自由节点收到，单卡原文节点跳过（保留原模板）；共享 model 仍全员扇出", () => {
+	it("原多卡模板可在所有推理节点共用；共享 model 仍全员扇出", () => {
 		useCanvasStore.setState({
 			nodes: {
 				ep: mkNode("ep", "episode.split"),
@@ -86,11 +86,11 @@ describe("模板联动门禁（106联动 × 单卡/多卡用途）", () => {
 		setParams("a", { model: "m2", templateId: "tpl.multi" });
 		const n = useCanvasStore.getState().nodes;
 		expect(n.free.data.params.templateId).toBe("tpl.multi"); // 全部允许 → 跟随
-		expect(n.shot.data.params.templateId).toBe("tpl.single"); // 单卡节点不被多卡模板污染
+		expect(n.shot.data.params.templateId).toBe("tpl.multi"); // 创作方案不受单卡位置限制
 		expect(n.shot.data.params.model).toBe("m2"); // 其余共享键照常联动
 	});
 
-	it("单卡模板扇出：多卡（分集下游）节点跳过", () => {
+	it("原单卡模板也可用于分集下游的多卡请求", () => {
 		useCanvasStore.setState({
 			nodes: {
 				ep: mkNode("ep", "episode.split"),
@@ -100,7 +100,7 @@ describe("模板联动门禁（106联动 × 单卡/多卡用途）", () => {
 			edges: { e1: mkEdge("e1", "ep", "a"), e2: mkEdge("e2", "a", "shot") } as never,
 		});
 		setParams("shot", { templateId: "tpl.single" });
-		expect(useCanvasStore.getState().nodes.a.data.params.templateId).toBe("tpl.multi");
+		expect(useCanvasStore.getState().nodes.a.data.params.templateId).toBe("tpl.single");
 	});
 
 	it("模板不在 catalog → 旧行为原样扇出（向后兼容）", () => {

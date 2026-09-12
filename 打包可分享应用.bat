@@ -20,5 +20,5 @@ if not "%EXIT_CODE%"=="0" (
 ) else (
   echo Packaging completed successfully.
 )
-pause
+if not defined QIJI_PACKAGE_NO_PAUSE pause
 exit /b %EXIT_CODE%

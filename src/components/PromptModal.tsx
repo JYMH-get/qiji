@@ -239,7 +239,7 @@ export default function PromptModal() {
 								{presetOptions.length > 0 && (
 									<button
 										onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setPresetPos(presetPos ? null : { x: r.left, y: r.bottom }); }}
-										title="插入出图预设方案（提交时替换为完整预设词）"
+									title="插入预设方案（提交时替换为完整预设词）"
 										style={{ ...smallBtn, background: presetPos ? "rgba(245,158,11,0.2)" : "rgba(255,255,255,0.06)", color: presetPos ? "#fcd34d" : "rgba(255,255,255,0.8)", borderColor: presetPos ? "rgba(245,158,11,0.5)" : "rgba(255,255,255,0.12)" }}
 									>▦ 预设方案</button>
 								)}

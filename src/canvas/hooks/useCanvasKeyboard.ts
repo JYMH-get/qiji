@@ -49,6 +49,27 @@ export function useCanvasKeyboard() {
       if (!combo) return; // 纯修饰键
       const actionId = resolveActionId(combo, useSettingsStore.getState().canvasKeymap);
 
+      // 临时画布模式的 Esc 优先级最高：即使文字标记输入框聚焦，也先退出模式。
+      if (e.key === "Escape" && !e.ctrlKey && !e.metaKey && useUiStore.getState().canvasMode) {
+        e.preventDefault();
+        const mode = useUiStore.getState().canvasMode;
+        (document.activeElement as HTMLElement | null)?.blur?.();
+        useUiStore.getState().setCanvasMode(null);
+        if (mode?.type === "asset-pick") {
+          const target = useCanvasStore.getState().nodes[mode.targetNodeId];
+          if (target) {
+            useUiStore.getState().setActiveNodeId(target.id);
+            const { zoom } = getViewport();
+            setViewport({
+              x: window.innerWidth / 2 - (target.x + target.w / 2) * zoom,
+              y: window.innerHeight * 0.4 - (target.y + target.h / 2) * zoom,
+              zoom,
+            }, { duration: 450 });
+          }
+        }
+        return;
+      }
+
       // 删除节点：聚焦展开节点面板（含面板内提示词编辑器聚焦）下也能删——该特权仅在绑定
       // 仍是 Delete 键时生效（改绑字符键后编辑中一律让位，防打字误删）。Backspace 恒不删节点。
       if (actionId === "deleteNode") {

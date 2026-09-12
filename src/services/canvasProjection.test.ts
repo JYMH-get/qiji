@@ -110,7 +110,7 @@ describe("canvasProjection（资产模式↔画布全映射）", () => {
 		useProjectStore.setState({
 			scriptText: "原文",
 			characters: [], scenes: [], items: [], organisms: [], crowds: [],
-			mediaSettings: { imgVideoSameSource: true },
+			mediaSettings: { imgVideoSameSource: true, inferenceStrategy: { templateId: 'official-any' }, maxDuration: 30 },
 			episodes: [
 				{
 					id: "ep1", title: "第一集", scriptText: "本集内容",
@@ -124,9 +124,15 @@ describe("canvasProjection（资产模式↔画布全映射）", () => {
 		} as any);
 
 		expect(syncCanvasFromProject()).toBe(true);
-		// 分集推理节点带同源多卡模板；原文节点带同源单卡模板
-		expect(byRef("episode:ep1")?.data.params.templateId).toBe("smart.infer.unified");
-		expect(byRef("shot:sh1")?.data.params.templateId).toBe("smart.infer.unified.single");
+		// 同一创作方案用于分集与单镜；输出模式和时长独立同步。
+		expect(byRef("episode:ep1")?.data.params.inferenceStrategy).toEqual({ templateId: 'official-any' });
+		expect(byRef("shot:sh1")?.data.params.inferenceStrategy).toMatchObject({ templateId: 'official-any' });
+		expect(byRef("episode:ep1")?.data.params.inferenceOutput).toBe("storyboard.unified");
+		expect(byRef("shot:sh1")?.data.params.inferenceOutput).toBe("storyboard.unifiedShot");
+		expect(byRef("episode:ep1")?.data.params.inferenceDurationLimit).toBe(30);
+		expect(byRef("shot:sh1")?.data.params.inferenceDurationLimit).toBe(30);
+		expect(byRef("episode:ep1")?.data.params.inferenceDurationPreset).toBe('4-30');
+		expect(byRef("shot:sh1")?.data.params.inferenceDurationPreset).toBe('4-30');
 		// 同源提示词独立节点承载（唯一提示词来源）
 		const uni = byRef("shotUni:sh1")!;
 		expect(uni.type).toBe("text.seed");
@@ -147,13 +153,15 @@ describe("canvasProjection（资产模式↔画布全映射）", () => {
 
 		// 关掉图视同源再同步 → 同源节点及其边清理，恢复 原文→故事板→视频 串联
 		useProjectStore.setState({
-			mediaSettings: { imgVideoSameSource: false },
+			mediaSettings: { imgVideoSameSource: false, inferenceStrategy: { templateId: 'official-any' } },
 			episodes: [{
 				id: "ep1", title: "第一集", scriptText: "本集内容",
 				shots: [{ id: "sh1", index: 1, title: "分镜1", scriptSegment: "分镜原文", prompt: "", materials: [], storyboardPrompt: "故事板乙", videoPrompt: "视频乙", storyboardUri: "asset://sb.png", videoUri: "asset://v.mp4" }],
 			}],
 		} as any);
 		expect(syncCanvasFromProject()).toBe(true);
+		expect(byRef("episode:ep1")?.data.params.inferenceStrategy).toEqual({ templateId: 'official-any' });
+		expect(byRef("shot:sh1")?.data.params.inferenceStrategy).toMatchObject({ templateId: 'official-any' });
 		expect(byRef("shotUni:sh1")).toBeFalsy(); // 同源节点退场
 		expect(byRef("shotSb:sh1")?.data.params.prompt).toBe("故事板乙"); // 双结果恢复内置提示词
 		expect(edges().some((e) => e.source === byRef("shot:sh1")!.id && e.target === byRef("shotSb:sh1")!.id)).toBe(true);
