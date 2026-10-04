@@ -1,35 +1,11 @@
 /**
- * Yali AI Studio（api.yaliai.com）图片渠道翻译器（第229轮接入，同步单请求——复用 createImageTask 图片管线）。
- *
- * 上游架构（按官方「开发者文档 · 图像 API」，2026-08 版；Base `https://api.yaliai.com`，Bearer）：
- *   路径统一走 **OpenAI Images 形态**：`POST /v1/images/generations`（文生图）/ `POST /v1/images/edits`（图生图）——
- *   本轮接入的两类接口（OpenAI Images / Banana·Gemini）都接受这一形态，故一套代码覆盖，零分支路径。
- *   同步响应 `{ created, data:[{url}] }`（省略 response_format 时默认 url）→ 下载字节落永久资产（id 是真理）。
- *
- * ⚠ **一把 Key 绑定一种「接口类型」**（文档 §认证）：OpenAI Images 的 Key 调不了 Gemini 模型，反之亦然，
- *   错配返回 **403 permission_error**。故种子按接口类型分了两个渠道（ch-yali-openai / ch-yali-gemini），
- *   各填各的 Key；403 的错误文案已明确指向「渠道 Key 与模型接口类型不匹配」，勿改成笼统「无权限」。
- *
- * 规格字段（§参数规则）——⚠ 一律**原样透传绝不静默改写**（§9 第188/215轮定稿），档位由管理端模型参数把关，
- *   非法值由上游明确报错（失败自动退款）：
- *   - `size`：像素（1024x1024 / 2048x1152）或比例写法（16:9 等）；比例写法**必须同时给 resolution** 才会映射，
- *     单传 ratio/aspect_ratio 不替代 size（文档明示）→ 我方参数表只给 size+resolution 两项，不给 ratio。
- *   - `resolution`：1k/2k/4k。⚠ Gemini 3.1 Flash 的最小档 "512" **不是 OpenAI Images 规格**（文档明示
- *     「0.5k 与 512 仅属 Gemini 3.1 Flash 的原生 imageSize」）→ 走本形态时该档不开（要用需改走
- *     /v1beta/...:generateContent 原生路径，属后续可选项）。
- *   - `quality`：auto/low/medium/high，**仅 OpenAI Images 类发送**；Grok 与 Gemini 类不是质量参数
- *     （文档 Grok 节明示上游会剥掉 quality）→ 按上游名判定，gemini 系不发。
- *   - `n` 不发：网关向上游恒提交 n:1（文档明示不能用它请求多图），发了纯噪声。
- *   - `response_format` 不发：省略即 url（文档推荐默认值；亦规避 openai.ts 记录的「多发该字段触发 502」教训）。
- *
- * 参考图（§参数规则·图像参考素材）：最多 6 张；**优先公网 HTTPS URL**（不占内联预算、不撑大请求体）——
- *   走既有 resolveEditRefs（死链探活 → 按资产 id 回查台账当前直链自愈 → 明确报错，⚠ 一张都不许静默丢：
- *   垫图与 @ImageN 图例按位对齐）；仅剩服务端字节（未配 OSS）时按文档支持的**完整 Data URL** 内联，
- *   并守住单张 12 MiB / 合计 30 MiB 上限（超限明确报错并引导配 OSS，绝不发出去让上游 413）。
- *
- * 异步：上游支持请求带 async:true 走统一任务协议（202 + 轮询）——本轮**不用**：createImageTask 已把同步调用
- *   包成我方异步任务（客户端体验一致），且 submitSignal() 已取消提交短超时（第169轮）；真机若出现同步长连接
- *   被中断，再改走 async:true + query_path 轮询（与 jmz-image 同构走 createVideoPollingTask）。
+ * 鸭梨图像：用户提供 Banana/Gemini、Seedream、Grok 文档（2026-09-15）。
+ * 情报源 https://api.yaliai.com/docs（公开SPA）；本轮Web工具无法打开，以用户文档为依据。
+ * Bearer；Key按接口类型隔离，模型覆盖Key可在同一鸭梨渠道内分别配置。
+ * Gemini已知三款走原生 generateContent（yaliGemini.ts），支持精确512/1K/2K/4K能力。
+ * Seedream图生图与文生图都走generations，Grok参考图走edits；均同步调用并复用Qiji图片任务。
+ * 所有模型不自动重试付费提交；规格不近似降档；参考图数量与体积由上游判断。
+ * 既有GPT Image 2仍走原OpenAI兼容路径和参数。新模型价为占位，开放前核实对应Key与价格。
  */
 import { buildPrompt } from "./prompt.ts";
 import { maskToken } from "../store/logs.ts";
@@ -38,11 +14,8 @@ import { resolveEditRefs, readImageResult } from "./openai.ts";
 import type { OnUpstream, ImageResult } from "./openai.ts";
 import type { Upstream } from "./upstream.ts";
 import type { GenerateRequest } from "../contract.ts";
-
-/** 文档硬限：参考图张数 / 单张内联 Data URL / 内联合计 */
-const MAX_REFS = 6;
-const MAX_INLINE_ONE = 12 * 1024 * 1024;
-const MAX_INLINE_TOTAL = 30 * 1024 * 1024;
+import { translateYaliGemini } from './yaliGemini.ts';
+import { YALI_GEMINI_SPECS, YALI_GROK_RATIOS, YALI_SEEDREAM_PRO_SIZES } from './yaliSpecs.ts';
 
 /** 显式给了才取（空/缺省=不发该字段，走上游默认）——§9 原样透传，绝不补默认值改写用户请求 */
 function opt(v: unknown): string | undefined {
@@ -50,7 +23,6 @@ function opt(v: unknown): string | undefined {
 	return s || undefined;
 }
 
-const mb = (n: number): string => (n / 1024 / 1024).toFixed(1);
 
 /** 上游错误 → 人话（文档 §错误处理：error.message + code + failure_category + trace_id） */
 function yaliError(data: any, status: number): string {
@@ -97,6 +69,12 @@ export async function translateYaliImage(req: GenerateRequest, up: Upstream, onU
 		return { ok: false, error: "Yali 未配置上游密钥（请在管理端对应的「Yali」渠道填该接口类型的 Key，或设环境 YALI_API_KEY）" };
 	}
 	const model = up.upstreamModel;
+	if(!model?.trim())return {ok:false,error:'鸭梨未配置上游模型名'};
+	const prompt=buildPrompt(req).trim();
+	if(!prompt||prompt==='{}')return {ok:false,error:'提示词不能为空'};
+	if(req.inputs?.videos?.length||req.inputs?.audios?.length)return {ok:false,error:'鸭梨图片模型只支持图片参考'};
+	const isSeedream=/seedream/i.test(model),isGrok=/^grok-imagine-image(?:-quality)?$/.test(model);
+	if(YALI_GEMINI_SPECS[model]&&up.imageMaterialMode!=='url')return translateYaliGemini(req,up,onUpstream);
 	// Gemini 类不接受 quality（与 Grok 同——文档明示上游会剥掉；只有 OpenAI Images 类是真质量参数）
 	const isGemini = /gemini|banana/i.test(model);
 
@@ -105,20 +83,33 @@ export async function translateYaliImage(req: GenerateRequest, up: Upstream, onU
 	if (size) body.size = size;
 	const resolution = opt(req.params?.resolution);
 	if (resolution) body.resolution = resolution;
-	if (!isGemini) {
+	if (!isGemini && !isSeedream && !isGrok) {
 		const quality = opt(req.params?.quality);
 		if (quality) body.quality = quality;
 	}
 
 	const refCount = req.inputs?.images?.length ?? 0;
-	let url = `${up.baseUrl}/v1/images/generations`;
+	const base=up.baseUrl.replace(/\/+$/,'').replace(/\/v1$/,'');
+	let url = `${base}/v1/images/generations`;
+	if(isGrok){
+		const ratio=opt(req.params?.aspect_ratio??req.params?.size)??'1:1';
+		const res=(resolution??'1k').toLowerCase();
+		if(!['1k','2k'].includes(res)||!YALI_GROK_RATIOS.includes(ratio))return {ok:false,error:'Grok 仅支持1K/2K及文档比例，禁止近似取档'};
+		delete body.size;body.resolution=res;body.aspect_ratio=ratio;body.response_format='url';
+	}
+	if(isSeedream){
+		let pixels=size;
+		if(!pixels||pixels.includes(':')){
+			const ratio=opt(req.params?.aspect_ratio)??pixels??'1:1';
+			pixels=YALI_SEEDREAM_PRO_SIZES[ratio]?.[(resolution??'2k').toLowerCase()];
+			if(!pixels)return {ok:false,error:'Seedream 未配置该分辨率与比例的精确尺寸'};
+		}
+		body.size=pixels;delete body.resolution;body.n=1;body.watermark=false;body.output_format='png';body.response_format='url';
+	}
 
 	if (refCount > 0) {
-		if (refCount > MAX_REFS) {
-			return { ok: false, error: `参考图最多 ${MAX_REFS} 张（当前 ${refCount} 张），请精简图片素材后重试` };
-		}
 		// 死链探活/台账自愈/明确报错（复用 openai.ts 同一把尺，见其 resolveEditRefs 注释）
-		const { refs, missing } = await resolveEditRefs(req);
+		const { refs, missing } = await resolveEditRefs(req,up.imageMaterialMode);
 		if (missing.length) {
 			return { ok: false, error: `垫图无法获取：${missing.join("、")}——直链已失效且台账无可用直链，请重新生成/上传该资产后再试` };
 		}
@@ -126,23 +117,15 @@ export async function translateYaliImage(req: GenerateRequest, up: Upstream, onU
 			return { ok: false, error: "垫图无法获取：参考图需为公网可达直链、或服务端持有其资产字节（请配置 OSS，或确认资产 id 有效）" };
 		}
 		const images: string[] = [];
-		let inlineTotal = 0;
 		for (let i = 0; i < refs.length; i++) {
 			const r = refs[i];
 			if (r.url) { images.push(r.url); continue; } // 公网直链优先：不占内联预算
-			// 只有服务端字节（未配 OSS 等）→ 完整 Data URL 内联（文档支持形态），并守住两道体积上限
+			// 只有服务端字节时使用完整 Data URL，体积限制交给上游返回。
 			const buf = Buffer.from(await r.bytes!.blob.arrayBuffer());
-			if (buf.length > MAX_INLINE_ONE) {
-				return { ok: false, error: `第${i + 1}张参考图 ${mb(buf.length)}MB 超过单张内联上限 12MB——请配置 OSS 让素材有公网直链，或换用更小的图片` };
-			}
-			inlineTotal += buf.length;
-			if (inlineTotal > MAX_INLINE_TOTAL) {
-				return { ok: false, error: `参考图内联合计 ${mb(inlineTotal)}MB 超过上限 30MB——请配置 OSS 让素材有公网直链，或减少图片素材` };
-			}
 			images.push(`data:${r.bytes!.blob.type || "image/png"};base64,${buf.toString("base64")}`);
 		}
 		body.image = images;
-		url = `${up.baseUrl}/v1/images/edits`;
+		if(!isSeedream)url = `${base}/v1/images/edits`;
 	}
 
 	const headers = { "Content-Type": "application/json", Authorization: `Bearer ${up.apiKey}` };

@@ -1,0 +1,11 @@
+import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {execFileSync} from 'node:child_process';
+const root=path.resolve(import.meta.dirname,'..'),sb=fs.mkdtempSync(path.join(os.tmpdir(),'qiji-four-routes-'));
+fs.mkdirSync(path.join(sb,'src'));fs.mkdirSync(path.join(sb,'server/scripts'),{recursive:true});
+fs.copyFileSync(path.join(root,'src/contract.ts'),path.join(sb,'src/contract.ts'));
+for(const dir of ['src','skills'])fs.cpSync(path.join(root,'server',dir),path.join(sb,'server',dir),{recursive:true});
+fs.copyFileSync(path.join(root,'server/package.json'),path.join(sb,'server/package.json'));fs.symlinkSync(path.join(root,'server/node_modules'),path.join(sb,'server/node_modules'),'junction');
+fs.copyFileSync(path.join(root,'server/scripts/smoke-text-audio-routing.mjs'),path.join(sb,'server/scripts/smoke.mjs'));
+execFileSync(process.execPath,['--import','tsx','scripts/smoke.mjs'],{cwd:path.join(sb,'server'),stdio:'inherit',env:{...process.env,QIJI_TEST_SNAPSHOT:'1'}});
+fs.writeFileSync(path.join(sb,'server/restart.mjs'),`import fs from 'node:fs';import assert from 'node:assert/strict';globalThis.fetch=async()=>{throw Error('No network')};const r=await import('./src/autoRouting.ts');const c=r.routingConfig();assert.deepEqual(c,JSON.parse(fs.readFileSync('data/routing-smoke-before-restart.json')));assert.deepEqual(r.withDefaultRouting(c),c);console.log('Restart idempotent');`);
+execFileSync(process.execPath,['--import','tsx','restart.mjs'],{cwd:path.join(sb,'server'),stdio:'inherit'});
+console.log('Sandbox:',sb);

@@ -26,6 +26,7 @@ interface UiState {
 	 *  第132轮删「模型」页：openModelSettings 改定位「管理端」页（无可用模型=没连管理端/目录未拉取）。 */
 	settingsTab: "connection" | "presets" | "videoPresets" | "preferences" | "keymap" | "webdav" | null;
 	personalCenterOpen: boolean;
+	personalCenterTab: "overview" | "logs" | "team" | "stats" | "teamStats" | "downloads" | "messages";
 	imageEditNodeId: string | null;
 	nodeInfoNodeId: string | null;
 	/** 节点媒体处理弹窗（超分/去字幕/图像超分/分段/宫格切分/原文拆分/绑定到资产 bindAsset/绑定音色 bindVoice）——悬停工具栏与右键菜单共同入口，NodeProcessModals 全局渲染 */
@@ -65,6 +66,8 @@ interface UiState {
 	 *  没有模型=没连管理端/目录未拉取，引导去连接；不再有「模型」页） */
 	openModelSettings: () => void;
 	setPersonalCenterOpen: (open: boolean) => void;
+	setPersonalCenterTab: (tab: UiState["personalCenterTab"]) => void;
+	openPersonalCenterTab: (tab: UiState["personalCenterTab"]) => void;
 	setImageEditNodeId: (id: string | null) => void;
 	setNodeInfoNodeId: (id: string | null) => void;
 	setNodeProcModal: (m: UiState["nodeProcModal"]) => void;
@@ -99,6 +102,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	settingsOpen: false,
 	settingsTab: null,
 	personalCenterOpen: false,
+	personalCenterTab: "overview",
 	imageEditNodeId: null,
 	nodeInfoNodeId: null,
 	nodeProcModal: null,
@@ -128,6 +132,8 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setSettingsOpen: (open) => set(open ? { settingsOpen: true } : { settingsOpen: false, settingsTab: null }),
 	openModelSettings: () => set({ settingsOpen: true, settingsTab: "connection" }),
 	setPersonalCenterOpen: (open) => set({ personalCenterOpen: open }),
+	setPersonalCenterTab: (tab) => set({ personalCenterTab: tab }),
+	openPersonalCenterTab: (tab) => set({ personalCenterOpen: true, personalCenterTab: tab }),
 	setImageEditNodeId: (id) => set({ imageEditNodeId: id }),
 	setNodeInfoNodeId: (id) => set({ nodeInfoNodeId: id }),
 	setNodeProcModal: (m) => set({ nodeProcModal: m }),

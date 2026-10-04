@@ -1,0 +1,50 @@
+{
+  "note": "Zero network, zero real project writes. Import uses actual nodeUpload.ts with mocked persistence. Sync uses actual diffByRef and a model of the fields shallow merge; this is not a real two-window acceptance test.",
+  "importDuringProjectSwitch": {
+    "startedIn": "A",
+    "switchedTo": "B",
+    "events": [
+      {
+        "action": "saveUploadedLocal",
+        "project": "B",
+        "hasOwnerGuard": false
+      },
+      {
+        "action": "registerAssetBlob",
+        "project": "B",
+        "id": "LC-mutmjviw-1"
+      }
+    ],
+    "result": {
+      "assetId": "LC-mutmjviw-1",
+      "displayUri": "asset:///B/clip.mp4",
+      "localPath": "B/clip.mp4"
+    }
+  },
+  "separateEpisodeConcurrentEdits": {
+    "keysA": [
+      "rtcDocs"
+    ],
+    "keysB": [
+      "rtcDocs"
+    ],
+    "expected": [
+      "edited-1",
+      "edited-2"
+    ],
+    "actual": [
+      "original-1",
+      "edited-2"
+    ]
+  },
+  "explicitDuration": {
+    "advertisedDurations": [
+      10,
+      15,
+      20
+    ],
+    "userSelected": 20,
+    "durationSent": 15,
+    "caller": "RtcShotAiWorkbench.tsx:313 and shotGenActions.ts:197"
+  }
+}

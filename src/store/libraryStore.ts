@@ -7,6 +7,9 @@ export interface Asset {
 	name: string;
 	uri: string;
 	thumbnailUri: string | null;
+	/** 已读取的媒体像素尺寸，供再次投影在加载前预留真实比例。 */
+	pixelWidth?: number;
+	pixelHeight?: number;
 	createdAt: string;
 	/** 软删除：ID 永不复用 */
 	deletedByUser: boolean;

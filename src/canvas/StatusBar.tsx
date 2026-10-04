@@ -2,6 +2,7 @@ import { Coins, Boxes, MousePointerClick } from "lucide-react";
 import { useCanvasStore } from "@/store/canvasStore";
 import { useUiStore } from "@/store/uiStore";
 import { useConnectionStore } from "@/store/connectionStore";
+import { ProjectSaveStatus } from "@/components/ProjectSaveStatus";
 
 /** 底部状态栏：积分余额 / 节点数 / 选中数。点积分打开个人中心。 */
 export function StatusBar() {
@@ -30,6 +31,7 @@ export function StatusBar() {
 				<MousePointerClick className="h-3.5 w-3.5" />
 				{selected} 选中
 			</span>
+			<ProjectSaveStatus />
 		</div>
 	);
 }

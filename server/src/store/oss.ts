@@ -58,7 +58,7 @@ export function ossPublicUrl(key: string, t?: OssTarget): string {
 }
 
 /** 上传字节到 OSS，返回公网直链。未配置则抛错（调用方应先判 isOssConfigured） */
-export async function ossPut(key: string, body: Buffer, contentType: string, t?: OssTarget): Promise<string> {
+export async function ossPut(key: string, body: Buffer, contentType: string, t?: OssTarget, cacheControl?: string): Promise<string> {
 	const p = target(t);
 	await client(p).send(
 		new PutObjectCommand({
@@ -66,6 +66,7 @@ export async function ossPut(key: string, body: Buffer, contentType: string, t?:
 			Key: key.replace(/^\/+/, ""),
 			Body: body,
 			ContentType: contentType,
+			...(cacheControl ? { CacheControl: cacheControl } : {}),
 		}),
 	);
 	return ossPublicUrl(key, p);

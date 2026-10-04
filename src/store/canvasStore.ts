@@ -131,7 +131,8 @@ export const useCanvasStore = create<CanvasState>((set) => ({
       return { edges };
     }),
   setRuntime: (id, patch) =>
-    set((s) => ({
+    set((s) => Object.entries(patch).every(([key, value]) =>
+      Object.is((s.runtime[id] ?? DEFAULT_RUNTIME)[key as keyof NodeRuntime], value)) ? s : ({
       runtime: {
         ...s.runtime,
         [id]: { ...(s.runtime[id] ?? DEFAULT_RUNTIME), ...patch },

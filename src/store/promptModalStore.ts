@@ -13,11 +13,14 @@ import type { PresetOption } from "@/lib/presetSchemes";
 /** 弹窗提供给素材栏的能力：把 @ImageN 等文本插入到提示词光标处 */
 export interface PromptModalApi {
 	insertAtCursor: (text: string) => void;
+	getValue?: () => string;
+	setValue?: (text: string) => void;
 }
 
 /** 输入 @ 时的可选素材（待选框列出）：tag=@ImageN，附缩略图/名字 */
 export interface MentionCandidate {
 	tag: string;
+	assetId?: string;
 	name?: string;
 	uri?: string;
 	media?: "image" | "video" | "audio";
@@ -34,6 +37,7 @@ export type ImportAssetFn = (cand: ProjectAssetCandidate) => { tag: string; mat:
 export type MatchAssetsFn = (draft: string) => { prompt: string; added: number } | null;
 
 export interface PromptModalConfig {
+	nodeId?: string;
 	title?: string;
 	value: string;
 	placeholder?: string;
@@ -54,6 +58,7 @@ export interface PromptModalConfig {
 }
 
 interface PromptModalState {
+	nodeId?: string;
 	open: boolean;
 	title: string;
 	value: string;
@@ -84,6 +89,7 @@ export const usePromptModalStore = create<PromptModalState>((set) => ({
 	openPrompt: (cfg) =>
 		set({
 			open: true,
+			nodeId: cfg.nodeId,
 			title: cfg.title ?? "编辑提示词",
 			value: cfg.value ?? "",
 			placeholder: cfg.placeholder ?? "",

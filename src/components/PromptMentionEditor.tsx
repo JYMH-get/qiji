@@ -17,6 +17,8 @@ import { PRESET_TAG_RE, presetBody, type PresetOption } from "@/lib/presetScheme
 import { insertPresetCapsule } from "@/lib/promptCompose";
 import { computeChangedFlags, rangeChanged } from "@/lib/wordDiff";
 import { mediaFilesFromClipboard } from "@/lib/clipboardMedia";
+import { useMatchedAssetHighlight } from "@/hooks/useMatchedAssetHighlight";
+import { materialPromptTokens, type MaterialPromptState, type MaterialPromptToken } from "@/lib/materialPrompt";
 
 export interface PromptMentionHandle {
     /** 在当前光标处插入素材引用胶囊（tag=@Image1…）。replaceTrigger=true 时先吃掉光标前刚输入的触发符（'@' 或 '#'）。
@@ -28,6 +30,8 @@ export interface PromptMentionHandle {
 }
 
 interface Props {
+	materialPrompt?: MaterialPromptState;
+	onExpand?: () => void;
     value: string;
     materials: ShotMaterial[];
     /** 出图预设方案（供把 【预设:id】 渲染成带名字的 pill；缺省/空=不识别预设胶囊，按纯文本显示） */
@@ -122,16 +126,34 @@ function appendText(frag: DocumentFragment, text: string, start: number, end: nu
 }
 
 /** 把 plain text（含 @tag / 【预设:id】）渲染进 root：@tag→素材胶囊、【预设:id】→预设胶囊，其余→文本节点（保 \n）；flags 高亮更改 */
-function buildDom(root: HTMLElement, text: string, tagToMat: Map<string, ShotMaterial>, presetById?: Map<string, string>, flags?: boolean[]) {
+function buildDom(root: HTMLElement, text: string, tagToMat: Map<string, ShotMaterial>, presetById?: Map<string, string>, flags?: boolean[], tokens: MaterialPromptToken[] = []) {
     root.textContent = "";
     if (!text) return;
     const frag = document.createDocumentFragment();
+    const append = (start: number, end: number) => {
+        let cursor = start;
+        for (const token of tokens) {
+            if (token.start < start || token.end > end) continue;
+            appendText(frag, text, cursor, token.start, flags);
+            const chip = token.tag ? makeChip(token.tag, token.material) : document.createElement("span");
+            chip.dataset.sourceText = token.original;
+            if (!token.tag) {
+                chip.className = "qj-mention-chip qj-mention-inactive";
+                chip.contentEditable = "false";
+                chip.textContent = `@${token.original}`;
+                chip.title = "素材已移除，保留原文主体";
+            }
+            frag.appendChild(chip);
+            cursor = token.end;
+        }
+        appendText(frag, text, cursor, end, flags);
+    };
     // 一次扫描素材 @tag / 预设胶囊【预设:id】；上游文本已在上层映射为普通文本。
     const re = new RegExp(`${MENTION_TAG_RE.source}|${PRESET_TAG_RE.source}`, "g");
     let last = 0;
     let m: RegExpExecArray | null;
     while ((m = re.exec(text)) !== null) {
-        if (m.index > last) appendText(frag, text, last, m.index, flags);
+        if (m.index > last) append(last, m.index);
         const tag = m[0];
         const changed = rangeChanged(flags, m.index, m.index + tag.length);
         let node: Node;
@@ -147,7 +169,7 @@ function buildDom(root: HTMLElement, text: string, tagToMat: Map<string, ShotMat
         frag.appendChild(node);
         last = m.index + tag.length;
     }
-    if (last < text.length) appendText(frag, text, last, text.length, flags);
+    if (last < text.length) append(last, text.length);
     root.appendChild(frag);
 }
 
@@ -156,6 +178,7 @@ function nodeText(node: Node): string {
     if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
     if (node.nodeType !== Node.ELEMENT_NODE) return "";
     const el = node as HTMLElement;
+    if (el.dataset.sourceText !== undefined) return el.dataset.sourceText;
     if (el.dataset.tag) return el.dataset.tag;
     if (el.tagName === "BR") return "\n";
     let s = ""; // 防御：粘贴/浏览器可能塞的包裹元素
@@ -194,15 +217,18 @@ function caretRect(root: HTMLElement | null): { x: number; y: number } | null {
 }
 
 const PromptMentionEditor = forwardRef<PromptMentionHandle, Props>(function PromptMentionEditor(
-    { value, materials, presets, placeholder, onChange, onMentionProbe, onImportProbe, onPasteMedia, diffBase, style, className },
+    { value, materials, presets, placeholder, onChange, onMentionProbe, onImportProbe, onPasteMedia, diffBase, style, className, materialPrompt, onExpand },
     ref,
 ) {
     const root = useRef<HTMLDivElement>(null);
+    useMatchedAssetHighlight(root, value, materials);
     const composing = useRef(false);
     const lastText = useRef<string | null>(null); // 上次「我们渲染/序列化」的文本（区分内部打字 vs 外部更新）
     const lastSig = useRef<string>("");
     const lastPresetSig = useRef<string>("");
     const lastDiff = useRef<string | undefined>(undefined); // 上次用于高亮的基线
+    const modeSig = JSON.stringify(materialPrompt);
+    const lastMode = useRef<string | undefined>();
     const savedRange = useRef<Range | null>(null); // 进入 @ 弹层前的光标快照（点击弹层会偷走焦点、折叠选区）
     const pendingCaretEnd = useRef(false); // # 导入后素材变化会触发重建 → 标记「重建后把光标移到末尾」
     const draggingChip = useRef<HTMLElement | null>(null); // 正在拖动的预设胶囊（拖放改位置）
@@ -243,14 +269,15 @@ const PromptMentionEditor = forwardRef<PromptMentionHandle, Props>(function Prom
     useEffect(() => {
         const el = root.current;
         if (!el) return;
-        if (value !== lastText.current || matsSig !== lastSig.current || presetSig !== lastPresetSig.current || diffBase !== lastDiff.current) {
+        if (value !== lastText.current || matsSig !== lastSig.current || presetSig !== lastPresetSig.current || diffBase !== lastDiff.current || modeSig !== lastMode.current) {
             lastText.current = value;
             lastSig.current = matsSig;
             lastPresetSig.current = presetSig;
             lastDiff.current = diffBase;
+            lastMode.current = modeSig;
             // 仅当基线存在且与当前不同才算 diff（推理刚出 base===value → 无高亮）
             const flags = diffBase && diffBase !== value ? computeChangedFlags(value, diffBase) : undefined;
-            buildDom(el, value, tagToMat, presetById, flags);
+            buildDom(el, value, tagToMat, presetById, flags, materialPromptTokens(value, materials, materialPrompt));
             syncTrailingBr(el, value);
             // # 导入触发的重建：素材变化重建会丢光标 → 把光标移到末尾并聚焦（否则用户看不到落点）
             if (pendingCaretEnd.current) {
@@ -267,7 +294,7 @@ const PromptMentionEditor = forwardRef<PromptMentionHandle, Props>(function Prom
                 el.focus();
             }
         }
-    }, [value, matsSig, presetSig, tagToMat, presetById, diffBase]);
+    }, [value, matsSig, presetSig, tagToMat, presetById, diffBase, modeSig]);
 
     // 在当前光标处插入一枚胶囊/文本节点（素材胶囊、预设胶囊共用同一套光标/缓冲空格逻辑）。
     const insertChipAtCaret = (chip: Node, replaceTrigger: boolean, markPending: boolean) => {
@@ -408,6 +435,7 @@ const PromptMentionEditor = forwardRef<PromptMentionHandle, Props>(function Prom
 
     // 双击预设胶囊 → 就地展开为可编辑的普通正文（把 【预设:id】 替换成完整预设词文本）
     const onDblClick = (e: React.MouseEvent<HTMLDivElement>) => {
+        if (onExpand) { e.preventDefault(); e.stopPropagation(); emit(); onExpand(); return; }
         const chip = (e.target as HTMLElement | null)?.closest?.(".qj-preset-chip") as HTMLElement | null;
         if (!chip || !root.current?.contains(chip)) return;
         const mm = /【预设:([A-Za-z0-9._-]+)】/.exec(chip.dataset.tag || "");
@@ -472,11 +500,11 @@ const PromptMentionEditor = forwardRef<PromptMentionHandle, Props>(function Prom
                 onBlur={() => {
                     // 失焦后用最新文本重算「更改高亮」（打字期间不重建以保光标，故在此刷新）
                     const el = root.current;
-                    if (!el || !diffBase) return;
+                    if (!el || (!diffBase && !materialPrompt)) return;
                     const text = serialize(el);
                     lastText.current = text;
-                    const flags = diffBase !== text ? computeChangedFlags(text, diffBase) : undefined;
-                    buildDom(el, text, tagToMat, presetByIdRef.current, flags);
+                    const flags = diffBase && diffBase !== text ? computeChangedFlags(text, diffBase) : undefined;
+                    buildDom(el, text, tagToMat, presetByIdRef.current, flags, materialPromptTokens(text, materials, materialPrompt));
                     syncTrailingBr(el, text);
                 }}
                 onCompositionStart={() => { composing.current = true; }}

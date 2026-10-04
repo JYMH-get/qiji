@@ -1,5 +1,8 @@
-import { routedFamily, publicRoutingModels, routingVersion, routingConfig, publicId, routingEnabled, routingFamilies, routeFamilyName, routeCapability } from "./autoRouting.ts";
+import { publicRoutingModels, routingVersion, routingConfig, publicId, routingEnabled, routingFamilies, routeFamilyName, routeCapability } from "./autoRouting.ts";
+import { createHash } from 'node:crypto';
 import { imageRouteParams } from "./imageRouting.ts";
+import { materialPolicyForModel } from './materialPolicy.ts';
+import { getChannel } from './store/channels.ts';
 /**
  * 管理端目录（catalog）数据 —— 远程下发给用户端的模型/模板/出图模板/变体前缀/schema。
  *
@@ -20,8 +23,10 @@ import { listEnabledModels, catalogVersion, modelAllowedForAgent } from "./store
 import { listModes, modesVersion } from "./store/modes.ts";
 import { listFamilies, familiesVersion } from "./store/families.ts";
 import { listEnabledTemplatesForAgent, templatesVersion } from "./store/templates.ts";
-import { listEnabledPresets, presetsVersion } from "./store/presets.ts";
+import { listEnabledPresetsForAgent, presetsVersion } from "./store/presets.ts";
 import { chainPricingVersion, agentModelLabel, audienceOf } from "./store/agents.ts";
+import { applyAgentFeatureGate } from './store/agents.ts';
+import { agentLinePriceVersion, pricedAgentLine, type PriceLayer } from './store/agentLinePrices.ts';
 
 /** 模板由 store/templates.ts 数据化构建；按用户归属渠道商下发（平台模板 + 该渠道商自营模板） */
 function buildTemplates(agentId?: string): CatalogTemplate[] {
@@ -33,6 +38,7 @@ function buildTemplates(agentId?: string): CatalogTemplate[] {
 			aliases: t.aliases,
 			outputDurationLimit: t.outputDurationLimit,
 			name: t.name,
+			publicNote: t.publicNote,
 			capability: t.capability,
 			purpose: t.purpose,
 			category: t.category,
@@ -60,13 +66,14 @@ function buildTemplates(agentId?: string): CatalogTemplate[] {
  * 故把预设以「模板形状」附加进 templates 下发（无 purpose=不进任何可执行选择器）；
  * 新客户端见 catalog.presets 非空即走新轨、天然忽略这份兼容层。
  */
-function presetCompatTemplates(): CatalogTemplate[] {
-	return listEnabledPresets()
+function presetCompatTemplates(agentId?: string): CatalogTemplate[] {
+	return listEnabledPresetsForAgent(agentId)
 		.slice()
 		.sort((a, b) => (a.category || "").localeCompare(b.category || "") || a.order - b.order || a.id.localeCompare(b.id))
 		.map((p) => ({
 			id: p.id,
 			name: p.name,
+			publicNote: p.publicNote,
 			capability: "image" as Capability,
 			purpose: undefined,
 			category: p.category || "预设方案",
@@ -81,13 +88,14 @@ function presetCompatTemplates(): CatalogTemplate[] {
 }
 
 /** 预设清单（第174轮独立实体）：全文下发（预设=正文片段，正文即价值），按 分类→order 排序 */
-function buildPresets(): CatalogPreset[] {
-	return listEnabledPresets()
+function buildPresets(agentId?: string): CatalogPreset[] {
+	return listEnabledPresetsForAgent(agentId)
 		.slice()
 		.sort((a, b) => (a.category || "").localeCompare(b.category || "") || a.order - b.order || a.id.localeCompare(b.id))
 		.map((p) => ({
 			id: p.id,
 			name: p.name,
+			publicNote: p.publicNote,
 			category: p.category || undefined,
 			body: p.body,
 			position: p.position === "suffix" ? "suffix" : undefined,
@@ -187,9 +195,8 @@ const schemas: Record<string, unknown> = {
 };
 
 /** 由模型存储 + 静态模板/schema 构建客户端 catalog（每次读取实时反映管理端改动；模板按用户归属渠道商下发） */
-export function buildCatalog(agentId?: string): Catalog {
-	// P1 统一定价（2026-08 商业化改造，⚠ 勿回退）：价格恒为平台价，渠道商换价整体退役——
-	// 全体用户 预估 = 实扣 = ModelDef 平台计费字段（与 planBilling resolveModelCost 无 override 一致）。
+export function buildCatalog(agentId?: string, priceLayer: PriceLayer = 'retail'): Catalog {
+	// 用户目录投影该商售价；可信节点可请求进货价。两者均与受理时冻结的价格一致。
 	// hidden=内部模型（如第三方手续费虚拟模型）：可被 /v1/generate 调用计费，但不下发给客户端下拉。
 	// modelAllowedForAgent=开放范围（第110轮 shareScope）+ 渠道商禁用清单（第121轮 blockedModels）双闸：
 	// 任一不过即不下发（调用也会被 403）；商禁用变更 bump pricingVersion → version 变 → 客户端热更。
@@ -203,7 +210,14 @@ export function buildCatalog(agentId?: string): Catalog {
 	const disabledFams = new Set(listFamilies().filter((f) => f.enabled === false).map((f) => f.id));
 	const modeRank = (modeId?: string): number =>
 		modeId ? (modeIdx.get(modeId) ?? modeList.length) : modeList.length + 1; // 无模式（默认源）恒最后
-	const models: CatalogModel[] = [...listEnabledModels().filter(m => !routedFamily(m)), ...publicRoutingModels(agentId)]
+	const gates = applyAgentFeatureGate(agentId)?.modes;
+	const gateVersion = createHash('sha256').update(JSON.stringify(gates ?? {})).digest('hex').slice(0, 12);
+	const availableModels = routingEnabled() ? publicRoutingModels(agentId, gates) : listEnabledModels()
+		.filter(m => !m.channelId || getChannel(m.channelId)?.enabled)
+		.filter(m => !m.modeId || gates?.[m.modeId] !== false)
+		.map(m => ({ ...m, materialPolicy: materialPolicyForModel(m) }));
+	const models: CatalogModel[] = availableModels
+		.map(m => pricedAgentLine(m, agentId, priceLayer))
 		.filter((m) => !m.hidden && modelAllowedForAgent(m, agentId) && !(m.modeId && disabledModes.has(m.modeId)))
 		// 排序键（第176轮）：模式 order → 模型 order（管理端同组内拖动）→ 原始加入序（稳定）
 		.sort((a, b) => modeRank(a.modeId) - modeRank(b.modeId)
@@ -219,6 +233,7 @@ export function buildCatalog(agentId?: string): Catalog {
 			// 第165轮：家族被全局停用时剥除（客户端 familyName 回查不到会裸显 id，剥掉才归「其他」）
 			familyId: m.familyId && !disabledFams.has(m.familyId) ? m.familyId : undefined,
 			methods: m.methods, // 第131轮：生成「方法」（omni 全能参考 / frames 首尾帧），客户端渲染方法级下拉
+			materialPolicy: m.materialPolicy,
 			officialAssets: m.officialAssets, // 上游人像素材库：客户端按图片素材卡逐项选择
 			refVideoSecondsWeight: m.refVideoSecondsWeight, // 第140轮：参考视频按秒计费系数（供客户端预估；实扣以服务端为准）
 			matLimits: m.matLimits, // 第145轮：素材数量上限（管理端可调；服务端硬闸为准，客户端提交前同尺预检）
@@ -249,15 +264,15 @@ export function buildCatalog(agentId?: string): Catalog {
 		// 第163轮再并入家族注册表版本（改家族名/增删家族/模型改家族经 models version 或 .f 段热更）；
 		// 第174轮再并入预设库版本（预设拆为独立存储后改预设不再 bump 模板版本，须自带热更段）
 		// 同版本的不同受众也可能有不同模型/模板；用户迁移后必须拉取目标受众目录，不能误回 304。
-		version: `${catalogVersion()}.r${routingVersion()}.t${templatesVersion()}${pv ? `.p${pv}` : ""}.m${modesVersion()}.f${familiesVersion()}.ps${presetsVersion()}.a${encodeURIComponent(audienceOf(agentId))}`,
+		version: `${catalogVersion()}.r${routingVersion()}.t${templatesVersion()}${pv ? `.p${pv}` : ""}.m${modesVersion()}.f${familiesVersion()}.ps${presetsVersion()}.a${encodeURIComponent(audienceOf(agentId))}.lp${agentLinePriceVersion(agentId)}.g${gateVersion}.${priceLayer}.mjparams1`,
 		// 第165轮：全局停用的模式/家族不下发（客户端隐藏）；两表本就按 order 排序=管理端拖动排序直达客户端
 		modes: modeList.filter((m) => m.enabled !== false && models.some(x => x.modeId === m.id)).map((m) => ({ id: m.id, name: m.name })),
 		families: [...listFamilies().filter((f) => f.enabled !== false).map((f) => ({ id: f.id, name: f.id === 'fam-seedance' && routingEnabled() ? 'Seedance 2.0' : f.name, capability: f.capability })),
 			...(routingEnabled() ? [...new Map(routingConfig().lines.filter(l => !listFamilies().some(f => f.id === l.familyId && f.enabled !== false)).map(l => [l.familyId, {id:l.familyId,name:routeFamilyName(l),capability:routeCapability(l)}])).values()] : [])],
 		models,
 		// 模板 + 预设兼容投影（旧客户端从模板分类读预设；新客户端走下方 presets 字段）
-		templates: [...buildTemplates(agentId), ...presetCompatTemplates()],
-		presets: buildPresets(),
+		templates: [...buildTemplates(agentId), ...presetCompatTemplates(agentId)],
+		presets: buildPresets(agentId),
 		nodes: [],
 		imageTemplates,
 		variantPrefixes,

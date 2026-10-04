@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Qiji",
-  "version": "2.0.0",
+  "version": "2.0.20",
   "identifier": "com.qiji.canvas",
   "build": {
     "frontendDist": "../dist",
@@ -34,6 +34,7 @@
     }
   },
   "bundle": {
+    "createUpdaterArtifacts": true,
     "active": true,
     "targets": "all",
     "resources": {
@@ -50,6 +51,17 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENCQjA5OEVCRUVCQzlDNTEKUldSUm5MenU2NWl3eTN5VVFNeWhndTJ3dDZoUEhGN08xSE5OM29TWXFsYkM1ZDRmMHlFRFNFaTEK",
+      "endpoints": [
+        "https://jianqiji.cn-sy1.rains3.com/site/updates/stable.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

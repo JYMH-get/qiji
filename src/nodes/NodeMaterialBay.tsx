@@ -1,3 +1,4 @@
+import { AccelerationMaterialStatus } from '@/components/AccelerationMaterialStatus';
 import { useEffect, useRef, useState } from "react";
 import { useCanvasStore } from "@/store/canvasStore";
 import { useLibraryStore } from "@/store/libraryStore";
@@ -5,11 +6,13 @@ import { useProjectStore } from "@/store/projectStore";
 import { openLightbox } from "@/store/lightboxStore";
 import { TAG_BADGE, BADGE_BG } from "@/lib/shotMaterials";
 import { mediaFilesFromDataTransfer } from "@/lib/clipboardMedia";
-import { addNodeMaterialFiles, removeNodeMaterial, removeUpstreamMaterial, listNodeMaterials, type NodeMatEntry } from "@/canvas/nodeMaterials";
+import { addNodeMaterialFiles, removeNodeMaterial, removeUpstreamMaterial, listNodeMaterials, cycleNodeMaterialPrompt, syncNodeLegend, type NodeMatEntry } from "@/canvas/nodeMaterials";
+import { materialPromptState, MATERIAL_PROMPT_LABELS, nextMaterialPromptMode } from "@/lib/materialPrompt";
+import type { PromptModalApi } from "@/store/promptModalStore";
 import { usePendingUploads, uploadKeys } from "@/store/uploadStore";
 import { useDisplayUri } from "@/nodes/ResultView";
 import { IdentityAssetToggle } from "@/components/IdentityAssetToggle";
-import { FolderOpen, MousePointer2, Upload } from "lucide-react";
+import { FolderOpen, MousePointer2, Upload, Repeat2 } from "lucide-react";
 import { useUiStore } from "@/store/uiStore";
 
 /** 右键取消垫图是快捷操作：拦住浏览器/画布菜单后立即执行，不再追加确认步骤。 */
@@ -27,7 +30,7 @@ export function removeMaterialOnContextMenu(
  * 反查换源）——与 ResultView/素材库 LibTile 同一把尺，不再裸用 it.uri（裸用=垫图黑块「无法播放」观感）。
  * 双击放大也用解析后的 uri（灯箱同样要能播）。
  */
-function MatTile({ it, doRemove, identity }: { it: NodeMatEntry; doRemove: (() => void) | null; identity?: { active: boolean; toggle: () => void } }) {
+function MatTile({ it, doRemove, identity, modelId }: { modelId?: string; it: NodeMatEntry; doRemove: (() => void) | null; identity?: { active: boolean; toggle: () => void; modelId?: string } }) {
 	const uri = useDisplayUri(it.uri || it.url);
 	return (
 		<div
@@ -53,7 +56,8 @@ function MatTile({ it, doRemove, identity }: { it: NodeMatEntry; doRemove: (() =
 					className="absolute top-0 right-0 hidden group-hover:flex h-4 w-4 items-center justify-center text-[10px] leading-none text-white bg-black/60 rounded-bl"
 				>✕</button>
 			)}
-			{identity && <IdentityAssetToggle active={identity.active} onToggle={identity.toggle} />}
+			<AccelerationMaterialStatus modelId={modelId} kind={it.media} material={{ id: it.id, url: it.url || it.uri, name: it.name }} />
+			{identity && <IdentityAssetToggle kind={it.media} modelId={identity.modelId} material={{ id: it.id, url: it.url || it.uri, name: it.name }} active={identity.active} onToggle={identity.toggle} />}
 		</div>
 	);
 }
@@ -68,15 +72,19 @@ function MatTile({ it, doRemove, identity }: { it: NodeMatEntry; doRemove: (() =
 export function NodeMaterialBay({
 	nodeId,
 	rightAction,
+	identityModelId,
 	identityEnabled = false,
 	identityIndexes = [],
 	onToggleIdentity,
+	promptApi,
 }: {
 	nodeId: string;
 	rightAction?: React.ReactNode;
+	identityModelId?: string;
 	identityEnabled?: boolean;
 	identityIndexes?: number[];
 	onToggleIdentity?: (imageIndex: number) => void;
+	promptApi?: PromptModalApi;
 }) {
 	const node = useCanvasStore((s) => s.nodes[nodeId]);
 	// 订阅枚举的全部数据源（listNodeMaterials 读 getState()，这些订阅保证变更时重渲染）
@@ -88,6 +96,10 @@ export function NodeMaterialBay({
 	const menuRef = useRef<HTMLDivElement>(null);
 	const [menuOpen, setMenuOpen] = useState(false);
 	const uploading = usePendingUploads(uploadKeys.node(nodeId)); // 在途上传数 → 占位转圈
+	const materialSignature = listNodeMaterials(nodeId).map(m => `${m.key}:${m.assetId}:${m.name}:${m.uri}`).join("|");
+	useEffect(() => {
+		if (useCanvasStore.getState().nodes[nodeId]?.data.params.materialPrompt) syncNodeLegend(nodeId);
+	}, [nodeId, materialSignature]);
 	useEffect(() => {
 		if (!menuOpen) return;
 		const close = (e: MouseEvent) => {
@@ -116,10 +128,10 @@ export function NodeMaterialBay({
 						? () => removeUpstreamMaterial(nodeId, it.edgeId!)
 						: null;
 				const imageIndex = it.media === "image" ? it.n - 1 : -1;
-				const identity = identityEnabled && imageIndex >= 0 && onToggleIdentity
-					? { active: identityIndexes.includes(imageIndex), toggle: () => onToggleIdentity(imageIndex) }
+				const identity = identityEnabled
+					? { modelId: identityModelId, active: imageIndex >= 0 ? identityIndexes.includes(imageIndex) : true, toggle: () => { if (imageIndex >= 0) onToggleIdentity?.(imageIndex); } }
 					: undefined;
-				return <MatTile key={it.key} it={it} doRemove={doRemove} identity={identity} />;
+				return <MatTile modelId={identityModelId} key={it.key} it={it} doRemove={doRemove} identity={identity} />;
 			})}
 			{/* 在途上传占位：转圈，表示正在传 OSS */}
 			{Array.from({ length: uploading }).map((_, i) => (
@@ -127,7 +139,7 @@ export function NodeMaterialBay({
 					<span className="sb-spin text-white/80 text-sm">↻</span>
 				</div>
 			))}
-			{/* ＋ 三路添加：本地上传 / 资产助手单选 / 画布多选 */}
+			{/* ＋ 三路添加：本地上传 / 资产库连续选择 / 画布多选 */}
 			<div ref={menuRef} className="relative shrink-0">
 				<button
 					onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
@@ -161,7 +173,12 @@ export function NodeMaterialBay({
 				onChange={(e) => { const fs = Array.from(e.target.files || []); if (fs.length) void addNodeMaterialFiles(nodeId, fs); e.target.value = ""; }}
 			/>
 			{/* 右侧操作槽（如提示词放大按钮）：推到本行最右 */}
-			{rightAction && <div className="ml-auto flex items-center">{rightAction}</div>}
+			<div className="ml-auto flex items-center gap-2">
+				<button type="button" aria-label="素材图例转换" title={`素材图例转换：${MATERIAL_PROMPT_LABELS[materialPromptState(node.data.params.materialPrompt)?.mode || "legend"]} → ${MATERIAL_PROMPT_LABELS[nextMaterialPromptMode(materialPromptState(node.data.params.materialPrompt)?.mode || "legend")]}`} className="nodrag" onClick={(e) => { e.stopPropagation(); const text = cycleNodeMaterialPrompt(nodeId, promptApi?.getValue?.()); promptApi?.setValue?.(text); }} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: 5, borderRadius: 6, color: "#c4b5fd", background: "rgba(139,92,246,0.12)", border: "1px solid rgba(139,92,246,0.3)", cursor: "pointer" }}>
+					<Repeat2 size={19} /><span style={{ fontSize: 10 }}>{({ legend: 1, inline: 2, both: 3 })[materialPromptState(node.data.params.materialPrompt)?.mode || "legend"]}</span>
+				</button>
+				{rightAction}
+			</div>
 		</div>
 	);
 }

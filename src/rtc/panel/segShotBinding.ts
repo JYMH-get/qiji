@@ -1,3 +1,4 @@
+import { getDualModeFeature } from '@/store/connectionStore';
 /**
  * segShotBinding —— 普通结果占位（无 shotRef 的视频/图片占位）→ **真实分镜** 的一次性升级。
  * 第240轮补充6 用户定稿：「普通占位要和有原文占位完全一致，包含各种功能键和功能，
@@ -47,7 +48,7 @@ export function ensureShotForPlaceholder(segId: string): { episodeId: string; sh
 
 	// 会话草稿迁移：旧「自由占位」编辑过的提示词按产物类型落进对应栏位（同源模式落同源栏）
 	const draftPrompt = (useRtcFreeGenStore.getState().drafts[segId]?.prompt ?? "").trim();
-	const sameSource = !!st.mediaSettings?.imgVideoSameSource;
+	const sameSource = (!getDualModeFeature() || (!!st.mediaSettings?.imgVideoSameSource));
 	const shot: StoryboardShot = {
 		id: `shot-${Date.now()}-x-${Math.floor(Math.random() * 1e6)}`,
 		index: ep.shots.length + 1,

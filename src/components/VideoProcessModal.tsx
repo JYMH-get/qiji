@@ -16,6 +16,7 @@ import { useDisplayUri } from "@/nodes/ResultView";
 import { useCatalogStore } from "@/store/catalogStore";
 import { useProjectStore } from "@/store/projectStore";
 import ModelPicker from "@/components/ModelPicker";
+import { processModalParams } from "@/lib/processModalParams";
 
 export type VideoProcessMode = "upscale" | "desub" | "imageUpscale";
 
@@ -193,14 +194,7 @@ export default function VideoProcessModal({ uri, mode, sourceName, onCancel, onC
 
     const confirm = () => {
         if (!model) return;
-        const out: Record<string, unknown> = { ...params };
-        if (needBoxes) {
-            out.erase_ratio_location = boxes.slice(0, 20).map((b) => ({
-                top_left_x: round3(b.x1), top_left_y: round3(b.y1),
-                bottom_right_x: round3(b.x2), bottom_right_y: round3(b.y2),
-            }));
-        }
-        if (isImage && imgPlan) out.multiple = imgPlan.multiple;
+        const out = processModalParams(params, { eraseBoxes: needBoxes ? boxes : undefined, multiple: isImage && imgPlan ? imgPlan.multiple : undefined });
         onConfirm({ modelKey: model.id, modelLabel: model.label, params: out });
     };
 

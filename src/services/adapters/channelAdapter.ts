@@ -17,6 +17,7 @@ import { getAdapter } from "./registry";
 import { libtvModelOptions } from "./libtvAdapter";
 import { dreaminaModelOptions } from "./dreaminaAdapter";
 import { comfyuiModelOptions } from "./comfyuiAdapter";
+import { LIBTV_FAMILY_OPTIONS, DREAMINA_FAMILY_OPTIONS } from "./localChannels";
 import { useCatalogStore } from "@/store/catalogStore";
 import { useConnectionStore } from "@/store/connectionStore";
 import { capabilityForNodeType } from "@/nodes/nodeSpecs";
@@ -32,6 +33,7 @@ export interface ModelOption {
   modeName?: string;
   familyId?: string;
   familyName?: string;
+  lineName?: string;
 }
 
 function catalogModelsForCapability(cap: Capability): ModelOption[] {
@@ -83,13 +85,14 @@ export function getChannelModelsForNodeType(nodeType: NodeType): ModelOption[] {
   const modeGates = useConnectionStore.getState().user?.features?.modes;
   const filtered = all.filter((m) => !m.modeId || modeGates?.[m.modeId] !== false);
   // 本地模型注入：LibTV/即梦 不是 catalog 模型（已授权且管理端未关入口时才出现；请求走本机 CLI 不经管理端）。
-  // 家族归属（第163轮）：选项自带 familyId（LibTV 按款：Seedance/MiniMax；即梦全系 Seedance），
-  // catalog 有同 id 家族时显示名跟随，否则用选项自带兜底名
+  // 即梦、LibTV 使用客户端独立家族，与通用选择器保持一致。
   const fams = useCatalogStore.getState().catalog?.families;
+  const cliOptions = [...LIBTV_FAMILY_OPTIONS, ...DREAMINA_FAMILY_OPTIONS];
   const locals = [...libtvModelOptions(cat), ...dreaminaModelOptions(cat), ...comfyuiModelOptions(cat)].map((o) => ({
     ...o,
     familyId: o.familyId ?? SEEDANCE_FAMILY_ID,
     familyName: fams?.find((f) => f.id === (o.familyId ?? SEEDANCE_FAMILY_ID))?.name || o.familyName || "Seedance 2.0",
+    ...cliOptions.find(c => c.id === o.id),
   }));
   const routedFamilies = useCatalogStore.getState().catalog?.routedFamilies;
   return [...filtered, ...locals.filter(o => !routedFamilies?.includes(o.familyId))];

@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+if(!import.meta.url.includes('qiji-line-availability-'))throw Error('Sandbox only');
+globalThis.fetch=async()=>{throw Error('No upstream allowed');};
+const fixture=JSON.parse(fs.readFileSync('data/controls-restart.json','utf8'));Date.now=()=>fixture.now;
+await import('../src/store/logs.ts');
+const stats=await import('../src/channelAvailability.ts'),lines=await import('../src/lineAvailability.ts');stats.stopChannelAvailabilityBackground();lines.stopLineAvailabilityBackground();
+const {db,closeSqlite}=await import('../src/store/sqlite.ts');
+const audio=stats.modelHistoryScope('fixture-audio');
+assert.equal(audio.active,false);assert.deepEqual(audio.history,fixture.audioHistory);assert.equal(audio.epoch,fixture.audioEpoch);
+assert.equal(db.prepare("SELECT COUNT(*) n FROM availability_snapshot_archive WHERE scope='model:fixture-a'").get().n,0);
+assert.equal(stats.channelAvailability().rows.some(r=>r.modelId==='fixture-a'),false);
+assert.equal(db.prepare("SELECT COUNT(*) n FROM channel_observations WHERE id LIKE 'control-%'").get().n,fixture.rawBefore);
+console.log('AVAILABILITY_CONTROLS_RESTART 6 checks passed');
+stats.stopChannelAvailabilityBackground();lines.stopLineAvailabilityBackground();(await import('../src/store/db.ts')).flushPendingSaves();closeSqlite();

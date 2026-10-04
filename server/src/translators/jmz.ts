@@ -1,3 +1,4 @@
+import { resolveImageNamed } from './openai.ts';
 /**
  * 简梦Z（zexitongxue.com）视频渠道翻译器（第152轮接入，异步 submit+poll）。
  *
@@ -345,16 +346,8 @@ export async function submitJmzImage(req: GenerateRequest, up: Upstream, onUpstr
 		return { ok: false, error: "简梦Z 未配置上游密钥（管理端「简梦Z」渠道或环境 JMZ_API_KEY）" };
 	}
 
-	const imgs = resolveNamed(req.inputs?.images);
+	const imgs = await resolveImageNamed(req,up.imageMaterialMode);
 	const caps = IMG_CAPS[up.upstreamModel];
-	if (caps) {
-		if (caps.imgMax === 0 && imgs.length) {
-			return { ok: false, error: `模型「${up.upstreamModel}」是纯文生模型、不支持参考图（本次携带 ${imgs.length} 张），请移除图片素材或换用其它款式` };
-		}
-		if (imgs.length > caps.imgMax) {
-			return { ok: false, error: `模型「${up.upstreamModel}」参考图上限 ${caps.imgMax} 张（当前 ${imgs.length} 张），请精简图片素材后重试` };
-		}
-	}
 
 	// prompt 注入 @Image 图例（该家无引用语法，作普通说明文字——与视频同款）
 	let prompt = buildPrompt(req);

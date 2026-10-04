@@ -13,7 +13,7 @@ export interface DispatchContext {
 	agentAutoMode?: boolean;
 }
 
-export type CommandHandler = (command: Command, ctx: DispatchContext) => void;
+export type CommandHandler = (command: Command, ctx: DispatchContext) => unknown;
 
 /**
  * 会改变节点几何（位置/尺寸/新增）的结构命令——执行后跑「严格不重叠」收口。
@@ -55,11 +55,16 @@ export class CommandBus {
 		};
 	}
 
-	dispatch(command: Command, ctx: DispatchContext): void {
+	dispatch(command: Command, ctx: DispatchContext): unknown {
 		if (ctx.agentAutoMode && !AGENT_AUTO_ALLOWED.has(command.type)) {
 			throw new Error(
 				`[CommandBus] 错峰自动模式禁止结构命令: ${command.type}（仅允许 ${[...AGENT_AUTO_ALLOWED].join(", ")}）`,
 			);
+		}
+
+		if (command.type === "deleteElements") {
+			const s = useCanvasStore.getState();
+			if (!command.nodeIds?.some((id) => s.nodes[id]) && !command.edgeIds?.some((id) => s.edges[id])) return;
 		}
 
 		// 结构命令执行前，将当前状态推入历史栈
@@ -71,7 +76,11 @@ export class CommandBus {
 		if (handlers.length === 0) {
 			console.warn(`[CommandBus] 未注册的命令处理器: ${command.type}`);
 		}
-		for (const handler of handlers) handler(command, ctx);
+		let result: unknown;
+		for (const handler of handlers) {
+			const next = handler(command, ctx);
+			if (next !== undefined) result = next;
+		}
 
 		// 严格不重叠收口（用户定：不开「重叠」时整个画布不允许任何重叠）：几何命令落地后，
 		// 若仍存在相交 → 按生成时间裁决（晚者留位、早者同枝干向下让位、多级级联）。
@@ -111,6 +120,7 @@ export class CommandBus {
 				if (changed) useCanvasStore.setState({ nodes });
 			}
 		}
+		return result;
 	}
 
 	isStructural(type: CommandType): boolean {

@@ -1,7 +1,7 @@
 {
 	"name": "Qiji",
 	"private": true,
-	"version": "2.0.0",
+	"version": "2.0.20",
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
@@ -29,6 +29,8 @@
 		"@tauri-apps/api": "^2.11.0",
 		"@tauri-apps/plugin-dialog": "^2.7.1",
 		"@tauri-apps/plugin-fs": "^2.5.1",
+		"@tauri-apps/plugin-process": "^2.3.1",
+		"@tauri-apps/plugin-updater": "^2.11.0",
 		"@xyflow/react": "^12.3.0",
 		"class-variance-authority": "^0.7.0",
 		"clsx": "^2.1.1",

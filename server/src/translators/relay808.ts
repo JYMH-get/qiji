@@ -1,3 +1,4 @@
+import { resolveImageNamed } from './openai.ts';
 /**
  * Skylee（api.808relay.com）图片渠道翻译器（第230轮接入，异步 submit+poll）。
  *
@@ -144,7 +145,7 @@ export async function submitRelay808Image(req: GenerateRequest, up: Upstream, on
 		return { ok: false, error: "Skylee 未配置上游密钥（管理端「Skylee」渠道或环境 SKYLEE_API_KEY）" };
 	}
 
-	const imgs = resolveNamed(req.inputs?.images);
+	const imgs = await resolveImageNamed(req,up.imageMaterialMode);
 	const vids = resolveNamed(req.inputs?.videos);
 	const auds = resolveNamed(req.inputs?.audios);
 	// 图片接口不吃视频/音频素材——明确报错，绝不静默丢（丢一条即 @ImageN 图例整段错位）

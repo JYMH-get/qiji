@@ -1,14 +1,27 @@
+import { applyAgentFeatureGate, type AgentFeatures } from './store/agents.ts';
 import type { GenerateRequest } from './contract.ts';
 import { inferenceRequestError, isInferenceRequestPurpose } from './inferenceComposition.ts';
 import { getDefaultTemplate, getInferenceTemplate, listEnabledTemplatesForAgent } from './store/templates.ts';
 
 interface InferenceCaller {
   agentNode?: { id: string };
-  user?: { agentId?: string };
+  user?: { agentId?: string; features?: AgentFeatures };
 }
 
-/** 生成与批量入口共用；旧客户端的分离式正文也必须检查创作方案及输出格式的开放范围。 */
+/** 源站及 relay 的生成、批量入口均在转发和扣费前检查双模权限。 */
+export function dualModeRequestErrorForCaller(request: GenerateRequest, caller: InferenceCaller): string | undefined {
+  const features = applyAgentFeatureGate(caller.agentNode?.id ?? caller.user?.agentId, caller.user?.features);
+  if (features?.dualMode === false && (
+    request.purpose === 'storyboard.toVideoPrompt' || request.purpose === 'storyboard.singleShot'
+    || request.purpose === 'storyboard.toImagePrompt'
+    || request.purpose === 'storyboard.split' && request.inference?.outputMode !== 'unified'
+    || isInferenceRequestPurpose(request.purpose) && request.inference?.outputMode === 'storyboard'
+  )) return '双模已关闭，请选用同源';
+}
+
 export function inferenceRequestErrorForCaller(request: GenerateRequest, caller: InferenceCaller): string | undefined {
+  const permissionError = dualModeRequestErrorForCaller(request, caller);
+  if (permissionError) return permissionError;
   const split = request.purpose === 'storyboard.split';
   const template = request.templateId ? getInferenceTemplate(request.templateId) : split ? getDefaultTemplate('storyboard.split') : undefined;
   if (request.inference?.source !== 'skill' && template?.purpose === 'storyboard.split' && !split) return '仅拆分模板只能用于仅拆分请求';

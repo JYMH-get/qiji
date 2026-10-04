@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+if(!import.meta.url.includes('qiji-line-availability-'))throw Error('Sandbox only');
+globalThis.fetch=async()=>{throw Error('No upstream allowed');};
+const state=JSON.parse(fs.readFileSync('data/line-restart.json','utf8'));Date.now=()=>state.now;
+await import('../src/store/logs.ts');
+const stats=await import('../src/lineAvailability.ts');stats.stopLineAvailabilityBackground();
+const {adjustmentView,adjustedHistory}=await import('../src/availabilityAdjustments.ts');
+const scope=stats.lineHistoryScope('fixture-line',state.now);
+assert.equal(scope.history.length,2);assert.equal(scope.history[0].successRate,.7425);
+assert.equal(adjustmentView(scope,state.now).slots.some(p=>p.edit?.until===state.editUntil),true);
+assert.equal(adjustedHistory(scope.history,scope.scope,state.now).some(p=>p.source==='self-test'),true);
+assert.ok(adjustmentView(scope,state.now).audit.length>=4);
+console.log('LINE_AVAILABILITY_RESTART 5 checks passed');
+(await import('../src/store/db.ts')).flushPendingSaves();(await import('../src/store/sqlite.ts')).closeSqlite();

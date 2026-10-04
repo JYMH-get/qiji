@@ -1,5 +1,6 @@
+import { withResultStorage } from "./resultStorage.ts";
+import { upstreamCreditFeedback } from '../creditFeedback.ts';
 import { beginChannelObservation } from '../store/channelObservations.ts';
-import { matchRoute as availabilityRoute } from '../store/models.ts';
 import { mergeTextUsage } from '../textPricing.ts';
 import { finishTextBilling, linkTextBillingTask } from '../store/textBilling.ts';
 /**
@@ -18,7 +19,7 @@ import { createAsset } from "../store/assets.ts";
 import { isOssConfigured } from "../store/oss.ts";
 import { finishLog, attachUpstream, getLog } from "../store/logs.ts";
 import { userPromptBackups } from '../store/userPromptBackups.ts';
-import { resolveUpstream } from "./upstream.ts";
+import { resolveUpstream, resolveUpstreamRoute } from "./upstream.ts";
 import { translateOpenAIText, translateOpenAIImage, translateEcho, type ImageResult, type OnDelta, type OnUpstream } from "./openai.ts";
 import { translateAnthropicText } from "./anthropic.ts";
 import { translateGeminiImage } from "./gemini.ts";
@@ -37,10 +38,13 @@ import { submitJmtVideo, pollJmtVideo } from "./jmt.ts";
 import { submitJmfVideo, pollJmfVideo } from "./jmf.ts";
 import { submitOverseasVideo, pollOverseasVideo } from "./overseas.ts";
 import { submitSuanliVideo, pollSuanliVideo } from "./suanli.ts";
-import { translateJmhImage, translateJmhVideo } from "./jmh.ts";
 import { translateYaliImage } from "./yali.ts";
 import { submitRelay808Image, pollRelay808Image } from "./relay808.ts";
 import { translateConggeImage, submitConggeVideo, pollConggeVideo } from "./congge.ts";
+import { submitXiha888Image, pollXiha888Image } from "./xiha888.ts";
+import { submitLongyouVideo, pollLongyouVideo } from "./longyou.ts";
+import { submitZonghengVideo, pollZonghengVideo } from './zongheng.ts';
+import { submitXingguangVideo, pollXingguangVideo } from './xingguang.ts';
 import { submitAutodlVideo, pollAutodlVideo } from "./autodl.ts";
 import { submitQijicloudVideo, pollQijicloudVideo } from "./qijicloud.ts";
 import { submitBysVideo, pollBysVideo } from "./bys.ts";
@@ -53,6 +57,13 @@ import { resolveContentType } from "./contentType.ts";
 import { imageUpstreamParams } from "../imageRouting.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Normalize only failures from the generation pipeline; raw upstream reports remain in log sections ③④. */
+function failGeneration(taskId: string, rawError: string, logId?: string, queuedMs?: number): void {
+	const error = upstreamCreditFeedback(rawError);
+	failTask(taskId, error);
+	if (logId) finishLog(logId, { status: 'failed', error, taskId, queuedMs });
+}
 
 /** 资产 id 类型前缀：客户端可用 params.idPrefix 覆盖（如群像 G / 配角 A），否则按 purpose 推导 */
 function assetPrefixFor(req: GenerateRequest): string {
@@ -86,8 +97,9 @@ function placeholder(capability: Capability): { data: Buffer; contentType: strin
 
 async function createStubTask(req: GenerateRequest, capability: Capability, logId?: string): Promise<DispatchResult> {
 	const ph = placeholder(capability);
-	const asset = await createAsset(ph.data, ph.contentType, capability, { prefix: assetPrefixFor(req), name: assetNameOf(req) });
-	const stubAsset: AssetOut = { id: asset.id, type: capability, url: asset.url, meta: { stub: true, model: req.model } };
+	const saveToOss = getModelDef(req.model)?.saveToOss !== false;
+	const asset = await createAsset(ph.data, ph.contentType, capability, { prefix: assetPrefixFor(req), name: assetNameOf(req), saveToOss });
+	const stubAsset: AssetOut = { id: asset.id, type: capability, url: asset.url, meta: { stub: true, model: req.model, saveToOss } };
 	const rec = createTask({ clientTaskId: req.clientTaskId, capability, stubAsset });
 	if (logId) finishLog(logId, { status: "success", response: { taskId: rec.taskId, stub: true, assetId: asset.id }, taskId: rec.taskId });
 	return { kind: "async", taskId: rec.taskId };
@@ -155,6 +167,10 @@ const VIDEO_DRIVERS: Record<string, VideoDriver> = {
 	"skylee-image": { submit: submitRelay808Image, poll: pollRelay808Image },
 	"congge-video": { submit: submitConggeVideo, poll: pollConggeVideo },
 	// autodl（autodl.art·ComfyUI 工作流，第234轮）：提交 /comfyui_workflow/{workflow_id}、查询 /result/{task_id}
+	"xiha888-image": { submit: submitXiha888Image, poll: pollXiha888Image },
+	"longyou-video": { submit: submitLongyouVideo, poll: pollLongyouVideo },
+	"zongheng-video": { submit: submitZonghengVideo, poll: pollZonghengVideo },
+	"xingguang-video": { submit: submitXingguangVideo, poll: pollXingguangVideo },
 	"autodl-video": { submit: submitAutodlVideo, poll: pollAutodlVideo },
 	// 奇迹云（第249轮，自建 autodl 实例池 + ComfyUI 直驱）：submit=入本地队列、poll=读池（均零外发 HTTP）
 	"qijicloud-comfy": { submit: submitQijicloudVideo, poll: pollQijicloudVideo },
@@ -171,7 +187,10 @@ const VIDEO_DRIVERS: Record<string, VideoDriver> = {
  *  简梦P 文档建议每 10-15 秒轮询一次 → 同 12s；简梦T/简梦F 文档建议每 3-5 秒轮询 → 5s；
  *  congge 文档「接入注意」建议 3-8 秒一次 → 5s。
  *  提交（createVideoPollingTask）与重启续轮询（resumeVideoPolling）共用本表。 */
-const BUILTIN_POLL_INTERVALS: Record<string, number> = { "aivide-video": 12000, "jianmengp-video": 12000, "jmt-video": 5000, "jmf-video": 5000, "congge-video": 5000,
+const BUILTIN_POLL_INTERVALS: Record<string, number> = {
+	"zongheng-video": 10000,
+	"xingguang-video": 3000,
+	"xiha888-image": 4000, "longyou-video": 3000, "aivide-video": 12000, "jianmengp-video": 12000, "jmt-video": 5000, "jmf-video": 5000, "congge-video": 5000,
 	// BYS 文档「建议每 5~10 秒轮询一次」→ 取 6s
 	"bys-video": 6000,
 	// QiQi 文档 §2/§16「每隔 3～5 秒查询一次」→ 取 4s
@@ -215,6 +234,7 @@ async function runVideoPollLoop(opts: {
 	/** 结果能力：video=转存 OSS 永久链；image/audio=下载字节落资产。缺省 video（内置视频协议） */
 	capability?: Capability;
 	/** 轮询间隔（毫秒）；缺省 8s（内置协议）。自定义协议可在 poll.intervalMs 配 */
+	saveToOss?: boolean;
 	intervalMs?: number;
 }): Promise<void> {
 	const { taskId, req, up, driver, upstreamTaskId, deadline, logId, onUpstream } = opts;
@@ -228,7 +248,9 @@ async function runVideoPollLoop(opts: {
 		if (st.queuedMs !== undefined) queuedMs = st.queuedMs;
 		if (st.status === "completed") {
 			let result: TaskState["result"];
-			if (capability === "video") {
+			if (opts.saveToOss === false && !Object.keys(st.resultHeaders ?? {}).length) {
+				result = { assets: [{ id: `LC-${taskId}`, type: capability, url: st.videoUrl, meta: { cover: st.coverUrl, model: taskPublicModel(taskId) ?? req.model, saveToOss: false } }] };
+			} else if (capability === "video" && opts.saveToOss !== false) {
 				// 把上游视频（如简梦 6h 链接 / r2.dev 直链）转存为**永久 OSS 直链**：
 				// ①根治过期；②给客户端一个 CORS 友好、可下载到本地 asset:// 的源（直显 https 被 CSP media-src 拦）。
 				// 转存失败（未配 OSS / 源不可达）→ 回退上游直链，并标记 meta.rehosted=false 供客户端二次补救。
@@ -238,19 +260,18 @@ async function runVideoPollLoop(opts: {
 					: { id: `vid-${upstreamTaskId}`, url: st.videoUrl, rehosted: false };
 				result = { assets: [{ id: vAsset.id, type: "video" as Capability, url: vAsset.url, meta: { cover: st.coverUrl, model: taskPublicModel(taskId) ?? req.model, rehosted: vAsset.rehosted } }] };
 			} else {
-				// 图/音异步：下载完成链接的字节，落为永久资产（OSS/本机），与图像任务同归宿
-				// （resultHeaders：结果链接带鉴权的渠道（简梦Z 图片）由 poll 附下载头，第153轮）
+				// 图/音异步，以及关闭 OSS 但结果需要鉴权的任务：服务端带头下载，密钥不交给客户端。
+				// 关闭 OSS 时复用现有 /raw 内存资产，不进入 OSS 补传；公开直链仍走上方直返分支。
 				try {
 					const dl = await fetch(st.videoUrl, { signal: AbortSignal.timeout(180000), headers: st.resultHeaders });
 					if (!dl.ok) throw new Error(`下载结果资产 HTTP ${dl.status}`);
-					const ct = resolveContentType(dl.headers.get("content-type"), capability === "audio" ? "audio/mpeg" : "image/png");
+					const ct = resolveContentType(dl.headers.get("content-type"), capability === "video" ? "video/mp4" : capability === "audio" ? "audio/mpeg" : "image/png");
 					const bytes = Buffer.from(await dl.arrayBuffer());
-					const asset = await createAsset(bytes, ct, capability, { prefix: assetPrefixFor(req), name: assetNameOf(req) });
-					result = { assets: [{ id: asset.id, type: capability, url: asset.url, meta: { model: taskPublicModel(taskId) ?? req.model } }] };
+					const asset = await createAsset(bytes, ct, capability, { prefix: assetPrefixFor(req), name: assetNameOf(req), saveToOss: opts.saveToOss });
+					result = { assets: [{ id: asset.id, type: capability, url: asset.url, meta: { cover: st.coverUrl, model: taskPublicModel(taskId) ?? req.model, ...(opts.saveToOss === false ? { saveToOss: false } : {}) } }] };
 				} catch (e) {
 					const m = (e as Error).message;
-					failTask(taskId, m);
-					if (logId) finishLog(logId, { status: "failed", error: m, taskId, queuedMs });
+					failGeneration(taskId, m, logId, queuedMs);
 					return;
 				}
 			}
@@ -259,8 +280,7 @@ async function runVideoPollLoop(opts: {
 			return;
 		}
 		if (st.status === "failed") {
-			failTask(taskId, st.error);
-			if (logId) finishLog(logId, { status: "failed", error: st.error, taskId, queuedMs });
+			failGeneration(taskId, st.error, logId, queuedMs);
 			return;
 		}
 		setTaskProgress(taskId, st.progress, { queuePosition: st.queuePosition, queueTotal: st.queueTotal, stageText: st.stageText, queuedMs: st.queuedMs });
@@ -277,19 +297,20 @@ async function runVideoPollLoop(opts: {
  */
 function createVideoPollingTask(req: GenerateRequest, up: Upstream, protocol: string, driver: VideoDriver, logId?: string, onUpstream?: OnUpstream, capability: Capability = "video", pollOpts?: { intervalMs?: number; timeoutMs?: number }): DispatchResult {
 	const rec = createRunningTask(capability, req.clientTaskId, logId);
+	const saveToOss = getModelDef(req.model)?.saveToOss !== false;
 	const deadlineMs = pollOpts?.timeoutMs && pollOpts.timeoutMs > 0 ? pollOpts.timeoutMs : VIDEO_DEADLINE_MS;
 	(async () => {
 		const sub = await driver.submit(req, up, onUpstream, (progress, stageText) => {
 			setTaskProgress(rec.taskId, progress, { stageText });
 		});
 		if (!sub.ok) {
-			failTask(rec.taskId, sub.error);
-			if (logId) finishLog(logId, { status: "failed", error: sub.error, taskId: rec.taskId });
+			failGeneration(rec.taskId, sub.error, logId);
 			return;
 		}
 		setTaskResume(rec.taskId, {
 			kind: "video",
 			protocol,
+			saveToOss,
 			upstreamTaskId: sub.taskId,
 			model: req.model,
 			purpose: req.purpose,
@@ -299,12 +320,11 @@ function createVideoPollingTask(req: GenerateRequest, up: Upstream, protocol: st
 		await runVideoPollLoop({
 			taskId: rec.taskId, req, up, driver,
 			upstreamTaskId: sub.taskId, deadline: Date.now() + deadlineMs, logId, onUpstream, capability,
-			intervalMs: pollOpts?.intervalMs,
+			saveToOss, intervalMs: pollOpts?.intervalMs,
 		});
 	})().catch((err) => {
 		const m = (err as Error).message;
-		failTask(rec.taskId, m);
-		if (logId) finishLog(logId, { status: "failed", error: m, taskId: rec.taskId });
+		failGeneration(rec.taskId, m, logId);
 	});
 	return { kind: "async", taskId: rec.taskId };
 }
@@ -328,10 +348,9 @@ export function resumeVideoPolling(rec: TaskRecord): boolean {
 	const customProto = !isBuiltinProtocol(rs.protocol) ? getProtocolDef(rs.protocol) : undefined;
 	const totalMs = customProto?.poll?.timeoutMs && customProto.poll.timeoutMs > 0 ? customProto.poll.timeoutMs : VIDEO_DEADLINE_MS;
 	const deadline = Math.max(Date.now() + 10 * 60 * 1000, rec.submittedAt + totalMs);
-	runVideoPollLoop({ taskId: rec.taskId, req, up, driver, upstreamTaskId: rs.upstreamTaskId, deadline, logId, onUpstream, capability: rs.capability, intervalMs: customProto?.poll?.intervalMs ?? BUILTIN_POLL_INTERVALS[rs.protocol] }).catch((err) => {
+	runVideoPollLoop({ taskId: rec.taskId, req, up, driver, upstreamTaskId: rs.upstreamTaskId, deadline, logId, onUpstream, capability: rs.capability, saveToOss: rs.saveToOss ?? (model.saveToOss !== false), intervalMs: customProto?.poll?.intervalMs ?? BUILTIN_POLL_INTERVALS[rs.protocol] }).catch((err) => {
 		const m = (err as Error).message;
-		failTask(rec.taskId, m);
-		if (logId) finishLog(logId, { status: "failed", error: m, taskId: rec.taskId });
+		failGeneration(rec.taskId, m, logId);
 	});
 	return true;
 }
@@ -339,7 +358,8 @@ export function resumeVideoPolling(rec: TaskRecord): boolean {
 /** 真异步图像任务：先返回 taskId，后台调上游 → 落资产 → 回填任务与日志（capability 缺省 image，自定义音频协议传 audio） */
 function createImageTask(req: GenerateRequest, run: () => Promise<ImageResult>, logId?: string, capability: Capability = "image"): DispatchResult {
 	const rec = createRunningTask(capability, req.clientTaskId, logId);
-	run()
+	const saveToOss = getModelDef(req.model)?.saveToOss !== false;
+	withResultStorage(saveToOss, run)
 		.then(async (r) => {
 			if (!r.ok) {
 				// 第158轮（用户定）：上游已成功出图、只是**服务端下载结果失败**（fallbackUrl 仅网络类失败携带）
@@ -353,19 +373,23 @@ function createImageTask(req: GenerateRequest, run: () => Promise<ImageResult>, 
 					if (logId) finishLog(logId, { status: "success", response: result, taskId: rec.taskId });
 					return;
 				}
-				failTask(rec.taskId, r.error);
-				if (logId) finishLog(logId, { status: "failed", error: r.error, taskId: rec.taskId });
+				failGeneration(rec.taskId, r.error, logId);
 				return;
 			}
-			const asset = await createAsset(r.data, r.contentType, capability, { prefix: assetPrefixFor(req), name: assetNameOf(req) });
-			const result = { assets: [{ id: asset.id, type: capability, url: asset.url, meta: { model: taskPublicModel(rec.taskId) ?? req.model } }] };
+			if ("url" in r) {
+				const result = { assets: [{ id: `LC-${rec.taskId}`, type: capability, url: r.url, meta: { model: taskPublicModel(rec.taskId) ?? req.model, saveToOss: false } }] };
+				completeTask(rec.taskId, result);
+				if (logId) finishLog(logId, { status: "success", response: result, taskId: rec.taskId });
+				return;
+			}
+			const asset = await createAsset(r.data, r.contentType, capability, { prefix: assetPrefixFor(req), name: assetNameOf(req), saveToOss });
+			const result = { assets: [{ id: asset.id, type: capability, url: asset.url, meta: { model: taskPublicModel(rec.taskId) ?? req.model, saveToOss } }] };
 			completeTask(rec.taskId, result);
 			if (logId) finishLog(logId, { status: "success", response: result, taskId: rec.taskId });
 		})
 		.catch((err) => {
 			const msg = (err as Error).message;
-			failTask(rec.taskId, msg);
-			if (logId) finishLog(logId, { status: "failed", error: msg, taskId: rec.taskId });
+			failGeneration(rec.taskId, msg, logId);
 		});
 	return { kind: "async", taskId: rec.taskId };
 }
@@ -437,14 +461,12 @@ function createTextTask(req: GenerateRequest, run: (onDelta: OnDelta) => Promise
 				completeTask(rec.taskId, r.result);
 				if (logId) finishLog(logId, { status: "success", response: r.result, taskId: rec.taskId });
 			} else {
-				failTask(rec.taskId, r.error || "生成失败");
-				if (logId) finishLog(logId, { status: "failed", error: r.error, taskId: rec.taskId });
+				failGeneration(rec.taskId, r.error || "生成失败", logId);
 			}
 		})
 		.catch((err) => {
 			const msg = (err as Error).message;
-			failTask(rec.taskId, msg);
-			if (logId) finishLog(logId, { status: "failed", error: msg, taskId: rec.taskId });
+			failGeneration(rec.taskId, msg, logId);
 		});
 	return { kind: "async", taskId: rec.taskId };
 }
@@ -464,18 +486,18 @@ export async function dispatchGenerate(
 	// 备份元数据不进入上游协议或自定义翻译器。
 	if (req.usedPresets) { const { usedPresets: _backups, ...generation } = req; req = generation; }
 	const model = getModelDef(req.model);
-	if (!model || !model.enabled) {
+	if (!model || (model.hidden && !model.enabled)) {
 		const error = `模型不存在或已禁用：${req.model}`;
 		if (logId) finishLog(logId, { status: "failed", error });
 		return { kind: "sync", status: "failed", error };
 	}
-	// 用户端图片契约恒为比例/分辨率/质量；只有选定实际模型后才派生上游 size/原生字段。
+	// 保留原参数，在选定模型后仅补齐缺失的图片协议字段。
 	const wireReq: GenerateRequest = model.capability === "image"
 		? { ...req, params: imageUpstreamParams(model, (req.params ?? {}) as Record<string, unknown>) as GenerateRequest["params"] }
 		: req;
 	const up = resolveUpstream(model, wireReq);
   if(logId && !model.hidden && !['echo','stub'].includes(model.protocol)) beginChannelObservation({
-    id:logId,modelId:model.id,modelName:model.label,channelId:availabilityRoute(model,wireReq.params)?.channelId??model.channelId??'',capability:model.capability,familyId:model.familyId
+    id:logId,modelId:model.id,modelName:model.label,channelId:resolveUpstreamRoute(model,wireReq.params)?.channelId??model.channelId??'',capability:model.capability,familyId:model.familyId
   });
 	// 上游(管理端↔网关/第三方)请求/响应记录器：写入对应日志（③④）
 	const onUpstream: OnUpstream | undefined = logId ? (rec) => attachUpstream(logId, rec) : undefined;
@@ -519,13 +541,6 @@ export async function dispatchGenerate(
 		case "congge-image":
 			// congge（congchen.top，第233轮）：同步单请求出图（generations 文生图 / edits 图生图，垫图≤4 张）
 			return createImageTask(req, () => translateConggeImage(wireReq, up, onUpstream), logId);
-		case "jmh-image":
-			// 简梦H（ZhengAPI，第154轮）：同步单请求出图（grok=images/generations、firefly=chat stream:false）
-			return createImageTask(req, () => translateJmhImage(wireReq, up, onUpstream), logId);
-		case "jmh-video":
-			// 简梦H 视频（第155轮）：chat/completions SSE 流式单请求（整流读完即有链接，1~10 分钟）——
-			// 非 submit+poll，复用 createImageTask 管线按 video 能力落资产（下载成片字节→createAsset 永久 OSS）
-			return createImageTask(req, () => translateJmhVideo(req, up, onUpstream), logId, "video");
 		case "jianmeng-video":
 		case "openai-video":
 		case "sudashui-video":
@@ -541,6 +556,9 @@ export async function dispatchGenerate(
 		case "overseas-video":
 		case "suanli-video":
 		case "congge-video":
+		case "longyou-video":
+		case "zongheng-video":
+		case "xingguang-video":
 		case "autodl-video":
 		case "qijicloud-comfy":
 		case "bys-video":
@@ -549,6 +567,8 @@ export async function dispatchGenerate(
 		case "zero007-video":
 			return createVideoPollingTask(req, up, model.protocol, VIDEO_DRIVERS[model.protocol], logId, onUpstream,
 				"video", { intervalMs: BUILTIN_POLL_INTERVALS[model.protocol] });
+		case "xiha888-image":
+			return createVideoPollingTask(wireReq, up, model.protocol, VIDEO_DRIVERS[model.protocol], logId, onUpstream, "image", { intervalMs: 4000 });
 		case "jmz-image":
 		case "aistars-image":
 		case "skylee-image":

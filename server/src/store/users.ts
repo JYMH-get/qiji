@@ -11,6 +11,33 @@ import { loadJson, saveJson, genId, DATA_DIR } from "./db.ts";
 import { config } from "../config.ts";
 import { getDeviceLimit } from "./settings.ts";
 
+export interface UserTeamWallet {
+	teamId: string;
+	ownerId: string;
+	ownerAgentId?: string;
+	balance: number;
+	closed?: boolean;
+}
+
+/** Source-only audit. Archived currency is never included in an available balance. */
+export interface UserTransferArchive {
+	transferId: string;
+	token: string;
+	requestHash: string;
+	affected: number;
+	userName: string;
+	account?: string;
+	at: string;
+	actor: "source-admin";
+	sourceAgentId: string | null;
+	sourceName: string;
+	targetAgentId: string | null;
+	targetName: string;
+	personalCredits: number;
+	membership?: User["membership"];
+	ownedTeamWallets: (UserTeamWallet & { memberId: string })[];
+}
+
 export interface User {
 	id: string;
 	name: string;
@@ -18,6 +45,10 @@ export interface User {
 	enabled: boolean;
 	note: string;
 	credits: number;
+	/** 团长分配的余额单独保管，币种/价格归属不随团员自己的渠道商改变。 */
+	teamWallets?: Record<string, UserTeamWallet>;
+	/** Private migration archives; must not be spread into user or merchant responses. */
+	transferHistory?: UserTransferArchive[];
 	/** 累计消耗（总） */
 	totalSpent: number;
 	/** 当日消耗（配合 dailyDate 判定是否跨天清零） */
@@ -40,7 +71,7 @@ export interface User {
 	 *  libtv：LibTV 授权入口；dreamina：即梦授权入口（均为个人中心连接 + Seedance 2.0 本地 CLI 生成，生成不经管理端不扣积分）。
 	 *  comfyui：ComfyUI 直连入口（个人中心绑定地址 + 本地直连生成，生成不经管理端不扣生成积分、仅按次手续费）。
 	 *  modes（第130轮）：动态视频模式开关 modeId→bool（缺省/字段缺省=开）；关=该模式下模型客户端隐藏 + generate/batch 403。 */
-	features?: { assetMode?: boolean; canvasMode?: boolean; editorMode?: boolean; libtv?: boolean; dreamina?: boolean; comfyui?: boolean; modes?: Record<string, boolean> };
+	features?: { dualMode?: boolean; assetMode?: boolean; canvasMode?: boolean; editorMode?: boolean; libtv?: boolean; dreamina?: boolean; comfyui?: boolean; modes?: Record<string, boolean> };
 	/** 归属渠道商 id（P2b：注册时填渠道商邀请码写入；空=平台直属用户） */
 	agentId?: string;
 	/** 收藏配额覆盖（P1，字节）：空=跟随全局默认 settings.favQuotaBytes（200MB）。
@@ -53,7 +84,7 @@ export interface User {
 	invitedBy?: string;
 	/** 会员状态（第246轮，单档）：核销会员卡写入；expiresAt 过期即失效（懒判定，不做清理任务）。
 	 *  discountPercent 为核销那张卡冻结的折扣（95=9.5折）——续费以新卡为准。 */
-	membership?: { planName: string; expiresAt: string; discountPercent: number; activatedAt?: string };
+	membership?: { planName: string; expiresAt: string; discountPercent: number; activatedAt?: string; agentId?: string };
 	createdAt: string;
 	updatedAt: string;
 	lastSeenAt?: string;
@@ -330,33 +361,53 @@ export function updateUser(id: string, patch: Partial<Omit<User, "id" | "created
 	return u;
 }
 
-/** 管理端迁移的唯一落盘步骤：整批一次原子写，余额、登录身份及其余字段原样保留。
- * 调用方先同步校验权限与目标；写盘成功才更新现有对象，失败不污染内存。
- * 保留对象引用，保证已鉴权的请求能观察到归属变化并重新校验。 */
-export function transferUsersToAgent(ids: readonly string[], agentId: string | undefined): number {
-	const selected = new Set(ids);
-	if ([...selected].some((id) => !getUser(id))) throw new Error("迁移用户不存在");
-	const now = new Date().toISOString();
-	const changes = users.filter((u) => selected.has(u.id) && (u.agentId || undefined) !== agentId);
-	if (!changes.length) return 0;
-	const changing = new Set(changes.map((u) => u.id));
-	const next = users.map((u) => {
-		if (!changing.has(u.id)) return u;
-		const copy = { ...u, updatedAt: now };
-		if (agentId) copy.agentId = agentId;
-		else delete copy.agentId;
+/** Called only by the synchronously validated transfer service. One atomic users.json
+ * commit includes ownership, archived currency, all leader wallets, and key revocation.
+ * Build separate objects first: a failed write must leave every live balance unchanged. */
+export function commitUserTransfer(entries: { userId: string; archive: UserTransferArchive }[]): void {
+	const byId = new Map(entries.map(e => [e.userId, e.archive]));
+	if (byId.size !== entries.length || entries.some(e => !getUser(e.userId))) throw new Error("迁移用户不存在");
+	const changed: { original: User; next: User }[] = [];
+	const next = users.map(original => {
+		const archive = byId.get(original.id);
+		const ownsChangedWallet = Object.values(original.teamWallets ?? {}).some(w => byId.has(w.ownerId));
+		if (!archive && !ownsChangedWallet) return original;
+		const copy: User = { ...original };
+		if (archive) {
+			copy.transferHistory = [...(original.transferHistory ?? []), structuredClone(archive)];
+			copy.credits = 0;
+			delete copy.membership;
+			if (archive.targetAgentId) copy.agentId = archive.targetAgentId;
+			else delete copy.agentId;
+			copy.accessKey = genAccessKey();
+			copy.devices = [];
+		}
+		if (ownsChangedWallet) {
+			copy.teamWallets = Object.fromEntries(Object.entries(original.teamWallets ?? {}).map(([id, wallet]) => {
+				const ownerTransfer = byId.get(wallet.ownerId);
+				if (!ownerTransfer) return [id, wallet];
+				const updated = { ...wallet, balance: 0 };
+				if (ownerTransfer.targetAgentId) updated.ownerAgentId = ownerTransfer.targetAgentId;
+				else delete updated.ownerAgentId;
+				return [id, updated];
+			}));
+		}
+		copy.updatedAt = entries[0].archive.at;
+		changed.push({ original, next: copy });
 		return copy;
 	});
 	saveJson(FILE, next);
-	for (const u of changes) {
-		if (agentId) u.agentId = agentId;
-		else delete u.agentId;
-		u.updatedAt = now;
+	for (const { original, next: copy } of changed) {
+		// Keep identity references held by already-authenticated handlers live.
+		for (const key of Object.keys(original)) if (!(key in copy)) delete (original as unknown as Record<string, unknown>)[key];
+		Object.assign(original, copy);
 	}
-	return changes.length;
 }
 
 export function deleteUser(id: string): boolean {
+	const user = getUser(id);
+	// Allocations remain the leader's funds even when a merchant deletes its member.
+	for (const wallet of Object.values(user?.teamWallets ?? {})) closeTeamWallet(id,wallet.teamId);
 	const before = users.length;
 	users = users.filter((u) => u.id !== id);
 	if (users.length !== before) {
@@ -409,6 +460,88 @@ export function applyUserCreditsDelta(payerId: string, statsUserId: string, delt
 /** 读余额（结算闸门做 pre/post 快照用）；用户不存在返回 null */
 export function userCredits(id: string): number | null {
 	return getUser(id)?.credits ?? null;
+}
+
+// Preserve already granted benefits while freezing their existing tenant ownership.
+// Once set, membership checks never accept a different tenant's grant.
+{
+	const legacy = users.filter(u => u.agentId && u.membership && !Object.prototype.hasOwnProperty.call(u.membership, 'agentId'));
+	if (legacy.length) {
+		const backup = join(DATA_DIR, `${FILE}.bak-membership-tenant`);
+		if (existsSync(join(DATA_DIR, FILE)) && !existsSync(backup)) copyFileSync(join(DATA_DIR, FILE), backup);
+		for (const u of legacy) u.membership!.agentId = u.agentId;
+		persist();
+	}
+}
+
+export function userTeamWallet(userId: string, teamId: string): UserTeamWallet | undefined {
+	return getUser(userId)?.teamWallets?.[teamId];
+}
+
+export function activeTeamCredits(userId: string, teamId: string): number {
+	const wallet = userTeamWallet(userId, teamId);
+	return wallet && !wallet.closed ? wallet.balance : 0;
+}
+
+/** 旧分配余额按旧系统可收回口径一次性拆分，个人+团队总额保持不变；一个users.json原子写。 */
+export function initializeTeamWallet(userId: string, teamId: string, ownerId: string, legacyGranted = 0): UserTeamWallet | undefined {
+	const u = getUser(userId), owner = getUser(ownerId);
+	if (!u || !owner) return;
+	const existing = u.teamWallets?.[teamId];
+	if (existing) return existing;
+	const balance = Math.max(0, Math.min(Math.floor(legacyGranted), Math.max(0, u.credits)));
+	if (balance > 0) {
+    const backup = join(DATA_DIR, `${FILE}.bak-team-wallets`);
+    if (existsSync(join(DATA_DIR, FILE)) && !existsSync(backup)) copyFileSync(join(DATA_DIR, FILE), backup);
+  }
+  const wallet: UserTeamWallet = { teamId, ownerId, ownerAgentId: owner.agentId, balance };
+	(u.teamWallets ??= {})[teamId] = wallet;
+	u.credits -= balance;
+	u.updatedAt = new Date().toISOString();
+	persist();
+	return wallet;
+}
+
+/** 分配和收回仅在团长个人账户与其团队钱包之间移动，不改变团员个人余额和消费统计。 */
+export function transferTeamCredits(ownerId: string, userId: string, teamId: string, delta: number): { ok: boolean; error?: string } {
+	const owner = getUser(ownerId), u = getUser(userId), wallet = userTeamWallet(userId, teamId);
+	if (!owner || !u || !wallet || wallet.ownerId !== ownerId) return { ok: false, error: '团队积分账户不存在' };
+	if (!Number.isSafeInteger(delta) || delta === 0) return { ok: false, error: '金额需为非零整数' };
+	if (delta > 0 && owner.credits < delta) return { ok: false, error: `团长积分不足：需 ${delta}，剩余 ${owner.credits}` };
+	if (delta < 0 && wallet.balance < -delta) return { ok: false, error: `只能收回团队积分余量（当前 ${Math.max(0, wallet.balance)}）` };
+	if (wallet.ownerAgentId !== owner.agentId) return { ok: false, error: '团队积分归属不一致' };
+	owner.credits -= delta;
+	wallet.balance += delta;
+	wallet.closed = false;
+	owner.updatedAt = u.updatedAt = new Date().toISOString();
+	persist();
+	return { ok: true };
+}
+
+/** 结算底层原语；统一闸门在全部账户校验后落盘。 */
+export function applyTeamCreditsDelta(userId: string, teamId: string, statsUserId: string, delta: number, allowDebt = false): boolean {
+	const u = getUser(userId), wallet = userTeamWallet(userId, teamId);
+	if (!u || !wallet || wallet.closed || (!allowDebt && wallet.balance + delta < 0)) return false;
+	wallet.balance += delta;
+	u.updatedAt = new Date().toISOString();
+	const stats = getUser(statsUserId);
+	if (stats) { bumpSpendStats(stats, -delta); stats.updatedAt = u.updatedAt; }
+	return true;
+}
+
+/** 退出后钱包留作退款路由记录；剩余积分原路归团长，个人余额不参与。 */
+export function closeTeamWallet(userId: string, teamId: string): number {
+	const wallet = userTeamWallet(userId, teamId), u = getUser(userId);
+	if (!wallet || wallet.closed || !u) return 0;
+	const owner = getUser(wallet.ownerId);
+	if (!owner) return 0;
+	const returned = wallet.balance;
+	owner.credits += returned;
+	wallet.balance = 0;
+	wallet.closed = true;
+	u.updatedAt = owner.updatedAt = new Date().toISOString();
+	persist();
+	return returned;
 }
 
 /** 立即落盘 users.json（结算闸门在一次结算的所有内存变更完成后调用一次） */
@@ -477,6 +610,7 @@ export function transferCredits(fromId: string, toId: string, amount: number): {
 	const from = getUser(fromId);
 	const to = getUser(toId);
 	if (!from || !to) return { ok: false, error: "用户不存在" };
+	if (from.agentId !== to.agentId) return { ok: false, error: "不同归属的个人积分不能互转，请使用团队积分分配" };
 	if (from.credits < n) return { ok: false, error: `积分不足：需 ${n}，剩余 ${from.credits}` };
 	from.credits -= n;
 	to.credits += n;
@@ -493,6 +627,7 @@ export function transferCredits(fromId: string, toId: string, amount: number): {
 export function activeMembershipOf(u: User): { planName: string; expiresAt: string; discountPercent: number } | undefined {
 	const m = u.membership;
 	if (!m || !m.expiresAt) return undefined;
+	if (m.agentId !== u.agentId) return undefined;
 	if (new Date(m.expiresAt).getTime() <= Date.now()) return undefined;
 	const disc = Math.floor(Number(m.discountPercent));
 	return {
@@ -510,10 +645,12 @@ export function applyMembershipGrant(id: string, spec: { planName: string; days:
 	const u = getUser(id);
 	if (!u) return undefined;
 	const now = Date.now();
-	const base = u.membership?.expiresAt ? Math.max(now, new Date(u.membership.expiresAt).getTime()) : now;
+	const active = activeMembershipOf(u);
+	const base = active?.expiresAt ? Math.max(now, new Date(active.expiresAt).getTime()) : now;
 	const days = Math.min(3650, Math.max(1, Math.floor(Number(spec.days)) || 30));
 	const disc = Math.min(100, Math.max(50, Math.floor(Number(spec.discountPercent)) || 100));
 	u.membership = {
+		agentId: u.agentId,
 		planName: (spec.planName || "会员").slice(0, 20),
 		expiresAt: new Date(base + days * 86400000).toISOString(),
 		discountPercent: disc,

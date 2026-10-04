@@ -1,7 +1,7 @@
 /**
  * 参考视频按秒计费（第140轮，用户定「与出片同价」）。
  *
- * 规则：模型声明 `refVideoSecondsWeight`（>0，按秒视频模型专用）时——
+ * 规则：模型声明 `refVideoSecondsWeight`（>0，按秒视频模型或自动路由视频档位价）时——
  *   计费秒数 = duration + 系数 × Σ ceil(每条参考视频秒)   （不足1秒算1秒，逐条向上取整）
  * 实现方式：planBilling **之前**把合成后的计费秒数写进计费参数副本（原 params 不动、发上游不受影响），
  * 于是 用户售价/渠道商逐级结算链/档位路由价/402 预检/失败退款 全部自动包含参考视频费用——
@@ -73,7 +73,7 @@ export interface RefVideoBilling {
 }
 
 /**
- * 计算含参考视频折算的计费参数。仅当 模型声明 weight>0 且配了 costField 且带视频素材 且
+ * 计算含参考视频折算的计费参数。仅当 模型声明 weight>0 且支持按秒/自动路由档位计费 且带视频素材 且
  * 基础计费秒数有效（>0，否则维持原兜底价路径）时折算；其余情况原样返回（零开销）。
  */
 export async function refVideoBillingParams(
@@ -84,7 +84,8 @@ export async function refVideoBillingParams(
 ): Promise<RefVideoBilling> {
 	const weight = Number(md?.refVideoSecondsWeight) || 0;
 	const vids = inputs?.videos ?? [];
-	const field = md?.costField;
+	const tieredRoute = !!(md?.id.startsWith('route:') && md.capability==='video' && md.routes?.length && !md.costField);
+	const field = md?.costField ?? (tieredRoute?'duration':undefined);
 	if (!md || weight <= 0 || !field || !vids.length) return { params, refSeconds: 0 };
 	// 基础计费秒数无效（缺参/0）→ 不折算，维持既有「兜底固定价」路径（cost 已按最高时长定价）
 	const base = Number(params?.[field]) || 0;
@@ -103,5 +104,6 @@ export async function refVideoBillingParams(
 		}
 		refSeconds += Math.ceil(ms / 1000); // 逐条向上取整：不足1秒算1秒
 	}
-	return { params: { ...params, [field]: base + weight * refSeconds }, refSeconds };
+	// Keep output duration for matching its original tier; input seconds are billing-only.
+	return { params: tieredRoute ? {...params,__refVideoBillingSeconds:refSeconds} : { ...params, [field]: base + weight * refSeconds }, refSeconds };
 }

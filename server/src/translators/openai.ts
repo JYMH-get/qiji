@@ -1,3 +1,5 @@
+import { returnOriginalResult } from "./resultStorage.ts";
+import { textReasoningBody } from '../textReasoning.ts';
 import { normalizeTextUsage } from '../textPricing.ts';
 import type { TextTokenUsage } from '../contract.ts';
 /**
@@ -25,6 +27,7 @@ export type OnUpstream = (rec: { request?: unknown; response?: unknown }) => voi
 /** 图像翻译器统一返回：成功给字节 + MIME，失败给原因 */
 export type ImageResult =
 	| { ok: true; data: Buffer; contentType: string }
+	| { ok: true; url: string }
 	/** fallbackUrl（第158轮）：结果下载失败但上游已成功出图时的原始成品直链——仅在「服务端可能到不了、
 	 *  客户端可能到得了」的网络类失败（超时/连接失败/5xx）携带；4xx（链接本身已死）不带。
 	 *  createImageTask 见它则以 meta.rehosted=false 完成任务而非整单报废（上游已扣费）。 */
@@ -58,6 +61,7 @@ export async function translateOpenAIText(req: GenerateRequest, up: Upstream, on
 		stream_options: { include_usage: true },
 	};
 	if (req.params?.maxTokens) body.max_tokens = Number(req.params.maxTokens);
+	Object.assign(body, textReasoningBody(up.upstreamModel, req.params, up.textReasoningDefaults));
 
 	if (wantJson) {
 		const schema = req.output?.schemaId ? getSchema(req.output.schemaId) : undefined;
@@ -246,7 +250,7 @@ export type ResolvedEditRef = { url?: string; bytes?: { blob: Blob; filename: st
  * 旧项目常存着旧 OSS 桶的过期直链，2026-07-11 实测即此况）→ 内存字节兜底 → 全无则记入 missing。
  * ⚠ 一张都不许静默丢：垫图与提示词图例 @ImageN 按位对齐，丢一张=整段图例错位（宁可明确报错）。
  */
-export async function resolveEditRefs(req: GenerateRequest): Promise<{ refs: ResolvedEditRef[]; missing: string[] }> {
+export async function resolveEditRefs(req: GenerateRequest, mode?: 'direct' | 'url'): Promise<{ refs: ResolvedEditRef[]; missing: string[] }> {
 	const out: ResolvedEditRef[] = [];
 	const missing: string[] = [];
 	let i = 0;
@@ -266,10 +270,24 @@ export async function resolveEditRefs(req: GenerateRequest): Promise<{ refs: Res
 		if (bytes) { out.push({ bytes: { blob: bytesToBlob(bytes, "image/png"), filename: `${aid}.png` } }); continue; }
 		missing.push(`第${i}张${ref.name ? `「${ref.name}」` : ""}${aid ? `（${aid}）` : ""}`);
 	}
+	if(mode==='url'){
+		out.forEach((r,i)=>{if(!r.url)missing.push(`第${i+1}张参考图没有普通 URL`);});
+	}
+	if(mode==='direct'&&!missing.length){
+		const blobs=await buildEditBlobs(out);
+		if(!blobs)return {refs:[],missing:['参考图无法取得直传字节']};
+		return {refs:blobs.map(bytes=>({bytes})),missing:[]};
+	}
 	return { refs: out, missing };
 }
 
 /** 把解析结果统一取成可上传字节（multipart 兜底模式用）；任一张取不到返回 null（不静默缺张）。 */
+export async function resolveImageNamed(req: GenerateRequest, mode?: 'direct' | 'url'): Promise<{url:string;name?:string}[]> {
+	const {refs,missing}=await resolveEditRefs(req,mode);
+	if(missing.length)throw new Error(missing.join('、'));
+	return Promise.all(refs.map(async(r,i)=>({name:req.inputs?.images?.[i]?.name,url:r.url??`data:${r.bytes!.blob.type||'image/png'};base64,${Buffer.from(await r.bytes!.blob.arrayBuffer()).toString('base64')}`})));
+}
+
 export async function buildEditBlobs(refs: ResolvedEditRef[]): Promise<{ blob: Blob; filename: string }[] | null> {
 	const out: { blob: Blob; filename: string }[] = [];
 	let i = 0;
@@ -292,6 +310,7 @@ export async function buildEditBlobs(refs: ResolvedEditRef[]): Promise<{ blob: B
  * 由客户端用本机网络接力下载（3×30s）再经 POST /v1/assets 传回 OSS——两侧任一次成功即可。
  */
 async function downloadImageBytes(url: string): Promise<ImageResult> {
+	if (returnOriginalResult()) return { ok: true, url };
 	let lastErr = "下载图像失败";
 	let mayFallback = false;
 	for (let attempt = 1; attempt <= 2; attempt++) {
@@ -416,7 +435,7 @@ export async function translateOpenAIImage(req: GenerateRequest, up: Upstream, o
 		const editUrl = `${up.baseUrl}/v1/images/edits`;
 
 		// 逐张探活解析（死链自愈/明确报错，见 resolveEditRefs 注释）
-		const { refs, missing } = await resolveEditRefs(req);
+		const { refs, missing } = await resolveEditRefs(req,up.imageMaterialMode);
 		if (missing.length) {
 			return { ok: false, error: `垫图无法获取：${missing.join("、")}——直链已失效且台账无可用直链，请重新生成/上传该资产后再试` };
 		}
@@ -461,7 +480,7 @@ export async function translateOpenAIImage(req: GenerateRequest, up: Upstream, o
 				body: JSON.stringify(body),
 			}), onUpstream);
 			// 账号组内个别账号只收 multipart（实测 500「request Content-Type isn't multipart/form-data」）→ 降级 multipart 重发一次
-			if (!res.ok && /multipart\/form-data/i.test(res.error ?? "")) {
+			if (!up.imageMaterialMode && !res.ok && /multipart\/form-data/i.test(res.error ?? "")) {
 				const blobs = await buildEditBlobs(refs);
 				if (blobs?.length) return sendMultipart(blobs);
 			}

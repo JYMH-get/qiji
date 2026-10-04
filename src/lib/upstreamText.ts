@@ -7,7 +7,7 @@
  * `【上游文本N】` 只作为旧项目兼容标记：读取/提交时展开，不再新建或渲染胶囊。
  */
 import { PRESET_TAG_RE, presetPosition } from "@/lib/presetSchemes";
-import { splitLegendPrompt } from "@/lib/shotMaterials";
+import { applyLegend, LEGEND_START, splitLegendPrompt, stripLegend } from "@/lib/shotMaterials";
 /** 上游文本胶囊标记：【上游文本N】（N=1-based，对应第 N 个上游文本源） */
 export const upstreamTag = (n: number): string => `【上游文本${n}】`;
 /** 匹配 【上游文本N】，捕获组 1 = 编号 */
@@ -55,13 +55,17 @@ function leadingPrefixPresetEnd(body: string): number {
 
 /** 把上游全文直接映射进无用户正文的节点；不写回 store，保持连线是唯一数据源。 */
 export function mapUpstreamText(prompt: string, texts: string[]): string {
-	const sourceText = texts.filter((text) => text.trim()).join("\n\n");
-	if (hasUpstreamCapsule(prompt)) return expandUpstreamCapsules(prompt, texts);
-	if (!sourceText) return prompt;
-
 	const { legend, body } = splitLegendPrompt(prompt || "");
+	const currentPrompt = legend && prompt.indexOf(LEGEND_START) !== prompt.lastIndexOf(LEGEND_START)
+		? applyLegend(prompt, legend) : prompt;
+	// 当前节点已有素材说明时，上游只提供正文，不能把上游旧素材编号拼成第二段图例。
+	const sourceTexts = legend ? texts.map(stripLegend) : texts;
+	const sourceText = sourceTexts.filter((text) => text.trim()).join("\n\n");
+	if (hasUpstreamCapsule(currentPrompt)) return expandUpstreamCapsules(currentPrompt, sourceTexts);
+	if (!sourceText) return currentPrompt;
+
 	const userBody = body.replace(new RegExp(PRESET_TAG_RE.source, "g"), "").trim();
-	if (userBody) return prompt;
+	if (userBody) return currentPrompt;
 
 	const end = leadingPrefixPresetEnd(body);
 	const before = body.slice(0, end).replace(/\s+$/, "");

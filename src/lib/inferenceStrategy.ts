@@ -1,3 +1,4 @@
+import { getDualModeFeature } from '@/store/connectionStore';
 import type { CatalogTemplate, Purpose } from '@/contract';
 import type { CanvasNode, CanvasEdge } from '@/types';
 import { smartInferContext } from './inferUpstream';
@@ -111,7 +112,7 @@ export function canvasInference(node: CanvasNode, nodes: Record<string, CanvasNo
       : ['storyboard.toVideoPrompt', 'storyboard.unified'].includes(legacyOutput) ? 'multi' : 'single';
   const ctx = smartInferContext(node.id, nodes, edges);
   const single = ctx.scope === 'single' || ctx.scope === 'both' && requestedScope === 'single';
-  const unified = params.inferenceMode === 'unified' || params.inferenceMode !== 'storyboard'
+  const unified = !getDualModeFeature() || params.inferenceMode === 'unified' || params.inferenceMode !== 'storyboard'
     && ['storyboard.unified', 'storyboard.unifiedShot'].includes(legacyOutput);
   const purpose = requestedScope === 'split' && ctx.scope !== 'single' ? 'storyboard.split' : inferencePurpose(single, unified);
   const requestScope = purpose === 'storyboard.split' ? 'split' : single ? 'single' : 'multi';

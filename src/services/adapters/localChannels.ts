@@ -25,6 +25,8 @@ export interface LocalChannelChoice {
 export interface LocalChannelInfo {
 	channel: string;
 	choices: LocalChannelChoice[];
+	/** 本地 CLI 模型本身就是线路，无需第三级款式选择。 */
+	modelAsLine?: boolean;
 }
 
 /** 平铺模型清单项（catalog 模型 / 本地渠道模型统一形态）。modeId/modeName 供「按模式折叠成源」（第131轮）；
@@ -32,6 +34,7 @@ export interface LocalChannelInfo {
 export interface ModelOpt {
 	id: string;
 	label: string;
+	lineName?: string;
 	/** catalog 模型归属模式 id（无=默认模式）；本地 CLI 模型无此字段 */
 	modeId?: string;
 	/** 模式显示名（catalog.modes 投影）；缺省回退 modeId */
@@ -47,6 +50,14 @@ const CHANNELS: LocalChannelInfo[] = [
 	{ channel: DREAMINA_CHANNEL, choices: DREAMINA_MODEL_CHOICES },
 	{ channel: COMFYUI_CHANNEL, choices: COMFYUI_MODEL_CHOICES },
 ];
+
+/** 客户端展示家族独立于服务端路由家族，保持真实 CLI 模型 ID。 */
+export const LIBTV_FAMILY_OPTIONS: ModelOpt[] = LIBTV_MODEL_CHOICES.map(c => ({
+	id: c.id, label: c.label, familyId: 'local-cli:libtv', familyName: LIBTV_CHANNEL, lineName: c.variantLabel,
+}));
+export const DREAMINA_FAMILY_OPTIONS: ModelOpt[] = DREAMINA_MODEL_CHOICES.map(c => ({
+	id: c.id, label: c.label, familyId: 'local-cli:dreamina', familyName: DREAMINA_CHANNEL, lineName: c.variantLabel,
+}));
 
 /** 无模式管理端模型的兜底源名（第131轮改「默认」——服务端迁移已把无模式视频模型并入 qiji 模式，
  *  正常不出现；管理端新建视频模型没选模式时才现形，叫「默认」避免与「Qiji 视频」模式看着重复） */
@@ -178,10 +189,10 @@ export function modelFamilies(opts: ModelOpt[], familyOrder?: string[]): FamilyG
 		}
 		// 源名：本地 CLI 渠道名 > 模式名 > 「默认」兜底（与 modelChannels 同语义）
 		const local = localChannelOf(o.id);
-		const srcName = local ? local.channel : (o.modeId ? (o.modeName || o.modeId) : QIJI_CHANNEL);
+		const srcName = o.lineName ?? (local ? local.channel : (o.modeId ? (o.modeName || o.modeId) : QIJI_CHANNEL));
 		let ch = g.channels.find((c) => c.channel === srcName);
 		if (!ch) {
-			ch = { channel: srcName, choices: [] };
+			ch = { channel: srcName, choices: [], ...(o.lineName ? { modelAsLine: true } : {}) };
 			g.channels.push(ch);
 		}
 		// 本地 CLI 模型用渠道常量里的短款式名（「Seedance 2.0 Fast」），catalog 模型款式名=label
@@ -211,6 +222,20 @@ export function modelForFamily(familyId: string, currentId: string | undefined |
 	if (!f) return "";
 	if (currentId && f.channels.some((ch) => ch.choices.some((c) => c.id === currentId))) return currentId;
 	return f.channels[0]?.choices[0]?.id ?? "";
+}
+
+/** Family first: every family remains visible; line choices belong only to the selected family. */
+export function familyFirstSelection(families: FamilyGroup[], currentId?: string | null) {
+ const family = familyOf(currentId, families);
+ const channels = family?.channels ?? [];
+ return { families, channels, current: channelOf(currentId, channels) };
+}
+
+/** Line changes stay inside the selected family; stale/unsupported choices cannot switch families. */
+export function modelForLine(sourceValue: string, currentId: string | undefined | null, families: FamilyGroup[]): string {
+ const family = familyOf(currentId, families);
+ if (!family) return '';
+ return modelForSource(sourceValue, currentId, family.channels);
 }
 
 /** 本地 CLI 模型 id → 全名（标题栏等非下拉场景显示实名） */

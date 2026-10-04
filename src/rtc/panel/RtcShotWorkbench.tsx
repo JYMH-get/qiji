@@ -1,3 +1,4 @@
+import { useDualModeFeature } from '@/store/connectionStore';
 /**
  * RtcShotWorkbench —— 右栏「分镜占位符」属性视图（中栏双页签改版后收敛为 **AI 生成属性**）。
  * 原文/提示词/垫图/动作/历史 区块已整体移入中栏「AI 工作台」（RtcShotAiWorkbench，共享件见
@@ -60,7 +61,8 @@ export function RtcShotWorkbench({ episodeId, shotId }: { episodeId: string; sho
 	const vidMethod = clampMethod(ms.videoMethod, vidMethods);
 	const vidReq = useMemo(() => videoReqOptionsForKey(vidModelKey), [vidModelKey, catalogVer]);
 	const maxDuration = ms.maxDuration ?? 15;
-	const sameSource = ms.imgVideoSameSource ?? false;
+	const dualModeEnabled = useDualModeFeature();
+	const sameSource = !dualModeEnabled || (ms.imgVideoSameSource ?? false);
 
 	if (!shot) {
 		return (
@@ -162,7 +164,7 @@ export function RtcShotWorkbench({ episodeId, shotId }: { episodeId: string; sho
 				<label style={{ ...rowSt, cursor: "pointer" }} title="开启后：故事板与视频共用同一段「同源提示词」，中栏提示词区只有单栏；推理走同源模板。">
 					<span style={rowLb}>图视同源</span>
 					<span style={{ display: "flex", alignItems: "center", gap: 6, color: "#fff", fontSize: 12 }}>
-						<input type="checkbox" checked={sameSource} onChange={(e) => setMS({ imgVideoSameSource: e.target.checked })} />图片与视频共用提示词
+						<input type="checkbox" checked={sameSource} disabled={!dualModeEnabled} onChange={(e) => setMS({ imgVideoSameSource: e.target.checked })} />图片与视频共用提示词
 					</span>
 				</label>
 				<div style={{ fontSize: 10, color: "rgba(255,255,255,0.32)", lineHeight: 1.6 }}>

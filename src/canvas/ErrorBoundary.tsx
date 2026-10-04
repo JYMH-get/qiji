@@ -1,5 +1,6 @@
 import React from "react";
 import { RotateCcw } from "lucide-react";
+import { recordClientError } from "@/services/clientDiagnostics";
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -31,6 +32,7 @@ export class ErrorBoundary extends React.Component<
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    void recordClientError(error);
     console.error("[CanvasErrorBoundary] 渲染错误:", error, errorInfo);
     this.setState({ errorInfo });
   }

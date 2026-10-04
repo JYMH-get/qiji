@@ -12,7 +12,7 @@
 import type { Purpose } from "@/contract";
 import type { GenSpec } from "@/services/generationQueue";
 import type { AssetCat } from "@/store/projectStore";
-import { buildImageParams, clampImageResolution, imageResolutionOptions } from "@/lib/genParams";
+import { buildImageParams, imageResolutionOptions } from "@/lib/genParams";
 import { assetImageAspectFrom } from "@/lib/templateAspect";
 
 /** 五类资产 → 出图 purpose（与 AssetWorkbench 各页 imagePurpose 一致：群像与角色共用 character 出图用途，前缀 G） */
@@ -38,22 +38,19 @@ export interface AssetGenInput {
 
 /**
  * 纯函数：组装基础形象出图 GenSpec（与 AssetWorkbench.generateForm 逐字段对齐——
- * params={aspect_ratio,resolution,quality,idPrefix,assetName}、purpose 按分类映射、variantId=null）。
+ * 图片参数完整保留，purpose 按分类映射、variantId=null）。
  * 无提示词返回 { error }（明确报错不发请求）；resOptions=当前生效图像模型开放的分辨率档
- * （服务端 catalog 控档，选择不在开放集时归一到第一档——与资产模式同一把尺）。
+ * （仅在请求未指定分辨率时选择默认档，不改写显式选择）。
  */
 export function buildAssetBaseGenSpec(
 	cat: AssetCat,
 	asset: AssetGenInput,
 	modelKey: string,
 	resOptions?: { v: string }[],
-	ui?: { aspect?: string; resolution?: string; quality?: string },
+	ui?: Record<string, unknown>,
 ): { spec: GenSpec } | { error: string } {
 	const prompt = (asset.prompt || "").trim();
 	if (!prompt) return { error: "该资产暂无出图提示词，请先填写出图提示词。" };
-	const aspect = ui?.aspect || "16:9";
-	const resolution = clampImageResolution(ui?.resolution ?? "2k", resOptions);
-	const quality = ui?.quality || "high";
 	return {
 		spec: {
 			cat,
@@ -62,7 +59,7 @@ export function buildAssetBaseGenSpec(
 			purpose: ASSET_IMAGE_PURPOSE[cat],
 			prompt,
 			modelKey: modelKey || undefined,
-			params: { ...buildImageParams({ aspect, resolution, quality }, resOptions), idPrefix: ASSET_CAT_PREFIX[cat], assetName: asset.name },
+			params: { ...buildImageParams(ui ?? {}, resOptions), idPrefix: ui?.idPrefix !== undefined ? ui.idPrefix : ASSET_CAT_PREFIX[cat], assetName: ui?.assetName !== undefined ? ui.assetName : asset.name },
 			label: asset.name,
 		},
 	};

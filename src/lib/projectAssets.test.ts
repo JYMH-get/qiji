@@ -62,6 +62,23 @@ const mkNode = (id: string, type: string, data: Partial<NodeData> = {}): CanvasN
 });
 
 describe("applyAssetMatchToImageNode 绑定资产识别", () => {
+	it("图片按角色名匹配只加入图片，不加入角色声音", () => {
+		useCanvasStore.setState({ nodes: { img: mkNode("img", "image.gen", { params: { prompt: "阿黛站在门口。" } }) }, edges: {} });
+		expect(applyAssetMatchToImageNode("img")).toBe(1);
+		const n = useCanvasStore.getState().nodes.img;
+		expect(n.data.input.images).toHaveLength(1);
+		expect(n.data.input.audios).toBeUndefined();
+		expect(String(n.data.params.prompt)).not.toContain("@Audio");
+	});
+
+	it("图片重新匹配清除历史误带的声音，即使提示词无需重建", () => {
+		useCanvasStore.setState({ nodes: { img: mkNode("img", "image.gen", {
+			params: { prompt: "全景。" },
+			input: { audios: [{ id: "audio77", url: "https://oss/voice.mp3", voiceForAssetId: "char-ad" }] },
+		}) }, edges: {} });
+		applyAssetMatchToImageNode("img");
+		expect(useCanvasStore.getState().nodes.img.data.input.audios).toBeUndefined();
+	});
 	it("上游连线的绑定图：提示词不点名 → 仍写图例「是 阿黛」+ 音色声音参考配对", () => {
 		useLibraryStore.setState({
 			assets: {
@@ -102,5 +119,7 @@ describe("applyAssetMatchToImageNode 绑定资产识别", () => {
 		expect(imgs[0]?.name).toBe("阿黛");
 		expect(imgs[0]?.assetId).toBe("char-ad");
 		expect(String(n.data.params.prompt)).toContain("@Image1 是 阿黛");
+		expect(n.data.input.audios).toBeUndefined();
+		expect(String(n.data.params.prompt)).not.toContain("@Audio");
 	});
 });

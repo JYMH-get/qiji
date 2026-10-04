@@ -1,3 +1,4 @@
+import { useConnectionStore } from '../store/connectionStore';
 import { describe, it, expect } from 'vitest';
 import { inferenceTemplates, resolveStrategyTemplate, inferencePurpose, canvasInference, canvasNeighborVars } from './inferenceStrategy';
 import { INFERENCE_FORMATS, composeInference, inferenceRequestError } from '../../server/src/inferenceComposition';
@@ -73,4 +74,20 @@ describe('分离式推理', () => {
     const edges={a:{source:'p',target:'a'},b:{source:'p',target:'b'},c:{source:'p',target:'c'},other:{source:'other-p',target:'other'}} as any;
     expect(canvasNeighborVars(nodes.b,nodes,edges,true)).toEqual({上上一分镜:'',上一分镜:'前镜结果',下一分镜:'原文3'});
   });
+});
+
+
+it('关闭双模时旧节点按同源执行，重新开启保留原选择和原文', () => {
+  const node = { id: 'old', type: 'smart.infer', data: { params: { inferenceMode: 'storyboard', inferenceScope: 'multi', prompt: '已有原文', inferenceStrategy: { templateId: 'multi' } } } } as any;
+  const snapshot = structuredClone(node);
+  try {
+    useConnectionStore.setState({ user: { id: 'u', name: '用户', credits: 0, features: { dualMode: false } } });
+    expect(canvasInference(node, { old: node }, {}, templates)).toMatchObject({ unified: true, purpose: 'storyboard.unified' });
+    node.data.params.inferenceScope = 'split';
+    expect(canvasInference(node, { old: node }, {}, templates)).toMatchObject({ unified: true, purpose: 'storyboard.split' });
+    node.data.params.inferenceScope = 'multi';
+    expect(node).toEqual(snapshot);
+    useConnectionStore.setState({ user: { id: 'u', name: '用户', credits: 0, features: { dualMode: true } } });
+    expect(canvasInference(node, { old: node }, {}, templates)).toMatchObject({ unified: false, purpose: 'storyboard.toVideoPrompt' });
+  } finally { useConnectionStore.setState({ user: null }); }
 });

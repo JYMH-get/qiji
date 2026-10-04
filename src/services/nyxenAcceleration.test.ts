@@ -31,6 +31,11 @@ const catalog = {
 } as Catalog;
 
 describe("nyxen stable acceleration", () => {
+	it("explicit line protocol overrides its display name and legacy mode", () => {
+		expect(shouldUseNyxenAcceleration({ ...model("other"), materialPolicy: { kind: "nyxen" } }, catalog)).toBe(true);
+		expect(shouldUseNyxenAcceleration({ ...model("fast"), materialPolicy: { kind: "url" } }, catalog)).toBe(false);
+		expect(shouldUseNyxenAcceleration({ ...model("fast"), materialPolicy: { kind: "official-assets", library: "sd" } }, catalog)).toBe(false);
+	});
 	it("只按 catalog 中视频模型的稳定模式启用", () => {
 		expect(shouldUseNyxenAcceleration(model("fast"), catalog)).toBe(true);
 		expect(shouldUseNyxenAcceleration(model("other"), catalog)).toBe(false);
@@ -113,4 +118,16 @@ describe("nyxen stable acceleration", () => {
 		})).rejects.toThrow("第2张图片上传加速桶失败：timeout");
 		expect(upload).toHaveBeenCalledTimes(2);
 	});
+});
+
+
+it('ready acceleration links skip uploads and visible upload stages for all kinds', async () => {
+ const req: GenerateRequest = { purpose: 'video.generate', model: 'stable', clientTaskId: 'ready', projectId: 'p',
+  inputs: { images: [{ id: 'i' }], videos: [{ id: 'v' }], audios: [{ id: 'a' }] } };
+ const prepareAsset = vi.fn(), upload = vi.fn(), onProgress = vi.fn();
+ const result = await accelerateNyxenRequest(req, { prepareAsset, cachedAsset: (asset, kind) => `https://bucket.test/${kind}/${asset.id}`,
+  resolveAssetUrl: vi.fn(), upload, onProgress });
+ expect(prepareAsset).not.toHaveBeenCalled(); expect(upload).not.toHaveBeenCalled(); expect(onProgress).not.toHaveBeenCalled();
+ expect(nyxenRequestForWire(result).inputs?.audios?.[0]).toEqual({ url: 'https://bucket.test/audio/a' });
+ expect(req.inputs?.audios?.[0]).toEqual({ id: 'a' });
 });

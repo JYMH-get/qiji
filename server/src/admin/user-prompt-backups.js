@@ -5,7 +5,7 @@ const backupSourceName=s=>({builtin:'内置预设',custom:'用户自建',externa
 const backupTime=t=>new Date(t).toLocaleString('zh-CN',{hour12:false});
 function renderUserPromptBackups(){
   $('#tab-templates').innerHTML=`
-    <div class="toolbar" style="gap:8px;flex-wrap:wrap;margin-bottom:14px">${PROMPT_PAGES.map(p=>`<button class="${p==='用户预设'?'pri':''}" onclick="setPromptPage('${p}')">${p}</button>`).join('')}</div>
+    ${promptTabsMarkup()}
     <div class="toolbar" style="gap:10px;margin-bottom:12px">
       <select aria-label="用户预设类型" id="up_kind" onchange="userPromptView.kind=this.value;userPromptView.page=1;loadUserPromptBackups()">${[['','全部类型'],['image','图片预设'],['video','视频预设'],['skill','Skills']].map(([v,n])=>`<option value="${v}" ${userPromptView.kind===v?'selected':''}>${n}</option>`).join('')}</select>
       <input id="up_search" aria-label="搜索用户预设" placeholder="搜索用户、名称或项目" value="${esc(userPromptView.search)}" onkeydown="if(event.key==='Enter')searchUserPromptBackups()" />
@@ -41,12 +41,12 @@ async function showUserPromptBackup(id){
     const t=await api('/admin-api/user-prompt-backups/'+encodeURIComponent(id));
     if(revision!==userPromptView.detailRevision||promptPage!=='用户预设'||!$('#up_detail'))return;
     userPromptView.item=t;
-    $('#up_detail').innerHTML=`<div class="toolbar"><h3 style="margin:0">${esc(t.name)}</h3><span class="sp"></span><button onclick="copyUserPromptBackup()">复制原文</button><button onclick="downloadUserPromptBackup()">下载原文</button></div>
-      <p class="mut">${backupKindName(t.kind)} · ${backupSourceName(t.source)} · 使用 ${t.use_count} 次</p>
-      <p>用户：${esc(t.user_name||'未命名')} <span class="mut">${esc(t.user_id)}</span><br>首次使用：${esc(backupTime(t.first_used_at))}<br>最近使用：${esc(backupTime(t.last_used_at))}<br>最近项目：${esc(t.last_project_id||'未提供')}</p>
-      <label for="up_body">使用时的完整原文</label><textarea id="up_body" aria-label="用户预设原文" readonly style="width:100%;min-height:390px;white-space:pre;box-sizing:border-box"></textarea>
-      <h4>最近使用记录</h4><div style="overflow:auto"><table><thead><tr><th>时间</th><th>项目</th><th>用途</th><th>模型</th></tr></thead><tbody>${t.uses.map(u=>`<tr><td>${esc(backupTime(u.used_at))}</td><td>${esc(u.project_id)}</td><td>${esc(PURPOSE_LABELS[u.purpose]||u.purpose)}</td><td>${esc(u.model)}</td></tr>`).join('')}</tbody></table></div>`;
+    $('#up_detail').innerHTML=`<div class="hd"><h3>${esc(t.name)}</h3><span class="sp"></span><button class="sm" onclick="copyUserPromptBackup()">复制原文</button><button class="sm" onclick="downloadUserPromptBackup()">下载原文</button></div>
+      <div class="bd"><div class="mut">${backupKindName(t.kind)} · ${backupSourceName(t.source)} · 使用 ${t.use_count} 次</div>
+      <div class="prompt-columns"><div class="fld"><label for="up_body">使用时的完整原文</label><textarea id="up_body" aria-label="用户预设原文" readonly></textarea></div>
+      <div class="fld"><label for="up_info">使用信息</label><textarea id="up_info" aria-label="用户预设使用信息" readonly></textarea></div></div></div>`;
     $('#up_body').value=t.body;
+    $('#up_info').value=`用户：${t.user_name||'未命名'}（${t.user_id}）\n首次使用：${backupTime(t.first_used_at)}\n最近使用：${backupTime(t.last_used_at)}\n最近项目：${t.last_project_id||'未提供'}\n\n最近使用记录\n`+t.uses.map(u=>`${backupTime(u.used_at)}\n项目：${u.project_id||'未提供'}\n用途：${PURPOSE_LABELS[u.purpose]||u.purpose}\n模型：${u.model}`).join('\n\n');
   }catch(e){if(revision===userPromptView.detailRevision&&$('#up_detail'))$('#up_detail').innerHTML=`<p class="bad-t">${esc(e.message)}</p>`;}
 }
 async function copyUserPromptBackup(){

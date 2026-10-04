@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { X, UserCircle, Coins, Gift, Loader2, CheckCircle, XCircle, RefreshCw, Clapperboard, Film, Server, LogOut, ListOrdered, ChevronDown, ChevronRight, Undo2, Users, BarChart3, KeyRound, Download, Crown, Sparkles } from "lucide-react";
+import { ProfileNameEditor } from './ProfileNameEditor';
+import { X, UserCircle, Coins, Gift, Loader2, CheckCircle, XCircle, RefreshCw, Clapperboard, Film, Server, LogOut, ListOrdered, ChevronDown, ChevronRight, Undo2, Users, BarChart3, KeyRound, Download, Crown, Sparkles, Bell } from "lucide-react";
 import { useUiStore } from "@/store/uiStore";
 import { useComfyuiStore } from "@/store/comfyuiStore";
 import { thirdPartyFeeCredits } from "@/services/thirdPartyFee";
@@ -14,6 +15,8 @@ import { formatDurationWithQueue } from "@/lib/queueLabel";
 import type { UserStats, UserLogItem, UserLogDetail, TeamDetail, TeamInviteInfo, UserConsumeStats, ConsumeRangeStats, DownloadManifest, DownloadLinkStorage, DownloadMediaKind } from "@/contract";
 import { runBatchDownload, fmtBytes, type BatchDownloadProgress, type BatchDownloadResult } from "@/services/batchDownload";
 import { RechargeCenter, discountLabel } from "@/components/RechargeCenter";
+import { MessagesSection } from "@/components/MessagesSection";
+import { TeamUsageStats } from "@/components/TeamUsageStats";
 
 const isTauri = (): boolean =>
 	typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
@@ -497,15 +500,15 @@ function TeamSection({ onChanged }: { onChanged: () => void }) {
 		if (busy) return;
 		setBusy(true);
 		setMsg(null);
-		const r = await fn();
-		setBusy(false);
-		if (r.ok) {
-			setMsg({ ok: true, text: okText });
-			void load();
-			onChanged();
-		} else {
-			setMsg({ ok: false, text: r.error || "操作失败" });
-		}
+		try {
+			const r = await fn();
+			if (r.ok) {
+				setMsg({ ok: true, text: okText });
+				void load();
+				onChanged();
+			} else setMsg({ ok: false, text: r.error || "操作失败" });
+		} catch (e) { setMsg({ ok: false, text: (e as Error).message || "操作失败" }); }
+		finally { setBusy(false); }
 	};
 
 	const amountNum = () => Math.max(0, Math.floor(Number(amount) || 0));
@@ -517,8 +520,8 @@ function TeamSection({ onChanged }: { onChanged: () => void }) {
 				void (async () => {
 					const ok = await confirmDialog(
 						mode === "shared"
-							? "切换为「共享积分模式」？\n团员生成消耗将直接从你（团长）的积分余额扣除（共享池=你的余额），团员自己的积分不动。"
-							: "切换为「分发积分模式」？\n团员生成消耗扣团员自己的积分；你可以把积分分发给团员或从团员收回。",
+							? "切换为「共享积分模式」？\n选择团队积分的成员按团长积分制度从共享池扣费。"
+							: "切换为「分配积分模式」？\n分配的团队积分按团长积分制度计费，成员个人积分单独保留。",
 					);
 					if (!ok) return;
 					await act(() => managedClient.updateTeam({ creditMode: mode }), "积分方式已切换");
@@ -630,16 +633,31 @@ function TeamSection({ onChanged }: { onChanged: () => void }) {
 			)}
 		</div>
 	);
+	const paymentSource = team.paymentSource ?? "team";
+	const personalCredits = team.personalCredits ?? 0;
+	const teamCredits = team.teamCredits ?? team.poolCredits ?? 0;
+	const walletSelection = <div className="flex flex-col gap-2" aria-label="选择支付积分">
+		<div className="text-xs font-semibold text-foreground">生成支付来源</div>
+		<div className="grid grid-cols-2 gap-2">
+			{([{ source: "team", name: "团队积分", credits: teamCredits }, { source: "personal", name: "个人积分", credits: personalCredits }] as const).map(wallet => (
+				<button key={wallet.source} type="button" aria-pressed={paymentSource === wallet.source} disabled={busy}
+					onClick={() => { if (paymentSource !== wallet.source) void act(() => managedClient.setTeamPaymentSource(wallet.source), `已选择${wallet.name}`); }}
+					className={`rounded-xl border px-4 py-3 text-left transition-colors disabled:opacity-50 ${paymentSource === wallet.source ? "border-primary/50 bg-primary/15" : "border-border/40 bg-secondary/20 hover:border-primary/30"}`}>
+					<span className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">{wallet.name}{paymentSource === wallet.source && <CheckCircle className="h-3.5 w-3.5 text-primary" />}</span>
+					<strong className="mt-1 block text-xl font-mono text-foreground">{wallet.credits.toLocaleString()}</strong>
+				</button>
+			))}
+		</div>
+		{paymentSource === "team" && teamCredits <= 0 && <p role="status" className="text-[11px] leading-5 text-amber-400">团队积分不足，请联系团长补充，或在此切换为个人积分。</p>}
+	</div>;
 
 	// ── 团员视角 ──
 	if (team.role !== "leader") {
 		return (
 			<div className="flex flex-col gap-3">
 				{header}
+				{walletSelection}
 				<div className="text-[10px] text-muted-foreground leading-relaxed">
-					{team.creditMode === "shared"
-						? "共享积分模式：你的生成消耗直接从团队共享池（团长积分）扣除。"
-						: "分发积分模式：生成消耗扣你自己的积分；需要额度可请团长分发。"}
 					{team.sharedLibId ? "团队共享素材库在资产助手「共享资产」中可见。" : ""}
 				</div>
 				<button
@@ -668,13 +686,14 @@ function TeamSection({ onChanged }: { onChanged: () => void }) {
 	return (
 		<div className="flex flex-col gap-4">
 			{header}
+			{walletSelection}
 
 			{/* 积分方式 */}
 			<div className="flex flex-col gap-2">
 				<div className="text-xs font-semibold text-foreground">积分方式（团长决定）</div>
 				<div className="flex items-center gap-2">
-					{modeBtn("dispatch", "分发积分：各扣各的，可分发/收回")}
-					{modeBtn("shared", "共享积分：团员消耗直接扣团长池")}
+					{modeBtn("dispatch", "分配积分")}
+					{modeBtn("shared", "共享积分")}
 				</div>
 			</div>
 
@@ -737,8 +756,9 @@ function TeamSection({ onChanged }: { onChanged: () => void }) {
 							<div className="flex flex-col min-w-0 flex-1">
 								<span className="text-[11px] text-foreground truncate">{m.name}{m.account ? <span className="text-muted-foreground font-mono"> @{m.account}</span> : null}</span>
 								<span className="text-[9px] text-muted-foreground font-mono">
-									积分 {m.credits.toLocaleString()} · 今日消耗 {m.dailySpent.toLocaleString()} · 可收回 {(m.reclaimable ?? 0).toLocaleString()}
+									个人 {(m.personalCredits ?? m.credits).toLocaleString()} · 团队 {(m.teamCredits ?? m.reclaimable ?? 0).toLocaleString()} · 今日消耗 {m.dailySpent.toLocaleString()}
 								</span>
+								<span className="text-[9px] text-primary">当前选择：{m.paymentSource === "personal" ? "个人积分" : "团队积分"}</span>
 							</div>
 							<button
 								onClick={() => void act(() => managedClient.teamCredits(m.id, amountNum()), `已分发 ${amountNum()} 积分`)}
@@ -837,7 +857,7 @@ function dlRangeFrom(k: DlRangeKey): number | undefined {
 
 function DownloadsSection() {
 	const [range, setRange] = useState<DlRangeKey>("7d");
-	const [storage, setStorage] = useState<DownloadLinkStorage | "">("raw");
+	const [storage, setStorage] = useState<DownloadLinkStorage | "">("");
 	const [kind, setKind] = useState<DownloadMediaKind | "">("");
 	const [manifest, setManifest] = useState<DownloadManifest | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -1043,6 +1063,17 @@ function DownloadsSection() {
 			)}
 		</div>
 	);
+}
+
+function PersonalStatsSection() {
+ const [view,setView] = useState<'credits'|'products'>('credits');
+ return <div className="space-y-4">
+  <div role="group" aria-label="个人统计视角" className="flex gap-1">
+   {(['credits','products'] as const).map(value => <button key={value} type="button" aria-pressed={view === value} onClick={() => setView(value)} className={`rounded-lg px-3 py-1.5 text-xs ${view === value ? 'bg-primary/20 text-primary font-semibold' : 'text-muted-foreground'}`}>{value === 'credits' ? '总览' : '成品'}</button>)}
+  </div>
+  <div hidden={view !== 'credits'}><StatsSection /></div>
+  {view === 'products' && <TeamUsageStats personal />}
+ </div>;
 }
 
 function StatsSection() {
@@ -1327,7 +1358,8 @@ export function PersonalCenter() {
 		setKeyBusy(false);
 	};
 
-	const [tab, setTab] = useState<"overview" | "logs" | "team" | "stats" | "downloads">("overview");
+	const tab = useUiStore(s => s.personalCenterTab);
+	const setTab = useUiStore(s => s.setPersonalCenterTab);
 
 	// 充值中心（第246轮：会员套餐 / 充值算力 / 兑换码）
 	const [rechargeOpen, setRechargeOpen] = useState(false);
@@ -1361,7 +1393,6 @@ export function PersonalCenter() {
 		if (r.ok) {
 			setRedeemMsg({ ok: true, text: `兑换成功，到账 ${r.added} 积分` });
 			setCode("");
-			if (typeof r.credits === "number") setCredits(r.credits);
 			void refresh();
 		} else {
 			setRedeemMsg({ ok: false, text: r.error || "兑换失败" });
@@ -1419,7 +1450,7 @@ export function PersonalCenter() {
 			onClick={() => setOpen(false)}
 		>
 			<div
-				className={`Qiji-panel flex flex-col ${tab === "logs" ? "w-[720px]" : tab === "downloads" ? "w-[640px]" : tab === "team" || tab === "stats" ? "w-[560px]" : "w-[440px]"} max-h-[85vh] rounded-2xl text-foreground shadow-2xl overflow-hidden relative transition-[width] duration-200`}
+				className={`Qiji-panel flex flex-col ${tab === "teamStats" || tab === "stats" ? "w-[1000px]" : tab === "logs" ? "w-[720px]" : tab === "downloads" ? "w-[640px]" : tab === "team" || tab === "messages" ? "w-[560px]" : "w-[440px]"} max-w-[95vw] max-h-[85vh] rounded-2xl text-foreground shadow-2xl overflow-hidden relative transition-[width] duration-200`}
 				style={{ border: "1px solid rgba(255, 255, 255, 0.1)" }}
 				onClick={(e) => e.stopPropagation()}
 			>
@@ -1434,6 +1465,7 @@ export function PersonalCenter() {
 					</div>
 					<button
 						onClick={() => setOpen(false)}
+						aria-label="关闭个人中心"
 						className="text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg p-1 transition-colors cursor-pointer"
 					>
 						<X className="h-4 w-4" />
@@ -1441,7 +1473,7 @@ export function PersonalCenter() {
 				</div>
 
 				{/* 页签：概览 / 请求记录（本人任务提交与积分扣退，详情仅 ①② 段） */}
-				<div className="flex items-center gap-1 px-6 pt-3">
+				<div className="flex flex-wrap items-center gap-1 px-6 pt-3">
 					<button
 						onClick={() => setTab("overview")}
 						className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] cursor-pointer transition-colors ${tab === "overview" ? "bg-primary/20 text-foreground font-semibold" : "text-muted-foreground hover:text-foreground"}`}
@@ -1460,6 +1492,10 @@ export function PersonalCenter() {
 					>
 						<BarChart3 className="h-3 w-3" /> 统计
 					</button>
+					{(stats ? stats.team : user?.team)?.role === 'leader' && <button type="button" onClick={() => setTab('teamStats')}
+						className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] cursor-pointer ${tab === 'teamStats' ? 'bg-primary/20 text-foreground font-semibold' : 'text-muted-foreground hover:text-foreground'}`}>
+						<BarChart3 className="h-3 w-3" /> 团队统计
+					</button>}
 					<button
 						onClick={() => setTab("logs")}
 						className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] cursor-pointer transition-colors ${tab === "logs" ? "bg-primary/20 text-foreground font-semibold" : "text-muted-foreground hover:text-foreground"}`}
@@ -1474,6 +1510,10 @@ export function PersonalCenter() {
 							<Download className="h-3 w-3" /> 批量下载
 						</button>
 					)}
+					<button type="button" onClick={() => setTab("messages")}
+						className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] cursor-pointer transition-colors ${tab === "messages" ? "bg-primary/20 text-foreground font-semibold" : "text-muted-foreground hover:text-foreground"}`}>
+						<Bell className="h-3 w-3" /> 消息
+					</button>
 				</div>
 
 				{tab === "logs" ? (
@@ -1482,29 +1522,36 @@ export function PersonalCenter() {
 					</div>
 				) : tab === "team" ? (
 					<div className="flex-1 overflow-y-auto px-6 py-4 Qiji-scroll-thin">
-						<TeamSection onChanged={() => void refresh()} />
+						<TeamSection key={user?.id} onChanged={() => void refresh()} />
+					</div>
+				) : tab === "teamStats" ? (
+					<div className="flex-1 min-h-0 overflow-y-auto px-6 py-4 Qiji-scroll-thin">
+						{(stats ? stats.team : user?.team)?.role === 'leader' ? <TeamUsageStats key={`${user?.id}:${(stats ? stats.team : user?.team)?.id}`} /> : <p className="text-xs text-muted-foreground">仅团长可查看团队统计</p>}
 					</div>
 				) : tab === "stats" ? (
 					<div className="flex-1 overflow-y-auto px-6 py-4 Qiji-scroll-thin">
-						<StatsSection />
+						<PersonalStatsSection key={user?.id} />
 					</div>
+				) : tab === "messages" ? (
+					<div className="flex-1 overflow-y-auto px-6 py-4 Qiji-scroll-thin"><MessagesSection /></div>
 				) : tab === "downloads" ? (
 					<div className="flex-1 overflow-y-auto px-6 py-4 Qiji-scroll-thin">
 						<DownloadsSection />
 					</div>
 				) : (
 				<div className="flex-1 overflow-y-auto px-6 py-5 Qiji-scroll-thin flex flex-col gap-5">
+					<ProfileNameEditor key={user?.id} />
 					{/* 余额 */}
 					<div className="bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/30 rounded-xl px-5 py-4 flex items-center justify-between">
 						<div className="flex flex-col gap-1">
 							<span className="text-[10px] text-muted-foreground flex items-center gap-1">
 								<Coins className="h-3 w-3" />
-								{stats?.team?.creditMode === "shared" && stats.team.role === "member" ? "团队共享积分（池）" : "当前积分余额"}
+								{stats?.team?.paymentSource === "team" ? "当前使用团队积分" : "当前使用个人积分"}
 							</span>
 							<span className="text-2xl font-bold text-foreground font-mono">{credits}</span>
-							{stats?.team?.creditMode === "shared" && stats.team.role === "member" && (
+							{stats?.team && (
 								<span className="text-[9px] text-muted-foreground">
-									团队「{stats.team.name}」共享池（消耗扣团长积分）· 我的个人积分 {stats.ownCredits ?? 0}
+									个人 {stats.team.personalCredits ?? stats.ownCredits ?? 0} · 团队 {stats.team.teamCredits ?? stats.team.poolCredits ?? 0}
 								</span>
 							)}
 						</div>

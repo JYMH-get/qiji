@@ -7,12 +7,12 @@
  *   - projectStore 共享字段（SHARED_PROJECT_FIELDS）引用变化 → 去抖 250ms → 广播字段补丁；
  *   - libraryStore.assets 变化 → 去抖广播媒体库；
  *   - 切换画布 → 立即广播**刚离开的画布**的最终快照（归属交接）；
- *   - 打开/切换项目 → hello 报到，写者回 full 全量镜像（磁盘载入可能落后写者内存 3s 去抖窗口）。
+ *   - 打开/切换项目 → hello 报到，写者回 full 全量镜像（磁盘载入可能落后写者内存 自动保存窗口）。
  *
  * 接收侧：same-project 消息才应用；应用期间置 applyingRemote 防回声（本窗口订阅回调跳过）。
  *   画布快照：正是我的激活画布 → 直写 canvasStore（含 runtime——另一窗口的「生成中」即时可见）；
  *   否则写 projectStore.canvases，runtime 存 remoteRuntimes，切过去时补挂。
- *   写者收到任何镜像都 scheduleAutoSave（唯一写盘方替全体落盘）。
+ *   写者收到持久化内容镜像才 scheduleAutoSave（唯一写盘方替全体落盘）。
  */
 import { useProjectStore } from "@/store/projectStore";
 import { useCanvasStore } from "@/store/canvasStore";
@@ -33,6 +33,7 @@ import {
 	onSyncMessage,
 	setSyncContext,
 	isProjectWriter,
+	getPeers,
 } from "./windowSync";
 import { isPopout } from "@/popout/popout";
 
@@ -69,12 +70,36 @@ function writerAutoSave(): void {
 /* ────────────────────────── 发送侧 ────────────────────────── */
 
 let canvasTimer: ReturnType<typeof setTimeout> | null = null;
+let runtimeTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingRuntime: Record<string, unknown | null> = {};
+let runtimeContext = { path: "", key: "" };
+function scheduleRuntimeBroadcast(next: Record<string, unknown>, prev: Record<string, unknown>): void {
+	const path = projectPath(), key = currentCanvasKey();
+	if (!path || !getPeers().some(p => p.projectPath === path)) return;
+	if (runtimeContext.path !== path || runtimeContext.key !== key) {
+		if (runtimeTimer) clearTimeout(runtimeTimer);
+		runtimeTimer = null;
+		pendingRuntime = {};
+	}
+	runtimeContext = { path, key };
+	for (const id of new Set([...Object.keys(prev), ...Object.keys(next)])) {
+		if (prev[id] !== next[id]) pendingRuntime[id] = next[id] ?? null;
+	}
+	if (runtimeTimer) return;
+	runtimeTimer = setTimeout(() => {
+		runtimeTimer = null;
+		const runtime = pendingRuntime;
+		pendingRuntime = {};
+		if (projectPath() !== path || currentCanvasKey() !== key) return;
+		broadcastSync({ type: "runtime", senderId: windowId, projectPath: path, canvasKey: key, runtime });
+	}, DEBOUNCE_MS);
+}
 function scheduleCanvasBroadcast(): void {
 	if (canvasTimer) return;
 	canvasTimer = setTimeout(() => {
 		canvasTimer = null;
 		const path = projectPath();
-		if (!path) return;
+		if (!path || !getPeers().some(p => p.projectPath === path)) return;
 		const cs = useCanvasStore.getState();
 		broadcastSync({
 			type: "canvas",
@@ -123,6 +148,43 @@ function scheduleLibraryBroadcast(): void {
 	}, DEBOUNCE_MS);
 }
 
+/** 项目交接前清理去抖队列，不能让旧项目的定时器读取新项目状态。 */
+function cancelPendingBroadcasts(): void {
+	for (const timer of [canvasTimer, runtimeTimer, fieldsTimer, libraryTimer]) {
+		if (timer) clearTimeout(timer);
+	}
+	canvasTimer = runtimeTimer = fieldsTimer = libraryTimer = null;
+	pendingFields.clear();
+	pendingRuntime = {};
+	runtimeContext = { path: "", key: "" };
+}
+
+/** loadFromPath 刚置 loading 时仍是旧项目；先交出已有编辑，打开失败也不会丢待同步内容。 */
+function flushPendingBroadcasts(): void {
+	const path = projectPath();
+	const ps = useProjectStore.getState() as unknown as Record<string, unknown>;
+	const cs = useCanvasStore.getState();
+	const canvasKey = currentCanvasKey();
+	const messages: SyncMsg[] = [];
+	if (path) {
+		const base = { senderId: windowId, projectPath: path };
+		if (canvasTimer) {
+			messages.push({ ...base, type: "canvas", canvasKey,
+				nodes: cs.nodes, edges: cs.edges, groups: cs.groups, runtime: cs.runtime });
+		} else if (runtimeTimer && runtimeContext.path === path && runtimeContext.key === canvasKey) {
+			messages.push({ ...base, type: "runtime", canvasKey, runtime: pendingRuntime });
+		}
+		if (fieldsTimer) {
+			const fields: Record<string, unknown> = {};
+			for (const key of pendingFields) fields[key] = ps[key];
+			messages.push({ ...base, type: "fields", fields });
+		}
+		if (libraryTimer) messages.push({ ...base, type: "library", assets: useLibraryStore.getState().assets });
+	}
+	cancelPendingBroadcasts();
+	for (const message of messages) broadcastSync(message);
+}
+
 /** 归属交接：离开某画布时立即广播它的最终快照（switchCanvas 已把它快照进 canvases）。
  *  也供请求台账在「投递结果到非激活画布」后调用——让其它窗口的该画布快照一并收敛，
  *  防止别的窗口日后切到这块画布时用陈旧快照把投递结果盖掉。 */
@@ -145,7 +207,7 @@ export function broadcastCanvasSnapshot(canvasKey: string): void {
 
 function sendHello(): void {
 	const path = projectPath();
-	if (!path) return;
+	if (!path || useProjectStore.getState().isProjectLoading) return;
 	broadcastSync({ type: "hello", senderId: windowId, projectPath: path });
 }
 
@@ -158,8 +220,20 @@ function handleMessage(msg: SyncMsg): void {
 	if (ps.isProjectLoading) return; // 载入中不应用（载入完成后 hello/full 会重新对齐）
 
 	switch (msg.type) {
+		case "runtime": {
+			applyRemote(() => {
+				const active = msg.canvasKey === currentCanvasKey();
+				const runtime: Record<string, unknown> = { ...(active ? useCanvasStore.getState().runtime : remoteRuntimes.get(msg.canvasKey)) };
+				for (const [id, value] of Object.entries(msg.runtime)) {
+					if (value === null) delete runtime[id]; else runtime[id] = value;
+				}
+				if (active) useCanvasStore.setState({ runtime: runtime as never });
+				else remoteRuntimes.set(msg.canvasKey, runtime);
+			});
+			return;
+		}
 		case "hello": {
-			// 写者向新报到的同项目窗口回全量镜像（磁盘载入可能落后写者内存的 3s 去抖窗口）
+			// 写者向新报到的同项目窗口回全量镜像（磁盘载入可能落后写者内存的 自动保存窗口）
 			if (!isProjectWriter()) return;
 			const cs = useCanvasStore.getState();
 			const activeKey = currentCanvasKey();
@@ -226,7 +300,7 @@ function handleMessage(msg: SyncMsg): void {
 			return;
 		}
 		case "save-request": {
-			if (isProjectWriter()) void useProjectStore.getState().save(true);
+			if (isProjectWriter()) void useProjectStore.getState().save(true, msg.createHistory === true);
 			return;
 		}
 	}
@@ -280,9 +354,17 @@ export function initProjectSync(): void {
 	useProjectStore.subscribe((next) => {
 		const prev = prevPs;
 		prevPs = next;
-		if (applyingRemote || next.isProjectLoading) return;
-		if (next.savePath !== prev.savePath) {
-			// 打开/切换/另存项目：更新上下文并向同项目窗口报到（写者会回 full）
+		if (applyingRemote) return;
+		const identityChanged = next.savePath !== prev.savePath || next.projectInstanceId !== prev.projectInstanceId;
+		if (next.isProjectLoading) {
+			if (!prev.isProjectLoading) flushPendingBroadcasts();
+			if (identityChanged) remoteRuntimes.clear();
+			return;
+		}
+		if (prev.isProjectLoading || identityChanged) {
+			// 完成加载才报到：路径已在 hydration 中更新；同路径重开和失败恢复也需重新握手。
+			cancelPendingBroadcasts();
+			if (identityChanged) remoteRuntimes.clear();
 			setSyncContext({ projectPath: next.savePath ?? "", activeCanvasKey: currentCanvasKey() });
 			sendHello();
 			return; // 换项目瞬间的字段变化属载入内容，不作为增量广播
@@ -314,8 +396,10 @@ export function initProjectSync(): void {
 		const prev = prevCs;
 		prevCs = next;
 		if (applyingRemote || useProjectStore.getState().isProjectLoading) return;
-		if (next.nodes !== prev.nodes || next.edges !== prev.edges || next.groups !== prev.groups || next.runtime !== prev.runtime) {
+		if (next.nodes !== prev.nodes || next.edges !== prev.edges || next.groups !== prev.groups) {
 			scheduleCanvasBroadcast();
+		} else if (next.runtime !== prev.runtime) {
+			scheduleRuntimeBroadcast(next.runtime, prev.runtime);
 		}
 	});
 
@@ -324,14 +408,14 @@ export function initProjectSync(): void {
 	useLibraryStore.subscribe((next) => {
 		const prev = prevLib;
 		prevLib = next;
-		if (applyingRemote) return;
+		if (applyingRemote || useProjectStore.getState().isProjectLoading) return;
 		if (next.assets !== prev.assets) scheduleLibraryBroadcast();
 	});
 }
 
 /** 非写者窗口的手动保存：请求写者落盘（projectStore.save 门禁调用） */
-export function requestWriterSave(): void {
+export function requestWriterSave(createHistory = false): void {
 	const path = projectPath();
 	if (!path) return;
-	broadcastSync({ type: "save-request", senderId: windowId, projectPath: path });
+	broadcastSync({ type: "save-request", senderId: windowId, projectPath: path, createHistory });
 }

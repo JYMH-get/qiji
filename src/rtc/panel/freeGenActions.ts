@@ -1,3 +1,4 @@
+import { ensurePublicUrl } from "@/lib/publicUrl";
 /**
  * freeGenActions —— 「自由结果占位」（时间轴空白右键新建、**无 shotRef**）的生成动作：
  * 提交 / 进度回填 / 终态落笔 / 重开客户端后的断连找回。
@@ -24,7 +25,6 @@ import type { Purpose } from "@/contract";
 import { useProjectStore } from "@/store/projectStore";
 import { useRtcStore } from "@/store/rtcStore";
 import { effectiveModelKey } from "@/components/ModelPicker";
-import { ensurePublicUrl } from "@/lib/publicUrl";
 import { resolvePresets } from "@/lib/presetSchemes";
 import { imageResolutionOptionsForKey, videoReqOptionsForKey } from "@/lib/modelOptions";
 import { runPurpose } from "@/services/purposeRunner";
@@ -183,7 +183,7 @@ async function runOne(args: {
 			return;
 		}
 		const media = kind; // video/image（audio 在提交前已拦下）
-		const landed = await persistGenAsset({ resultUri: r.resultUri, assetId: r.assetId, rawLink: r.rawLink, kind: media, label, owner });
+		const landed = await persistGenAsset({ resultUri: r.resultUri, assetId: r.assetId, rawLink: r.rawLink, saveToOss: r.saveToOss, kind: media, label, owner });
 		const durationSec = await probeDurationSec(landed.uri, media);
 		// 占位 → 结果（就地）：target 位置/时长分毫不动
 		landMedia(segId, { media, uri: landed.uri, assetId: landed.assetId, durationSec, owner });

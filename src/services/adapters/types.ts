@@ -33,6 +33,8 @@ export interface SubmitResult {
  * 显示端经 lib/queueLabel.progressLabel 转成「排队中 · 第 3/8 位」。
  */
 export interface TaskExtra {
+	/** false：结果按普通本地媒体接收，不补传或转存 OSS。 */
+	saveToOss?: boolean;
 	queuePosition?: number;
 	queueTotal?: number;
 	stageText?: string;
@@ -50,6 +52,7 @@ export interface PollResult {
   /** 服务端未能转存结果（meta.rehosted=false，resultUri=上游原始时效直链）——
    *  客户端应自行下载（本机网络）并经 POST /v1/assets 上传回服务端落 OSS 替换成永久直链（第158轮） */
   rawLink?: boolean;
+  saveToOss?: boolean;
   error?: string;
   /** 排队位次（1 基）——有值即「服务端队列排队中」（status 仍为 running/queued） */
   queuePosition?: number;

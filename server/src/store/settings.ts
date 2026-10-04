@@ -6,6 +6,7 @@
  */
 import { loadJson, saveJson } from "./db.ts";
 import { config } from "../config.ts";
+import { randomBytes } from "node:crypto";
 
 const FILE = "settings.json";
 const strip = (u: string) => (u || "").replace(/\/+$/, "");
@@ -35,6 +36,8 @@ interface Settings {
 	register?: RegisterSettings;
 	/** 同账号同时在线设备数上限（P2）：未设=默认 1；0=不限。可按用户覆盖 User.deviceLimit */
 	deviceLimit?: number;
+	sourceInviteCode?: string;
+	sourceRedeemCodePrefix?: string;
 }
 
 /** 注册体系配置（管理端「注册与安全」页维护；密钥只存服务端） */
@@ -71,7 +74,7 @@ let _version = 0; // OSS 配置变更计数（oss.ts 据此重建 S3 客户端�
 // 其余键一律以磁盘现值为准。否则「启动后别的模块写进去的键」会被这里的旧快照静默抹掉
 // （第223轮实锤的事故面：清理存量特赦把 ref 档抬到 30 天写进 retentionDays，若之后管理端
 // 随手保存一次 OSS 配置就被抹回 14 天 = 存量保护提前失效、清理任务会提前开删）。
-const OWN_KEYS = ["oss", "teamMemberLimit", "favQuotaBytes", "teamLibQuotaBytes", "storageCode", "register", "deviceLimit"] as const;
+const OWN_KEYS = ["oss", "teamMemberLimit", "favQuotaBytes", "teamLibQuotaBytes", "storageCode", "register", "deviceLimit", "sourceInviteCode", "sourceRedeemCodePrefix"] as const;
 function persist(): void {
 	const disk = loadJson<Record<string, unknown>>(FILE, {});
 	for (const k of OWN_KEYS) {
@@ -173,13 +176,99 @@ export function getStorageCodeSpec(target: "user" | "team"): StorageCodeSpec {
 	return { bytes: normBytes(c.bytes) ?? d.bytes, days: Math.max(1, Math.floor(Number(c.days) || 0)) || d.days, price };
 }
 /** 更新扩容卡规格（部分字段合并；传 null 清除该档恢复默认） */
-export function setStorageCodeSpec(target: "user" | "team", patch: Partial<StorageCodeSpec> | null): StorageCodeSpec {
-	if (!settings.storageCode) settings.storageCode = {};
-	if (!patch) delete settings.storageCode[target];
-	else settings.storageCode[target] = { ...getStorageCodeSpec(target), ...patch };
-	if (Object.keys(settings.storageCode).length === 0) delete settings.storageCode;
+export function setStorageCodeSpec(_target: "user" | "team", _patch: Partial<StorageCodeSpec> | null): StorageCodeSpec {
+	throw new Error("扩容卡功能已取消");
+}
+
+/** 源站邀请码独立保存；不下发到客户端公开配置。 */
+export function getSourceInviteCode(): string {
+	if (!settings.sourceInviteCode) {
+		settings.sourceInviteCode = "S" + randomBytes(6).toString("hex").toUpperCase();
+		persist();
+	}
+	return settings.sourceInviteCode;
+}
+
+export function setSourceInviteCode(raw: unknown): string {
+	const code = typeof raw === "string" ? raw.trim().toUpperCase() : "";
+	if (!/^[A-Z0-9_-]{4,32}$/.test(code)) throw new Error("邀请码须为 4–32 位字母、数字、下划线或短横线");
+	settings.sourceInviteCode = code;
 	persist();
-	return getStorageCodeSpec(target);
+	return code;
+}
+
+export function getSourceRedeemCodePrefix(): string {
+	const prefix=typeof settings.sourceRedeemCodePrefix==="string"?settings.sourceRedeemCodePrefix.trim().toUpperCase():"";
+	return prefix && /^[A-Z0-9]{2,12}$/.test(prefix) && !["MC","SC","TC"].includes(prefix) ? prefix : "QJ";
+}
+
+export interface SourceSettingsUpdate extends RegisterSettings {
+	sourceInviteCode?: string;
+	sourceRedeemCodePrefix?: string;
+	deviceLimit?: number | null;
+}
+
+/** 对整份管理端提交做纯校验，调用方完成邀请码占用检查后才能保存。 */
+export function validateSourceSettingsUpdate(raw: unknown): SourceSettingsUpdate {
+	if(!raw || typeof raw!=="object" || Array.isArray(raw)) throw new Error("设置内容无效");
+	const b=raw as Record<string,unknown>,out:SourceSettingsUpdate={};
+	const allowed=["sourceInviteCode","sourceRedeemCodePrefix","deviceLimit","enabled","giftCredits","ipRegPerDay","ipSendPerHour","ipSendPerDay","emailDomainBlacklist","smtp","sms"];
+	if(Object.keys(b).some(key=>!allowed.includes(key))) throw new Error("包含不支持的设置字段");
+	if(b.sourceInviteCode!==undefined){
+		const code=typeof b.sourceInviteCode==="string"?b.sourceInviteCode.trim().toUpperCase():"";
+		if(!/^[A-Z0-9_-]{4,32}$/.test(code)) throw new Error("邀请码须为 4–32 位字母、数字、下划线或短横线");
+		out.sourceInviteCode=code;
+	}
+	if(b.sourceRedeemCodePrefix!==undefined){
+		const prefix=typeof b.sourceRedeemCodePrefix==="string"?b.sourceRedeemCodePrefix.trim().toUpperCase():"";
+		if(!/^[A-Z0-9]{2,12}$/.test(prefix) || ["MC","SC","TC"].includes(prefix)) throw new Error("兑换码前缀须为 2–12 位字母或数字，不能使用 MC、SC、TC");
+		out.sourceRedeemCodePrefix=prefix;
+	}
+	const numeric=(value:unknown,label:string,min:number,max:number):number=>{
+		if(typeof value!=="number" || !Number.isSafeInteger(value) || value<min || value>max) throw new Error(`${label}须为 ${min}–${max} 的整数`);
+		return value;
+	};
+	if(b.enabled!==undefined){ if(typeof b.enabled!=="boolean") throw new Error("注册开关须为布尔值");out.enabled=b.enabled; }
+	if(b.giftCredits!==undefined) out.giftCredits=numeric(b.giftCredits,"注册赠送积分",0,1_000_000);
+	for(const key of ["ipRegPerDay","ipSendPerHour","ipSendPerDay"] as const){
+		if(b[key]!==undefined) out[key]=numeric(b[key],"IP 频控次数",1,10_000);
+	}
+	if(b.deviceLimit!==undefined) out.deviceLimit=b.deviceLimit===null || b.deviceLimit===""?null:numeric(b.deviceLimit,"设备上限",0,100);
+	if(b.emailDomainBlacklist!==undefined){
+		if(!Array.isArray(b.emailDomainBlacklist) || b.emailDomainBlacklist.length>500 || b.emailDomainBlacklist.some(v=>typeof v!=="string" || !v.trim() || v.length>253 || /[\s@/:]/.test(v.trim()))) throw new Error("邮箱黑名单须为有效域名列表（最多 500 项）");
+		out.emailDomainBlacklist=[...new Set((b.emailDomainBlacklist as string[]).map(v=>v.trim().toLowerCase()))];
+	}
+	for(const channel of ["smtp","sms"] as const){
+		if(b[channel]===undefined) continue;
+		const input=b[channel];
+		if(!input || typeof input!=="object" || Array.isArray(input)) throw new Error(`${channel.toUpperCase()} 配置无效`);
+		const fields=input as Record<string,unknown>,next:Record<string,unknown>={};
+		const permitted=channel==="smtp"?["host","port","secure","user","pass","from"]:["provider","accessKeyId","accessKeySecret","signName","templateCode"];
+		if(Object.keys(fields).some(key=>!permitted.includes(key))) throw new Error(`${channel.toUpperCase()} 包含不支持的字段`);
+		for(const [key,value] of Object.entries(fields)){
+			if(key==="port"){next.port=numeric(value,"SMTP 端口",1,65535);continue;}
+			if(key==="secure"){if(typeof value!=="boolean") throw new Error("SMTP secure 须为布尔值");next.secure=value;continue;}
+			if(key==="provider"){if(value!=="aliyun") throw new Error("短信服务商须为 aliyun");next.provider=value;continue;}
+			const secret=key==="pass" || key==="accessKeySecret";
+			if(secret && value===null){next[key]=undefined;continue;}
+			if(typeof value!=="string" || value.length>(secret?4096:500) || /[\r\n\0]/.test(value)) throw new Error(`${channel.toUpperCase()} ${key} 格式无效`);
+			next[key]=secret?value:value.trim();
+		}
+		if(channel==="smtp") out.smtp=next as RegisterSettings["smtp"];
+		else out.sms=next as RegisterSettings["sms"];
+	}
+	return out;
+}
+
+/** 只接收已经整体验证的提交；同一份提交合并后仅落盘一次。 */
+export function applySourceSettingsUpdate(patch: SourceSettingsUpdate): void {
+	const {sourceInviteCode,sourceRedeemCodePrefix,deviceLimit,...registration}=patch;
+	const nextRegister=mergeRegisterSettings(registration);
+	if(sourceInviteCode!==undefined) settings.sourceInviteCode=sourceInviteCode;
+	if(sourceRedeemCodePrefix!==undefined) settings.sourceRedeemCodePrefix=sourceRedeemCodePrefix;
+	if(deviceLimit!==undefined) settings.deviceLimit=deviceLimit===null?undefined:deviceLimit;
+	settings.register=nextRegister;
+	persist();
 }
 
 // （P1 移除：激活码签发价 CODE_PRICE_TIERS/getCodePricing/setCodePricing、
@@ -208,7 +297,7 @@ export function getRegisterSettings(): Required<Pick<RegisterSettings, "enabled"
 }
 
 /** 更新注册配置（部分合并；smtp.pass / sms.accessKeySecret 传空串=不改，传 null=清除） */
-export function setRegisterSettings(patch: RegisterSettings): void {
+function mergeRegisterSettings(patch: RegisterSettings): RegisterSettings {
 	const cur = settings.register ?? {};
 	const next: RegisterSettings = { ...cur, ...patch };
 	// 嵌套对象合并 + 密钥「空串不改」语义（管理端表单密钥框留空=保持原值）
@@ -222,7 +311,11 @@ export function setRegisterSettings(patch: RegisterSettings): void {
 		if (patch.sms && (patch.sms as Record<string, unknown>).accessKeySecret === "") sms.accessKeySecret = cur.sms?.accessKeySecret;
 		next.sms = sms;
 	}
-	settings.register = next;
+	return next;
+}
+
+export function setRegisterSettings(patch: RegisterSettings): void {
+	settings.register = mergeRegisterSettings(patch);
 	persist();
 }
 

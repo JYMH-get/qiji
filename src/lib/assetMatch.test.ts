@@ -6,7 +6,7 @@
  *  - 图例前缀「【素材图例】…」在匹配前剥掉（防上一轮提取写入的资产名清单自我循环）。
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { makeTermMatcher, stripLegendForMatch, applyAssetMatchToImageNode, matchNodeDraftAssets, matchAssetsInText } from "./assetMatch";
+import { makeTermMatcher, stripLegendForMatch, applyAssetMatchToImageNode, matchNodeDraftAssets, matchAssetsInText, matchedAssetTextRanges } from "./assetMatch";
 import { useCanvasStore } from "@/store/canvasStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useLibraryStore } from "@/store/libraryStore";
@@ -101,11 +101,115 @@ describe("matchAssetsInText 最长文本唯一匹配", () => {
 			scenes: [{ id: "S1", name: "医院", image: "mem://hospital", variants: [] }],
 		} as never);
 		expect(matchAssetsInText("张医生：医院那边来电话了").map((x) => x.assetId)).toEqual(["C1"]);
-		expect(matchAssetsInText("护士：医院那边来电话了").map((x) => x.assetId)).toEqual([]);
+		expect(matchAssetsInText("护士：医院那边来电话了").map((x) => x.assetId)).toEqual(["S1"]);
 		expect(matchAssetsInText("▲张医生放下病历，说：“医院那边来电话了。”").map((x) => x.assetId)).toEqual(["C1"]);
 		expect(matchAssetsInText("▲张医生正在医院值班").map((x) => x.assetId)).toEqual(["C1", "S1"]);
 		expect(matchAssetsInText("场景：医院").map((x) => x.assetId)).toEqual(["S1"]);
 		expect(matchAssetsInText("镜头1：医院全景").map((x) => x.assetId)).toEqual(["S1"]);
+	});
+
+	it("结构标题后的资产正文保留，截图中的记忆梳理与资产绑定不当作对白", () => {
+		const names = ["赵德柱", "刘备", "曹操", "孙权", "赵云", "典韦", "甘宁"];
+		useProjectStore.setState({ characters: names.map((name) => ({ id: name, name, image: `mem://${name}`, variants: [] })) } as never);
+		for (const heading of ["记忆梳理", "资产绑定", "当前人物情绪", "全局风格前缀", "判定结果"]) {
+			expect(matchAssetsInText(`${heading}：${names.join("、")}位于云端；当前状态：夜晚。`).map((x) => x.assetId)).toEqual(names);
+		}
+	});
+
+	it("冒号前包含人物资产、别名或群像时排除对白，保留带动作修饰的说话主体", () => {
+		useProjectStore.setState({
+			characters: [{ id: "C1", name: "刘备/玄德", image: "mem://liu", variants: [] }],
+			crowds: [{ id: "C2", name: "守城士兵", image: "mem://guards", variants: [] }],
+			scenes: [{ id: "S1", name: "医院", image: "mem://hospital", variants: [] }],
+		} as never);
+		for (const speaker of ["刘备（低声）", "▲玄德转身说道", "刘备与玄德齐声", "镜头中站在城墙前沉思片刻后缓缓转过身来的刘备低声说道"]) {
+			expect(matchAssetsInText(`${speaker}：医院那边来电话了`).map((x) => x.assetId)).toEqual(["C1"]);
+		}
+		expect(matchAssetsInText("守城士兵齐声：去医院").map((x) => x.assetId)).toEqual(["C2"]);
+	});
+
+	it.each(["旁白", "旁白（低沉）", "内心os", "内心 OS", "内心独白", "画外音", "电话音", "广播", "众人"])("识别明确说话主体 %s", (speaker) => {
+		useProjectStore.setState({ scenes: [{ id: "S1", name: "医院", image: "mem://hospital", variants: [] }] } as never);
+		expect(matchAssetsInText(`${speaker}：医院那边来电话了`).map((x) => x.assetId)).toEqual([]);
+	});
+
+	it.each([["“", "”"], ['"', '"'], ["‘", "’"], ["'", "'"], ["「", "」"], ["『", "』"]])("仅排除 %s %s 包围的内容，保留同行动作和后续行", (open, close) => {
+		useProjectStore.setState({
+			characters: [{ id: "C1", name: "刘备", image: "mem://liu", variants: [] }],
+			scenes: [{ id: "S1", name: "医院", image: "mem://hospital", variants: [] }],
+		} as never);
+		expect(matchAssetsInText(`刘备说${open}去医院${close}，然后转身。`).map((x) => x.assetId)).toEqual(["C1"]);
+		expect(matchAssetsInText(`${open}刘备${close}：医院全景`).map((x) => x.assetId)).toEqual(["S1"]);
+		expect(matchAssetsInText(`${open}去医院${close}\n刘备站在医院门口`).map((x) => x.assetId)).toEqual(["C1", "S1"]);
+		expect(matchAssetsInText(`描述：${open}医院`).map((x) => x.assetId)).toEqual(["S1"]);
+	});
+});
+
+describe("成对白边界结束后恢复资产匹配", () => {
+	beforeEach(() => {
+		useProjectStore.setState({ characters: ["孙权", "刘备", "曹操", "赵云", "典韦", "甘宁"].map((name, i) => ({ id: `C${i}`, name, image: `mem://${i}`, variants: [] })),
+			crowds: [], scenes: [{ id: "S1", name: "镇魂宗", image: "mem://scene", variants: [] }], organisms: [], items: [] } as never);
+		useAssetFormStore.setState({ selForm: {} });
+	});
+	it.each([["{", "}"], ["【", "】"], ["“", "”"], ["‘", "’"], ["’", "‘"], ['"', '"'], ["'", "'"], ["「", "」"], ["『", "』"]])("%s…%s 后的剧情继续匹配且坐标正确", (open, close) => {
+		const text = `孙权说道：${open}刘备快来！${close}对白结束后，曹操、赵云前往镇魂宗。`;
+		const hits: string[] = [];
+		expect(matchAssetsInText(text, (_id, start, end) => hits.push(text.slice(start, end))).map(a => a.name).sort())
+			.toEqual(["孙权", "曹操", "赵云", "镇魂宗"].sort());
+		expect(hits.sort()).toEqual(["孙权", "曹操", "赵云", "镇魂宗"].sort());
+	});
+	it("截图原文：尾部再次出现的已匹配人物也能高亮", () => {
+		const text = "刘备、曹操、孙权位于镇魂宗上空云端。孙权说道：{快快快，我们大老远赶来做客，好歹让我们看看！}对白结束后，刘备、曹操、孙权同时发出笑声。赵云、典韦、甘宁站在刘备、曹操、孙权后方云端。";
+		const hits: Array<{ name: string; start: number }> = [];
+		matchAssetsInText(text, (_id, start, end) => hits.push({ name: text.slice(start, end), start }));
+		expect(hits.filter(h => h.start > text.indexOf("对白结束后")).map(h => h.name).sort())
+			.toEqual(["刘备", "曹操", "孙权", "赵云", "典韦", "甘宁", "刘备", "曹操", "孙权"].sort());
+	});
+	it("同行多段对白各自在闭合符结束，嵌套符号不提前结束", () => {
+		const text = '孙权说：{刘备说“曹操”，还有【典韦】。}赵云走来。赵云说：“甘宁在哪里？”曹操现身。';
+		expect(matchAssetsInText(text).map(a => a.name).sort()).toEqual(["孙权", "赵云", "曹操"].sort());
+	});
+	it("说话人和冒号在括号内部时，闭合后恢复；普通结构括号仍匹配", () => {
+		expect(matchAssetsInText("【孙权说：刘备快来】曹操走来").map(a => a.name).sort()).toEqual(["孙权", "曹操"].sort());
+		expect(matchAssetsInText("【记忆梳理】刘备在{镇魂宗}外等候").map(a => a.name).sort()).toEqual(["刘备", "镇魂宗"].sort());
+	});
+	it("未闭合对白沿用行尾边界，下一行正常匹配", () => {
+		expect(matchAssetsInText("孙权说：{刘备快来\n曹操走来").map(a => a.name).sort()).toEqual(["孙权", "曹操"].sort());
+	});
+});
+
+describe("已加入素材的资产文字高亮", () => {
+	beforeEach(() => {
+		useProjectStore.setState({
+			characters: [
+				{ id: "C1", name: "刘备/玄德", image: "mem://liu", variants: [{ id: "V1", name: "刘备战甲", image: "mem://armor" }] },
+				{ id: "C2", name: "曹操", image: "mem://cao", variants: [] },
+			],
+			crowds: [], scenes: [], organisms: [], items: [], assetBlobs: {},
+		} as never);
+		useAssetFormStore.setState({ selForm: {} } as never);
+	});
+	const selected = [{ assetId: "C1", uri: "mem://liu" }];
+	it("只标素材区已有资产，保持原文坐标并排除对白", () => {
+		const text = '  记忆梳理：刘 备、曹操。\r\n刘备（低声）：曹操与玄德来了。\n“玄德”转身，玄德站定。';
+		expect(matchedAssetTextRanges(text, selected).map((r) => text.slice(r.start, r.end))).toEqual(["刘 备", "刘备", "玄德"]);
+		expect(matchedAssetTextRanges(text, [])).toEqual([]);
+		expect(matchedAssetTextRanges(text, [{ uri: "mem://unrelated" }])).toEqual([]);
+	});
+	it("支持变体身份及图片反查，音色引用不冒充已加入的角色图", () => {
+		const text = "刘备战甲与玄德站定";
+		for (const material of [{ assetId: "V1", uri: "mem://expired" }, { uri: "mem://armor" }]) {
+			expect(matchedAssetTextRanges(text, [material]).map((r) => text.slice(r.start, r.end))).toEqual(["刘备战甲", "玄德"]);
+		}
+		expect(matchedAssetTextRanges(text, [{ assetId: "C1", uri: "mem://voice", media: "audio" }])).toEqual([]);
+	});
+	it("保留最长名称唯一匹配，不把未加入的长名称资产标成已有短名称", () => {
+		useProjectStore.setState({ characters: [
+			{ id: "C1", name: "学生", image: "mem://short", variants: [] },
+			{ id: "C2", name: "医学生", image: "mem://long", variants: [] },
+		] } as never);
+		const text = "医学生带学生值班";
+		expect(matchedAssetTextRanges(text, selected)).toEqual([{ start: 4, end: 6 }]);
 	});
 });
 
@@ -139,12 +243,12 @@ describe("applyAssetMatchToImageNode 写入素材图例", () => {
 		expect(imgs[0].name).toBe("张三");
 	});
 
-	it("角色绑定音色：加入声音参考音频 + 图例配对「@ImageN的声音参考@AudioM」", () => {
+	it("视频角色绑定音色：加入声音参考音频 + 图例配对「@ImageN的声音参考@AudioM」", () => {
 		useProjectStore.setState({
 			characters: [{ id: "C1", name: "张三", image: "mem://c1", variants: [], voiceUri: "mem://v1", voiceAssetId: "AU1", voiceName: "张三的声音" }],
 			crowds: [], scenes: [], organisms: [], items: [],
 		} as never);
-		useCanvasStore.setState({ nodes: { n1: mkNode("n1", { params: { prompt: "张三开口说话" } }) } } as never);
+		useCanvasStore.setState({ nodes: { n1: { ...mkNode("n1", { params: { prompt: "张三开口说话" } }), type: "video.gen" } } } as never);
 		const added = applyAssetMatchToImageNode("n1");
 		expect(added).toBe(2); // 图 + 音频
 		const n = useCanvasStore.getState().nodes.n1;

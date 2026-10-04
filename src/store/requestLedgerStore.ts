@@ -154,11 +154,12 @@ export interface RegisterLedgerInfo {
 	 * 当时的激活画布上）。缺省回退「登记时刻现读」仅作兼容：提交确认回执到达前用户可能已切换
 	 * 画布/项目，现读会把身份记错位 → 完成后误判「节点已被删除」（用户实报的误弹窗根因）。
 	 */
-	identity?: { projectPath: string; projectName: string; canvasKey: string };
+	identity?: { projectPath: string; projectName: string; canvasKey: string; projectInstanceId?: string };
 }
 
 /** 提交确认/找回重挂时登记（幂等 upsert）；身份优先用调用方在执行开始时捕获的快照 */
 export async function registerCanvasLedgerTask(info: RegisterLedgerInfo): Promise<void> {
+	if (info.displayKind === "chat" && useRequestLedgerStore.getState().entries.some((e) => e.taskId === info.taskId && e.status !== "pending")) return;
 	const { useProjectStore } = await import("@/store/projectStore");
 	const ps = useProjectStore.getState();
 	const canvasKey = info.identity?.canvasKey
@@ -169,6 +170,7 @@ export async function registerCanvasLedgerTask(info: RegisterLedgerInfo): Promis
 		taskId: info.taskId,
 		adapterKey: info.adapterKey,
 		projectPath: info.identity?.projectPath ?? (ps.savePath ?? ""),
+		projectInstanceId: info.identity?.projectInstanceId,
 		projectName: info.identity?.projectName ?? ps.name,
 		canvasKey,
 		nodeId: info.nodeId,
@@ -187,11 +189,13 @@ export async function registerCanvasLedgerTask(info: RegisterLedgerInfo): Promis
 export interface CanvasTerminalArgs {
 	taskId: string;
 	success: boolean;
-	/** 成功且终态时节点仍在激活画布（随后的落盘代码会写进节点）=正常投递 */
+	/** 结果已经写入所属节点后才允许销账 */
 	delivered: boolean;
+	resultMeta?: LedgerResult["resultMeta"];
 	resultUri?: string;
 	assetId?: string;
 	rawLink?: boolean;
+	saveToOss?: boolean;
 }
 
 /**
@@ -210,17 +214,18 @@ export async function ledgerOnCanvasTerminal(args: CanvasTerminalArgs): Promise<
 	}
 	// 成功但画布流程没接住：缓存结果 → 立即投递（切画布=直写快照；被删=找回通知）。
 	// 多窗口下本条强制由本窗口投递（force）——结果就在手上，不等写者窗口的周期 tick。
-	cacheLedgerResult(args.taskId, buildResult(entry, args.resultUri, args.assetId, args.rawLink));
+	cacheLedgerResult(args.taskId, { ...buildResult(entry, args.resultUri, args.assetId, args.rawLink, args.saveToOss), ...(args.resultMeta ? { resultMeta: args.resultMeta } : {}) });
 	await attemptDeliverAll(args.taskId);
 }
 
-function buildResult(entry: LedgerEntry, resultUri?: string, assetId?: string, rawLink?: boolean): LedgerResult {
+function buildResult(entry: LedgerEntry, resultUri?: string, assetId?: string, rawLink?: boolean, saveToOss?: boolean): LedgerResult {
 	const isText = entry.displayKind === "text" || entry.displayKind === "chat";
 	const r: LedgerResult = {};
 	if (assetId) r.assetId = assetId;
 	if (isText) r.text = (resultUri ?? "").slice(0, LEDGER_TEXT_CAP);
 	else if (resultUri) r.url = resultUri;
 	if (rawLink) r.rawLink = true;
+	if (saveToOss === false) r.saveToOss = false;
 	return r;
 }
 
@@ -255,18 +260,22 @@ async function resumeLedgerPolling(): Promise<void> {
 		if (ledgerPollingIds.has(e.taskId) || isCanvasTaskTracked(e.taskId)) continue;
 		// 目标在激活画布的在途任务归画布找回流程管（node.data.task 仍在，resumeCanvasNodeTasks 会挂）
 		const target = resolveDeliveryTarget(e, { ...ctx, projectMissing: false });
-		if (target.kind === "active-node") continue;
+		if (target.kind === "active-node") {
+			const { useCanvasStore } = await import("@/store/canvasStore");
+			if (e.displayKind !== "chat" || useCanvasStore.getState().nodes[e.nodeId]?.data.task?.taskId === e.taskId) continue;
+		}
 		ledgerPollingIds.add(e.taskId);
 		trackTask({
 			taskId: e.taskId,
 			adapterKey: e.adapterKey,
-			onUpdate: (_progress, status, resultUri, error, assetId, _partial, rawLink) => {
+			onUpdate: (_progress, status, resultUri, error, assetId, _partial, rawLink, extra) => {
 				if (status !== "success" && status !== "failed" && status !== "lost") return;
 				ledgerPollingIds.delete(e.taskId);
 				if (status === "success") {
-					cacheLedgerResult(e.taskId, buildResult(e, resultUri, assetId, rawLink));
+					cacheLedgerResult(e.taskId, buildResult(e, resultUri, assetId, rawLink, extra?.saveToOss));
 					void attemptDeliverAll();
 				} else {
+					if (status === "lost" && e.displayKind === "chat") return;
 					// 失败/服务端丢任务：无可找回（失败已自动退款），销账
 					if (status === "lost") console.warn(`[requestLedger] 任务 ${e.taskId} 服务端已过期，无从找回`);
 					else console.warn(`[requestLedger] 任务 ${e.taskId} 失败：${error ?? ""}`);
@@ -333,11 +342,23 @@ export async function attemptDeliverAll(forceTaskId?: string): Promise<void> {
 	try {
 		const done = useRequestLedgerStore.getState().entries.filter((e) => e.status === "done");
 		if (!done.length) return;
-		const baseCtx = await buildDeliveryCtx();
 		for (const entry of done) {
 			if (entry.taskId !== forceTaskId && !windowOwnsEntry(entry)) continue; // 多窗口分工
 			try {
+				// 上一条结果下载期间可能切换了项目/画布，每条重新确定目标。
+				const baseCtx = await buildDeliveryCtx();
+				if (entry.displayKind === "chat" && !entry.projectPath) {
+					const { useProjectStore } = await import("@/store/projectStore");
+					if (entry.projectInstanceId !== useProjectStore.getState().projectInstanceId) continue;
+				}
 				let target = resolveDeliveryTarget(entry, { ...baseCtx, projectMissing: false });
+				if (entry.displayKind === "chat" && (!entry.projectPath || baseCtx.loadedProjectPath === entry.projectPath)) {
+					const active = entry.canvasKey === baseCtx.activeCanvasKey;
+					const ids = active ? baseCtx.activeNodeIds : baseCtx.canvasNodeIds[entry.canvasKey];
+					target = ids?.has(entry.nodeId)
+						? active ? { kind: "active-node" } : { kind: "inactive-node", canvasKey: entry.canvasKey }
+						: { kind: "orphan", reason: ids ? "node" : "canvas" };
+				}
 				// 项目未打开：查项目文件是否已被删除（能证实删除才转孤儿）
 				if (target.kind === "defer" && target.reason === "project-not-open") {
 					if (await projectFileMissing(entry.projectPath)) target = { kind: "orphan", reason: "project" };
@@ -348,7 +369,7 @@ export async function attemptDeliverAll(forceTaskId?: string): Promise<void> {
 					continue;
 				}
 				orphanStrikes.delete(entry.taskId); // 找到目标：清孤儿嫌疑
-				await deliverToNode(entry, target);
+				await deliverToNode(entry, target, entry.taskId === forceTaskId);
 			} catch (e) {
 				console.warn(`[requestLedger] 投递失败（下轮重试）task=${entry.taskId}：`, e);
 			}
@@ -392,18 +413,28 @@ export function dismissLedgerNotice(taskId: string): void {
 async function deliverToNode(
 	entry: LedgerEntry,
 	target: { kind: "active-node" } | { kind: "inactive-node"; canvasKey: string },
+	fromExecutor = false,
 ): Promise<void> {
 	const activeCanvas = target.kind === "active-node";
 	// 投递画布 key 以**实际找到节点**的画布为准（登记 key 可能因切换竞态记错位，自愈搜索已纠正）
 	const targetKey = target.kind === "inactive-node" ? target.canvasKey : entry.canvasKey;
-	// 激活画布且画布流程正在跟踪 → 让画布流程完整落盘（含裂变），台账等它的终态回执
-	if (activeCanvas) {
+	// 周期恢复不能与执行器并发投递；执行器交接成功结果时允许沿此路径完成落地。
+	if (!fromExecutor) {
 		const { isCanvasTaskTracked } = await import("@/nodes/pluginRegistry");
 		if (isCanvasTaskTracked(entry.taskId)) return;
 	}
+	const { useProjectStore } = await import("@/store/projectStore");
+	if (entry.projectPath && useProjectStore.getState().savePath !== entry.projectPath) return;
+	const projectInstanceId = useProjectStore.getState().projectInstanceId;
+	if (entry.displayKind === "chat" && !entry.projectPath && entry.projectInstanceId !== projectInstanceId) return;
 	const node = await readTargetNode(entry, activeCanvas, targetKey);
-	if (!node) return; // 环境刚变化（如正在切画布），下轮重试
+	if (!node || useProjectStore.getState().projectInstanceId !== projectInstanceId) return;
 	const marker = node.data.task;
+	if (entry.displayKind === "chat" && !marker && node.data.params.chatReplyTaskId !== entry.taskId
+		&& typeof node.data.params.chatReplyFinishedAt === "number" && entry.submittedAt < node.data.params.chatReplyFinishedAt) {
+		setEntries(removeLedgerEntry(useRequestLedgerStore.getState().entries, entry.taskId));
+		return;
+	}
 	if (marker && marker.taskId !== entry.taskId) {
 		// 节点已被重新提交：旧结果不再回写（新任务拥有节点），销账
 		setEntries(removeLedgerEntry(useRequestLedgerStore.getState().entries, entry.taskId));
@@ -412,16 +443,22 @@ async function deliverToNode(
 
 	const isText = entry.displayKind === "text" || entry.displayKind === "chat";
 	let written: boolean;
-	if (isText) {
+	if (entry.displayKind === "chat") {
+		const { finishChatReply, activeChatCanvasKey } = await import("@/services/chatNodeState");
+		// Unlike legacy node-id searching, chat stays in its exact episode (copied canvases may share ids).
+		const actualKey = activeCanvas ? activeChatCanvasKey() : targetKey;
+		if (actualKey !== entry.canvasKey) return;
+		written = finishChatReply({ projectInstanceId, canvasKey: actualKey, nodeId: entry.nodeId }, entry.taskId, entry.result?.text ?? "");
+	} else if (isText) {
 		written = await patchTargetNode(entry, targetKey, (data) => {
 			const next = { ...data, resultText: entry.result?.text ?? "" };
 			delete (next as Record<string, unknown>).task;
 			return next;
-		});
+		}, projectInstanceId);
 	} else {
 		const assetId = `asset-${entry.taskId}`;
 		const already = node.data.resultAssetId === assetId || (node.data.resultHistory ?? []).includes(assetId);
-		if (!already) await persistLedgerMediaAsset(entry, assetId);
+		if (!already) await persistLedgerMediaAsset(entry, assetId, projectInstanceId);
 		written = await patchTargetNode(entry, targetKey, (data) => {
 			const hist = [...(data.resultHistory ?? [])];
 			if (!already) {
@@ -429,24 +466,30 @@ async function deliverToNode(
 				if (!hist.includes(assetId)) hist.push(assetId);
 			}
 			const next = already ? { ...data } : { ...data, resultAssetId: assetId, resultHistory: hist };
+			if (entry.result?.resultMeta) next.resultMetaByAssetId = { ...data.resultMetaByAssetId, [assetId]: entry.result.resultMeta };
 			delete (next as Record<string, unknown>).task;
 			return next;
-		});
+		}, projectInstanceId);
 	}
 	// 写入失败（投递瞬间节点/画布恰好变化）：不销账，留待下一轮重新判定（可能转孤儿通知）
 	if (!written) return;
-	if (activeCanvas) {
-		const { useCanvasStore } = await import("@/store/canvasStore");
-		if (useCanvasStore.getState().nodes[entry.nodeId]) {
-			useCanvasStore.getState().setRuntime(entry.nodeId, { status: "success", progress: 100, error: null });
+	if (entry.displayKind === "chat" && useProjectStore.getState().projectInstanceId === projectInstanceId) {
+		// Keep the cached answer until the result plus continuation are checkpointed.
+		if (typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window)) {
+			await useProjectStore.getState().save(true);
+			// A follower's save only forwards a request; its clean flag is not a disk acknowledgement.
+			if (!isProjectWriter() || useProjectStore.getState().projectInstanceId !== projectInstanceId || useProjectStore.getState().isDirty) return;
 		}
+	}
+	const { useCanvasStore } = await import("@/store/canvasStore");
+	if (useProjectStore.getState().projectInstanceId === projectInstanceId && useCanvasStore.getState().nodes[entry.nodeId]) {
+		if (entry.displayKind !== "chat") useCanvasStore.getState().setRuntime(entry.nodeId, { status: "success", progress: 100, error: null });
 	} else {
-		// 多窗口（第205轮）：投递写进了非激活画布快照——把该画布广播给其它窗口收敛，
-		// 防别的窗口日后切到这块画布时用陈旧快照把投递结果盖掉（激活画布路径由画布订阅自动广播）
-		void import("@/services/projectSync").then((m) => m.broadcastCanvasSnapshot(targetKey)).catch(() => {});
+		void import("@/services/projectSync").then((m) => {
+			if (useProjectStore.getState().projectInstanceId === projectInstanceId) m.broadcastCanvasSnapshot(targetKey);
+		}).catch(() => {});
 	}
 	setEntries(removeLedgerEntry(useRequestLedgerStore.getState().entries, entry.taskId));
-	const { useProjectStore } = await import("@/store/projectStore");
 	useProjectStore.getState().scheduleAutoSave("canvas");
 }
 
@@ -471,19 +514,22 @@ async function patchTargetNode(
 	entry: LedgerEntry,
 	canvasKey: string,
 	mutate: (data: NodeDataShape) => NodeDataShape,
+	projectInstanceId: string,
 ): Promise<boolean> {
 	const { useProjectStore } = await import("@/store/projectStore");
 	const { useCanvasStore } = await import("@/store/canvasStore");
+	if (useProjectStore.getState().projectInstanceId !== projectInstanceId) return false;
 	const cs = useCanvasStore.getState();
 	const live = cs.nodes[entry.nodeId];
 	if (live) {
+		if (live.data.task && live.data.task.taskId !== entry.taskId) return false;
 		useCanvasStore.setState({ nodes: { ...cs.nodes, [entry.nodeId]: { ...live, data: mutate(live.data) } } });
 		return true;
 	}
 	const ps = useProjectStore.getState();
 	const cv = ps.canvases[canvasKey];
 	const n = cv?.nodes?.[entry.nodeId];
-	if (!n) return false;
+	if (!n || (n.data.task && n.data.task.taskId !== entry.taskId)) return false;
 	useProjectStore.setState({
 		canvases: {
 			...ps.canvases,
@@ -499,7 +545,12 @@ async function patchTargetNode(
  * rehost 兜底 → 三元映射登记 → 项目媒体库登记 → 资产名写回项目资产（主图/变体）。
  * 返回显示 uri（全部失败时回退远程 url——与既有路径同规）。
  */
-async function persistLedgerMediaAsset(entry: LedgerEntry, assetId: string): Promise<string> {
+async function persistLedgerMediaAsset(entry: LedgerEntry, assetId: string, projectInstanceId: string): Promise<string> {
+	const { useProjectStore } = await import("@/store/projectStore");
+	const assertProject = () => {
+		if (useProjectStore.getState().projectInstanceId !== projectInstanceId) throw new Error("项目已切换，保留结果待原项目恢复投递");
+	};
+	assertProject();
 	const remoteUrl = entry.result?.url ?? "";
 	const rawLink = !!entry.result?.rawLink;
 	let displayUri = remoteUrl;
@@ -507,7 +558,7 @@ async function persistLedgerMediaAsset(entry: LedgerEntry, assetId: string): Pro
 	let serverAssetId: string | null = entry.result?.assetId ?? null;
 	try {
 		const { saveRemoteAsset, uploadBlobToOss } = await import("@/services/assetPersist");
-		const { useProjectStore } = await import("@/store/projectStore");
+		assertProject();
 		// 已有活映射（如同会话内在途路径已下载过）→ 直接复用，不重复下载
 		const known = serverAssetId ? useProjectStore.getState().assetBlobs[serverAssetId] : undefined;
 		let blob = known?.localUri ? known : null;
@@ -515,20 +566,24 @@ async function persistLedgerMediaAsset(entry: LedgerEntry, assetId: string): Pro
 			const dl = rawLink
 				? (entry.displayKind === "video" ? { attempts: 2, timeoutSecs: 120 } : { attempts: 3, timeoutSecs: 30 })
 				: undefined;
-			blob = await saveRemoteAsset(serverAssetId || assetId, remoteUrl, dl);
-			if (blob && rawLink) {
+			blob = await saveRemoteAsset(serverAssetId || assetId, remoteUrl, { ...dl, keepRemoteUrl: entry.result?.saveToOss !== false });
+			assertProject();
+			if (blob && rawLink && entry.result?.saveToOss !== false) {
 				const upPrefix = entry.idPrefix || (entry.displayKind === "video" ? "video" : "TP");
 				const upName = entry.assetName || `${entry.nodeType}_output`;
 				const beforeId = blob.id;
 				blob = await uploadBlobToOss(blob, upName, upPrefix, entry.taskId);
 				if (blob.id !== beforeId) serverAssetId = blob.id;
 			}
-			if (!blob && /^https?:\/\//i.test(remoteUrl)) {
+			if (entry.result?.saveToOss !== false && !blob && /^https?:\/\//i.test(remoteUrl)) {
 				const { managedClient } = await import("@/services/managedClient");
+				assertProject();
 				const re = await managedClient.rehost(remoteUrl, undefined, `${entry.nodeType}_output`);
+				assertProject();
 				if (re?.url) blob = await saveRemoteAsset(re.id, re.url);
 			}
 		}
+		assertProject();
 		if (blob) {
 			useProjectStore.getState().registerAssetBlob(blob);
 			displayUri = blob.localUri || remoteUrl;
@@ -538,6 +593,7 @@ async function persistLedgerMediaAsset(entry: LedgerEntry, assetId: string): Pro
 		console.warn(`[requestLedger] 结果落盘失败（按远程链接投递）task=${entry.taskId}：`, e);
 	}
 	const { useLibraryStore } = await import("@/store/libraryStore");
+	assertProject();
 	useLibraryStore.getState().addAsset({
 		id: assetId,
 		kind: (entry.displayKind as "image" | "video" | "audio") || "image",
@@ -555,7 +611,7 @@ async function persistLedgerMediaAsset(entry: LedgerEntry, assetId: string): Pro
 	// 资产名写回项目资产（与 defaultNodeExecute 同规则：变体「父名 · 造型名」找不到造型则不写）
 	if (entry.assetName && entry.displayKind === "image") {
 		try {
-			const { useProjectStore } = await import("@/store/projectStore");
+			assertProject();
 			const PREFIX_CAT: Record<string, "characters" | "crowds" | "scenes" | "organisms" | "items"> = {
 				C: "characters", A: "characters", G: "crowds", S: "scenes", M: "organisms", P: "items",
 			};

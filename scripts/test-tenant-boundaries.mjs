@@ -1,0 +1,15 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+const root=path.resolve(import.meta.dirname,'..');
+const sandbox=fs.mkdtempSync(path.join(os.tmpdir(),'qiji-tenant-boundaries-'));
+fs.mkdirSync(path.join(sandbox,'src')); fs.mkdirSync(path.join(sandbox,'server/scripts'),{recursive:true});
+fs.copyFileSync(path.join(root,'src/contract.ts'),path.join(sandbox,'src/contract.ts'));
+for(const dir of ['src','skills']) fs.cpSync(path.join(root,'server',dir),path.join(sandbox,'server',dir),{recursive:true});
+fs.copyFileSync(path.join(root,'server/package.json'),path.join(sandbox,'server/package.json'));
+fs.symlinkSync(path.join(root,'server/node_modules'),path.join(sandbox,'server/node_modules'),'junction');
+fs.copyFileSync(path.join(root,'server/scripts/smoke-tenant-boundaries.mjs'),path.join(sandbox,'server/scripts/smoke-tenant-boundaries.mjs'));
+execFileSync(process.execPath,['--import','tsx','scripts/smoke-tenant-boundaries.mjs'],{cwd:path.join(sandbox,'server'),stdio:'inherit',env:{...process.env,QIJI_TEST_SNAPSHOT:'1',ADMIN_TOKEN:'admin-dev'}});
+const out=path.join(root,'outputs/tenant-boundaries-20260915');fs.mkdirSync(out,{recursive:true});fs.writeFileSync(path.join(out,'sandbox.txt'),sandbox);
+console.log('Sandbox:',sandbox);

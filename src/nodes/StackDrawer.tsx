@@ -1,3 +1,4 @@
+import { ViewportVideo } from "@/components/ViewportVideo";
 /**
  * StackDrawer —— 抽屉式堆叠展开视图（参考手机桌面图标抽屉交互；展开为**屏幕空间大面板+平铺网格**，无动画）。
  *
@@ -283,7 +284,7 @@ export function StackDrawer({ nodeId }: { nodeId: string }) {
 								}}
 							>
 								{a.kind === "video" ? (
-									<video src={a.uri} muted preload="metadata" className="h-full w-full object-cover pointer-events-none" />
+									<ViewportVideo src={a.uri} muted className="h-full w-full object-cover pointer-events-none" />
 								) : (
 									<img src={a.uri} className="h-full w-full object-cover pointer-events-none" draggable={false} />
 								)}

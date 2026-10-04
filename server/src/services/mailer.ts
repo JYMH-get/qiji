@@ -37,6 +37,6 @@ export async function sendCodeMail(to: string, code: string, action: string): Pr
 	await sendMail(
 		to,
 		`【Qiji】${action}验证码`,
-		`您的${action}验证码为：${code}\n\n10 分钟内有效，请勿泄露给他人。如非本人操作请忽略本邮件。`,
+		`您的${action}验证码为：【${code}】。\n\n有效期：十分钟。请勿将验证码泄露给他人。\n如非本人操作，请忽略本邮件。`,
 	);
 }

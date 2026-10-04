@@ -1,31 +1,54 @@
 import { useCanvasStore } from "@/store/canvasStore";
 import { commandBus } from "../commandBus";
 import { getPlugin } from "@/nodes/pluginRegistry";
-import { runMockGeneration } from "../mockGeneration";
 import { dispatchCommand } from "../dispatch";
+import { useProjectStore, resolveEpisodeKey } from "@/store/projectStore";
+import { isNodeRunBusy, isRunnableNode, type RunCommandResult } from "../nodeRunEligibility";
 
 const store = () => useCanvasStore.getState();
+const inFlight = new Set<string>();
+const runScope = (nodeId: string) => {
+  const ps = useProjectStore.getState();
+  return JSON.stringify([ps.projectInstanceId, resolveEpisodeKey(ps.canvasEpisodeId, ps.episodes), nodeId]);
+};
+
+/** Reserve synchronously before any runtime notification/plugin call, including reentrant same-tick runs. */
+function runNode(nodeId: string): RunCommandResult {
+  const s = store();
+  const node = s.nodes[nodeId];
+  if (!node) return { started: false, reason: "missing" };
+  const plugin = getPlugin(node.type);
+  if (!isRunnableNode(node, plugin)) return { started: false, reason: "unavailable" };
+  const scope = runScope(nodeId);
+  if (inFlight.has(scope) || isNodeRunBusy(s.runtime[nodeId]?.status)) return { started: false, reason: "busy" };
+  // Restored tasks are already accepted upstream; runtime is rebuilt asynchronously.
+  // Failed/lost attempts may be retried, with the plugin resuming data.task instead of resubmitting.
+  if (isNodeRunBusy(s.runtime[nodeId]?.status, node)) return { started: false, reason: "recovering" };
+  inFlight.add(scope);
+  s.setRuntime(nodeId, { status: "queued", progress: 0, error: null });
+  if (runScope(nodeId) !== scope || !store().nodes[nodeId]) {
+    inFlight.delete(scope);
+    return { started: false, reason: "missing" };
+  }
+  const fail = (err: unknown) => {
+    console.error(`Error executing node plugin ${node.type}:`, err);
+    if (runScope(nodeId) === scope && store().nodes[nodeId]) {
+      store().setRuntime(nodeId, { status: "failed", progress: 100, error: err instanceof Error ? err.message : "执行异常" });
+    }
+  };
+  try {
+    Promise.resolve(plugin!.execute!(nodeId)).catch(fail).finally(() => inFlight.delete(scope));
+  } catch (err) {
+    fail(err);
+    // Keep the reservation through this tick even for a synchronously throwing plugin.
+    queueMicrotask(() => inFlight.delete(scope));
+  }
+  return { started: true };
+}
 
 export function registerExecutionHandlers(): void {
   commandBus.register("run", (c) => {
-    if (c.type === "run") {
-      store().setRuntime(c.nodeId, { status: "queued", progress: 0 });
-      const node = store().nodes[c.nodeId];
-      if (node) {
-        const plugin = getPlugin(node.type);
-        if (plugin && plugin.execute) {
-          plugin.execute(c.nodeId).catch((err) => {
-            console.error(`Error executing node plugin ${node.type}:`, err);
-            const msg = err instanceof Error ? err.message : "执行异常";
-            store().setRuntime(c.nodeId, { status: "failed", progress: 100, error: msg });
-          });
-        } else {
-          runMockGeneration(c.nodeId);
-        }
-      } else {
-        runMockGeneration(c.nodeId);
-      }
-    }
+    if (c.type === "run") return runNode(c.nodeId);
   });
 
   commandBus.register("executeNodeAction", (c) => {

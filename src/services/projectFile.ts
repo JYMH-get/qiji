@@ -13,6 +13,8 @@ export const FILE_EXT = ".Qiji";
 
 export interface CommitSnapshot {
   commitId: string;
+  /** 可被下一次自动保存替换的恢复点；缺省为需要保留的历史版本。 */
+  automatic?: boolean;
   parentIds: string[];
   message: string;
   author: string;
@@ -38,6 +40,7 @@ export interface MigrationLogEntry {
  * 统一字段：text/image/video/audio。`table*`/`canvas*` 为旧版双套字段，仅作旧项目读取兼容。
  */
 export interface ProjectModelConfig {
+	textParams?: Record<string, Record<string, unknown>>;
   text?: string;
   image?: string;
   video?: string;
@@ -262,7 +265,19 @@ export interface StoryboardShot {
 }
 
 /** 视频/分镜界面的「视频设置」——逐项目持久化（重启不回默认） */
+export interface CanvasSendSettings {
+  assets: boolean;
+  connections: boolean;
+  group: boolean;
+  inference: boolean;
+  original: boolean;
+  storyboard: boolean;
+  video: boolean;
+}
+
 export interface MediaSettings {
+  /** 资产模式视频页手动发送到画布的项目级偏好。 */
+  canvasSend?: Partial<CanvasSendSettings>;
   inferenceStrategy?: import('@/lib/inferenceStrategy').InferenceStrategy;
   /** 剧集拆分方式（第243轮，新建项目可预设）：快拆 __quick_* id（见 lib/splitChoices）或 catalog「剧集」类模板 id；空=默认 快速·n-n */
   episodeTplId?: string;
@@ -333,6 +348,8 @@ export interface VideoEpisode {
 export interface QijiProject {
   version: string;
   name: string;
+  /** 项目文件云备份身份；改名保持，导入副本重新分配。 */
+  cloudBackupId?: string;
   savedAt: string;
   head: string;
   commits: Record<string, CommitSnapshot>;

@@ -38,7 +38,7 @@ type Form = {
 };
 
 // 出图要求常量（模型/质量/比例/分辨率）抽到 @/lib/genParams，画布「生成图片」节点共用、保持一致。
-import { IMAGE_QUALITIES as QUALITIES, IMAGE_ASPECTS as ASPECTS, imageResolutionOptions, clampImageResolution, buildImageParams } from "@/lib/genParams";
+import { IMAGE_QUALITIES as QUALITIES, IMAGE_ASPECTS as ASPECTS, imageResolutionOptions, clampImageResolution, buildImageParams, nativeImageSchema } from "@/lib/genParams";
 import { assetImageAspectFrom } from "@/lib/templateAspect";
 import { mediaFilesFromClipboard } from "@/lib/clipboardMedia";
 
@@ -56,8 +56,15 @@ function isTauri(): boolean {
 const panel: React.CSSProperties = { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8 };
 const accent = "#8b5cf6";
 
-const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: AssetWorkbenchProps) => {
+const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }: AssetWorkbenchProps) => {
     const navigate = useNavigate();
+    const projectInstanceId = useProjectStore.getState().projectInstanceId;
+    const isCurrentProject = () => {
+        const state = useProjectStore.getState();
+        return state.projectInstanceId === projectInstanceId && !state.isProjectLoading;
+    };
+    const hasTarget = (id: string, variantId?: string | null) => isCurrentProject() &&
+        (useProjectStore.getState()[cat] as any[]).some(a => a.id === id && (!variantId || a.variants?.some((v: any) => v.id === variantId)));
     const assets = useProjectStore((s) => s[cat]) as any[];
     const {
         addAsset, removeAsset, updateAsset, addAssetVariant, updateAssetVariant, removeAssetVariant, setAssetMainImage, addAssetImage, removePendingGen,
@@ -73,7 +80,7 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
     // 资产列表滚动位置快照
     const listScroll = useScrollSnapshot(
         snap0?.listScrollTop,
-        (top) => useProjectStore.getState().setUiSnapshot({ assetPages: { [cat]: { listScrollTop: top } } as UiSnapshot["assetPages"] }),
+        (top) => { if (isCurrentProject()) useProjectStore.getState().setUiSnapshot({ assetPages: { [cat]: { listScrollTop: top } } as UiSnapshot["assetPages"] }); },
         [assets.length],
     );
     const [quality, setQuality] = useState("high");
@@ -93,6 +100,11 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
         [catalogModelsForRes, imgModelKey],
     );
     const resolution = clampImageResolution(resolutionRaw, resOptions);
+    const imageFields = catalogModelsForRes?.find(m => m.id === imgModelKey)?.params;
+    const nativeImage = nativeImageSchema(imageFields);
+    const [nativeDrafts, setNativeDrafts] = useState<Record<string, Record<string, string>>>({});
+    const nativeParams = buildImageParams(nativeDrafts[imgModelKey ?? ''] ?? {}, undefined, imageFields);
+    const generationImageParams = () => nativeImage ? nativeParams : buildImageParams({ aspect, resolution, quality });
     // 区5 图片：自然分辨率信息 + 框内缩放/平移
     const [imgDims, setImgDims] = useState<{ w: number; h: number } | null>(null);
     const [imgScale, setImgScale] = useState(1);
@@ -109,27 +121,27 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
     // 区分二者后：变体默认垫图用基础形象的本地可渲染 uri 作预览（不再无预览图），请求用其公网 url。
     type RefImg = { id: string; uri: string; url?: string; name?: string; uploading?: boolean; error?: boolean };
     const [refImages, setRefImages] = useState<RefImg[]>([]);
-    const refImagesRef = useRef<RefImg[]>([]); // 最新 refImages 镜像，供 mutateRefs 在 updater 外安全计算
+    const refDrafts = useRef(new Map<string, RefImg[]>());
     const [refPickerOpen, setRefPickerOpen] = useState(false);
     const refUid = () => `ref-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
     // 垫图记忆：当前 资产+造型 的 key；用户增删垫图即持久化（切走再回来不丢，区别于纯默认 seed）
     const refMemKey = () => (selectedId ? `${cat}:${selectedId}:${selectedFormKey}` : null);
-    const persistRefs = (refs: RefImg[]) => {
-        const key = refMemKey();
-        if (!key) return;
+    const visibleRefKey = useRef(refMemKey());
+    visibleRefKey.current = refMemKey();
+    const persistRefs = (key: string, refs: RefImg[]) => {
+        if (!isCurrentProject()) return;
         const clean = refs.filter((r) => !r.uploading && !r.error).map(({ id, uri, url, name }) => ({ id, uri, url, name }));
         useProjectStore.getState().setAssetRefImages(key, clean);
     };
     // 包裹 setRefImages：基于最新值镜像算出 next（不在 state updater 里产生副作用），同步状态 + 落盘记忆。
     // 默认 seed 不走它，保持动态（随基础图变化）。
-    const mutateRefs = (updater: (prev: RefImg[]) => RefImg[]) => {
-        const next = updater(refImagesRef.current);
-        refImagesRef.current = next;
-        setRefImages(next);
-        persistRefs(next);
+    const mutateRefs = (updater: (prev: RefImg[]) => RefImg[], key = refMemKey()) => {
+        if (!key || !isCurrentProject()) return;
+        const next = updater(refDrafts.current.get(key) ?? useProjectStore.getState().assetRefImages?.[key] ?? []);
+        refDrafts.current.set(key, next);
+        if (visibleRefKey.current === key) setRefImages(next);
+        persistRefs(key, next);
     };
-    // 镜像同步：默认 seed 走 setRefImages（不经 mutateRefs），这里把最新值同步到 ref
-    useEffect(() => { refImagesRef.current = refImages; }, [refImages]);
     // 重命名（资产列表 / 分体列表）+ 资产右键菜单（导出 / 改组 / 替换基础形象 / 本地上传）
     const [renaming, setRenaming] = useState<{ kind: "asset" | "form"; id: string; variantId: string | null } | null>(null);
     const [renameVal, setRenameVal] = useState("");
@@ -151,24 +163,31 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
     // 本地上传垫图：先以 dataURL 占位预览，再上传到 OSS（managedClient.uploadAsset）拿公网 url 供服务端 fetch。
     // 严格：上传失败标红（不静默用 dataURL，否则服务端 fetch 不到、图生图无效）。
     const addLocalRef = (file: File) => {
+        const key = refMemKey(), assetId = selectedId;
+        if (!key || !assetId || !hasTarget(assetId, selectedFormKey === "base" ? null : selectedFormKey)) return;
+        const current = () => hasTarget(assetId, selectedFormKey === "base" ? null : selectedFormKey);
         const id = refUid();
+        mutateRefs(prev => [...prev, { id, uri: "", name: file.name, uploading: true }], key);
         const reader = new FileReader();
-        reader.onload = () => mutateRefs((prev) => [...prev, { id, uri: String(reader.result), name: file.name, uploading: true }]);
+        reader.onload = () => { if (current()) mutateRefs(prev => prev.map(r => r.id === id && r.uploading ? { ...r, uri: String(reader.result) } : r), key); };
         reader.readAsDataURL(file);
         void (async () => {
             try {
                 const res = await managedClient.uploadAsset(file, file.name, "TP");
+                if (!current()) return;
                 // 与生成资产同策略：落一份本地原件，显示改走 asset:// 本地 uri，绝不把 base64 dataURL 落进项目文件
                 // （genMeta/assetRefImages 存 base64 是项目文件膨胀→保存中断损坏的根源）。字节直取自 File，无需二次下载。
-                const blob = await saveUploadedLocal(file, res.id, res.url, file.name);
+                const blob = await saveUploadedLocal(file, res.id, res.url, file.name, { shouldContinue: current });
+                if (!current()) return;
                 if (!blob) useProjectStore.getState().registerAssetBlob({ id: res.id, url: res.url }); // 非 Tauri 兜底
-                // Tauri：uri 换成本地 localUri（丢弃 base64 预览）；浏览器（无本地副本）：保留 base64 预览。url 恒为公网 OSS 供服务端 fetch。
+                // 完成后只保存本地 URI 或服务端 URL，迟到的 FileReader 不再覆盖成功项。
                 mutateRefs((prev) => prev.map((r) => r.id === id
-                    ? { ...r, url: res.url, uploading: false, ...(blob?.localUri ? { uri: blob.localUri } : {}) }
-                    : r));
+                    ? { ...r, url: res.url, uploading: false, uri: blob?.localUri || res.url }
+                    : r), key);
             } catch (e) {
+                if (!current()) return;
                 console.warn("[asset] 垫图上传失败：", e);
-                mutateRefs((prev) => prev.map((r) => r.id === id ? { ...r, uploading: false, error: true } : r));
+                mutateRefs((prev) => prev.map((r) => r.id === id ? { ...r, uploading: false, error: true } : r), key);
             }
         })();
     };
@@ -211,6 +230,7 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
     const firstUiRef = useRef(true);
     useEffect(() => {
         if (firstUiRef.current) { firstUiRef.current = false; return; }
+        if (!isCurrentProject()) return;
         useProjectStore.getState().setUiSnapshot({
             assetPages: { [cat]: { selectedId: selectedId ?? undefined, selectedFormKey, searchQuery } } as UiSnapshot["assetPages"],
         });
@@ -245,16 +265,19 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
     // ② 无记忆 + 分体（变体）→ 默认参考基础形象（动态，随基础图变化）；③ 否则空。
     useEffect(() => {
         const key = selectedId ? `${cat}:${selectedId}:${selectedFormKey}` : null;
-        const saved = key ? useProjectStore.getState().assetRefImages?.[key] : undefined;
+        const saved = key ? refDrafts.current.get(key) ?? useProjectStore.getState().assetRefImages?.[key] : undefined;
+        let next: RefImg[];
         if (saved) {
             // 记忆存在（含「用户清空成空数组」）→ 直接还原，尊重用户选择
-            setRefImages(saved.map((r) => ({ ...r, id: r.id || refUid() })));
+            next = saved.map((r) => ({ ...r, id: r.id || refUid() }));
         } else if (activeForm?.variantId && activeAsset?.image) {
             // 预览用基础形象的本地可渲染 uri（不再无预览图），请求用其公网 url
-            setRefImages([{ id: refUid(), uri: activeAsset.image, url: toRefUri(activeAsset.image), name: `${activeAsset.name}·基础形象` }]);
+            next = [{ id: refUid(), uri: activeAsset.image, url: toRefUri(activeAsset.image), name: `${activeAsset.name}·基础形象` }];
         } else {
-            setRefImages([]);
+            next = [];
         }
+        if (key) refDrafts.current.set(key, next);
+        setRefImages(next);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedId, selectedFormKey]);
 
@@ -264,6 +287,7 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
     );
 
     const writePrompt = (form: Form, prompt: string) => {
+        if (!activeAsset || !hasTarget(activeAsset.id, form.variantId)) return;
         if (form.variantId) updateAssetVariant(cat, activeAsset.id, form.variantId, { prompt });
         else updateAsset(cat, activeAsset.id, { prompt });
     };
@@ -286,11 +310,16 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
 
     // 生成一张：交给 generationQueue 持久化在途任务（切页/关软件不丢；UI 由 pendingGens 驱动）
     const generateForm = (assetId: string, form: Form) => {
+        if (!hasTarget(assetId, form.variantId)) return false;
         if (!form.prompt.trim()) { alert("该造型暂无提示词，请先填写出图提示词。"); return; }
         const modelKey = effectiveModelKey("image");
         // 有垫图 → 图生图：把参考图作为 input.images 传入（跳过上传中/失败的）。
         // 优先带上资产 id（服务端按 id 直接取字节/OSS直链，最稳，"id 是真理"），url 作双保险。
-        const usable = refImages.filter((r) => !r.uploading && !r.error);
+        const key = `${cat}:${assetId}:${form.key}`;
+        const asset = (useProjectStore.getState()[cat] as any[]).find(a => a.id === assetId);
+        const usable: RefImg[] = refDrafts.current.get(key) ?? useProjectStore.getState().assetRefImages?.[key] ??
+            (form.variantId && asset?.image ? [{ id: refUid(), uri: asset.image, url: toRefUri(asset.image), name: `${asset.name}·基础形象` }] : []);
+        if (usable.some(r => r.uploading || r.error)) { alert(`「${form.title}」的垫图尚未上传完成或上传失败，请完成上传或移除后再生成。`); return false; }
         const toInputRef = (r: RefImg) => {
             const blob = useProjectStore.getState().blobByUri(r.uri) || useProjectStore.getState().blobByUri(r.url || "");
             const url = r.url || toRefUri(r.uri);
@@ -302,20 +331,20 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
             const blob = useProjectStore.getState().blobByUri(r.uri) || useProjectStore.getState().blobByUri(r.url || "");
             return { name: r.name, uri: r.uri, id: blob?.id };
         });
-		startGeneration({ cat, assetId, variantId: form.variantId, purpose: imagePurpose, prompt: form.prompt, modelKey, input, refs, params: { ...buildImageParams({ aspect, resolution, quality }), idPrefix: CAT_PREFIX[cat], assetName: form.title }, label: form.title });
+		startGeneration({ cat, assetId, variantId: form.variantId, purpose: imagePurpose, prompt: form.prompt, modelKey, input, refs, params: { ...generationImageParams(), idPrefix: CAT_PREFIX[cat], assetName: form.title }, label: form.title });
+        return true;
     };
 
     // 区域2 一键生成：仅为「未生成（无基础形象图）」和「失败」的资产生成基础形象；
     // 已生成且非失败的、正在生成中的、无提示词的，一律跳过（避免重复消耗额度）。
     const generateAllBase = () => {
-        const modelKey = effectiveModelKey("image");
         let n = 0, skipped = 0;
         for (const a of assets) {
             if (!a.prompt?.trim()) { skipped++; continue; }        // 无提示词不能生成
             if (isRunning(a.id, null)) { skipped++; continue; }     // 已在生成中
             if (a.image && !isFailed(a.id, null)) { skipped++; continue; } // 已生成且未失败
-			startGeneration({ cat, assetId: a.id, variantId: null, purpose: imagePurpose, prompt: a.prompt, modelKey, params: { ...buildImageParams({ aspect, resolution, quality }), idPrefix: CAT_PREFIX[cat], assetName: a.name }, label: a.name });
-            n++;
+            if (generateForm(a.id, { key: "base", variantId: null, label: "基础形象", title: a.name, desc: a[textField] || "", prompt: a.prompt, images: a.images || [] })) n++;
+            else skipped++;
         }
         alert(n > 0
             ? `已提交 ${n} 个${unit}的基础形象生成（仅未生成/失败的${skipped ? `，跳过 ${skipped} 个` : ""}）。`
@@ -337,6 +366,7 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
     // 区域2 删除：从当前类别移除资产（连带清残留在途记录）；删中的是选中项则交由 effect 回选首项
     const deleteAsset = async (id: string, name: string) => {
         if (!(await confirmDialog(`删除${unit}「${name}」？将一并移除其所有造型与历史图，操作不可撤销。`))) return;
+        if (!hasTarget(id)) return;
         removeAsset(cat, id);
         void useProjectStore.getState().save(true);
     };
@@ -349,7 +379,7 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
     const commitRename = () => {
         if (!renaming) { return; }
         const name = renameVal.trim();
-        if (name) {
+        if (name && hasTarget(renaming.id, renaming.variantId)) {
             if (renaming.variantId) updateAssetVariant(cat, renaming.id, renaming.variantId, { name });
             else updateAsset(cat, renaming.id, { name });
             void useProjectStore.getState().save(true);
@@ -378,10 +408,12 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
     };
     // 上传一个本地文件到 OSS 成正式资产：返回 {assetId, displayUri(本地优先/公网兜底)}；并注册完整三元映射。
     // 与「生成资产」同链路（uploadAsset→OSS→saveRemoteAsset 下载本地副本+映射），失败抛出由调用方提示。
-    const uploadAsAsset = async (file: File): Promise<{ assetId: string; displayUri: string }> => {
+    const uploadAsAsset = async (file: File, current = isCurrentProject): Promise<{ assetId: string; displayUri: string } | null> => {
         const res = await managedClient.uploadAsset(file, file.name, CAT_PREFIX[cat]); // 服务端落 OSS（配置 OSS 时为公网直链）+ 分配资产 id
+        if (!current()) return null;
         let displayUri = res.url;
-        const blob = await saveRemoteAsset(res.id, res.url); // 下载本地副本 + 注册到服务端
+        const blob = await saveRemoteAsset(res.id, res.url, { shouldContinue: current });
+        if (!current()) return null;
         if (blob) { useProjectStore.getState().registerAssetBlob(blob); displayUri = blob.localUri || res.url; }
         else useProjectStore.getState().registerAssetBlob({ id: res.id, url: res.url });
         return { assetId: res.id, displayUri };
@@ -391,19 +423,23 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
     // 与生成资产同链路（uploadAsset→OSS→saveRemoteAsset 本地副本+三元映射），音频前缀走 "audio" 桶（不占角色 C 命名空间）。
     const handleVoiceUpload = async (file: File) => {
         if (!activeAsset) return;
+        const assetId = activeAsset.id, oldVoice = activeAsset.voiceUri;
+        const current = () => hasTarget(assetId) && (useProjectStore.getState()[cat] as any[]).find(a => a.id === assetId)?.voiceUri === oldVoice;
         setUploadingVoice(true);
         try {
             const res = await managedClient.uploadAsset(file, file.name, "audio"); // 服务端落 OSS + 分配 audio 前缀资产 id
+            if (!current()) return;
             let displayUri = res.url;
-            const blob = await saveRemoteAsset(res.id, res.url);
+            const blob = await saveRemoteAsset(res.id, res.url, { shouldContinue: current });
+            if (!current()) return;
             if (blob) { useProjectStore.getState().registerAssetBlob(blob); displayUri = blob.localUri || res.url; }
             else useProjectStore.getState().registerAssetBlob({ id: res.id, url: res.url });
             updateAsset(cat, activeAsset.id, { voiceUri: displayUri, voiceAssetId: res.id, voiceName: `${activeAsset.name}的声音` });
             void useProjectStore.getState().save(true);
         } catch (e) {
-            alert(`音频上传失败：${e instanceof Error ? e.message : "未知错误"}`);
+            if (isCurrentProject()) alert(`「${activeAsset.name}」音色上传失败：${e instanceof Error ? e.message : "未知错误"}`);
         } finally {
-            setUploadingVoice(false);
+            if (isCurrentProject()) setUploadingVoice(false);
         }
     };
     const removeVoice = () => {
@@ -417,7 +453,9 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
         closeCtx();
         setUploadingImg(true);
         try {
-            const { displayUri } = await uploadAsAsset(file);
+            const result = await uploadAsAsset(file);
+            if (!result || !isCurrentProject()) return;
+            const { displayUri } = result;
             const id = `${cat}-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
             const a: Record<string, any> = { id, name: file.name.replace(/\.[^.]+$/, ""), philosophy: "", prompt: "", image: displayUri, images: [displayUri], variants: [] };
             a[textField] = "";
@@ -425,9 +463,9 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
             setSelectedId(id); setSelectedFormKey("base"); setSearchQuery("");
             await useProjectStore.getState().save(true);
         } catch (e) {
-            alert(`本地上传资产失败（未做 OSS 存储）：${e instanceof Error ? e.message : "未知错误"}`);
+            if (isCurrentProject()) alert(`本地上传资产失败：${e instanceof Error ? e.message : "未知错误"}`);
         } finally {
-            setUploadingImg(false);
+            if (isCurrentProject()) setUploadingImg(false);
         }
     };
     // 把一张图片保存到磁盘（Tauri 走另存对话框 / 浏览器走下载），默认名 baseName
@@ -459,15 +497,18 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
     // ── 展示区：上传本地图片作为当前造型的资产形象（必走 OSS：拿资产 id + 公网 url → 本地副本入历史并设主图）──
     const uploadImageToForm = async (file: File) => {
         if (!activeAsset || !activeForm) return;
+        const current = () => hasTarget(activeAsset.id, activeForm.variantId);
         setUploadingImg(true);
         try {
-            const { displayUri } = await uploadAsAsset(file);
+            const result = await uploadAsAsset(file, current);
+            if (!result || !current()) return;
+            const { displayUri } = result;
             addAssetImage(cat, activeAsset.id, activeForm.variantId, displayUri, true);
             await useProjectStore.getState().save(true);
         } catch (e) {
-            alert(`上传失败（未做 OSS 存储）：${e instanceof Error ? e.message : "未知错误"}`);
+            if (isCurrentProject()) alert(`「${activeForm.title}」图片上传失败：${e instanceof Error ? e.message : "未知错误"}`);
         } finally {
-            setUploadingImg(false);
+            if (isCurrentProject()) setUploadingImg(false);
         }
     };
     // ── 展示区：保存当前资产图片（默认名=资产名 + 第几次历史记录编号）──
@@ -488,8 +529,8 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
             if (!f.prompt.trim()) { skipped++; continue; }
             if (isRunning(activeAsset.id, f.variantId)) { skipped++; continue; }
             if (f.image && !isFailed(activeAsset.id, f.variantId)) { skipped++; continue; }
-            generateForm(activeAsset.id, f);
-            n++;
+            if (generateForm(activeAsset.id, f)) n++;
+            else skipped++;
         }
         alert(n > 0
             ? `已提交 ${n} 个造型生成（仅未生成/失败的${skipped ? `，跳过 ${skipped} 个` : ""}）。`
@@ -500,6 +541,7 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
     const deleteVariant = async (variantId: string, label: string) => {
         if (!activeAsset) return;
         if (!(await confirmDialog(`删除造型「${label}」？将一并移除其历史图，操作不可撤销。`))) return;
+        if (!hasTarget(activeAsset.id, variantId)) return;
         removeAssetVariant(cat, activeAsset.id, variantId);
         if (selectedFormKey === variantId) setSelectedFormKey("base");
         void useProjectStore.getState().save(true);
@@ -750,7 +792,7 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
                                         <audio src={activeAsset.voiceUri} controls style={{ flex: 1, minWidth: 0, height: 32 }} />
                                         <span style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={activeAsset.voiceName || "已绑定音色"}>{activeAsset.voiceName || "已绑定音色"}</span>
                                         <label title="替换为其它音频" style={{ ...panel, color: "#c4b5fd", fontSize: 11, padding: "6px 10px", cursor: uploadingVoice ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}>
-                                            {uploadingVoice ? "上传中…" : "替换"}
+                                            {uploadingVoice ? "上传中…" : "替换音色"}
                                             <input type="file" accept="audio/*" style={{ display: "none" }} disabled={uploadingVoice} onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleVoiceUpload(f); e.target.value = ""; }} />
                                         </label>
                                         <button onClick={removeVoice} title="解除绑定" style={{ ...panel, color: "#f8c8c8", fontSize: 11, padding: "6px 10px", cursor: "pointer", whiteSpace: "nowrap" }}>移除</button>
@@ -758,9 +800,8 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
                                 ) : (
                                     <div style={{ display: "flex", gap: 8 }}>
                                         <span style={{ flex: 1, ...panel, color: "rgba(255,255,255,0.5)", fontSize: 11, padding: "6px 8px", display: "flex", alignItems: "center" }}>未绑定音色</span>
-                                        <button disabled title="TTS 音色生成暂未实现" style={{ ...panel, color: "rgba(255,255,255,0.4)", fontSize: 11, padding: "6px 10px", cursor: "not-allowed" }}>音色生成</button>
                                         <label title="上传本地音频绑定到该角色" style={{ ...panel, color: "#c4b5fd", fontSize: 11, padding: "6px 10px", cursor: uploadingVoice ? "not-allowed" : "pointer", borderColor: accent, whiteSpace: "nowrap" }}>
-                                            {uploadingVoice ? "上传中…" : "本地上传"}
+                                            {uploadingVoice ? "上传中…" : "上传音色"}
                                             <input type="file" accept="audio/*" style={{ display: "none" }} disabled={uploadingVoice} onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleVoiceUpload(f); e.target.value = ""; }} />
                                         </label>
                                     </div>
@@ -772,7 +813,15 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
                         <div>
                             <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>出图要求</div>
                             <ModelPicker cap="image" label="出图模型" style={{ marginBottom: 8 }} />
-                            <div style={{ display: "flex", gap: 8 }}>
+                            {nativeImage ? <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                {imageFields?.filter(f => f.type === 'enum').map(field => <label key={field.key} style={{ flex: '1 1 30%', minWidth: 70 }}>
+                                    <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.45)', marginBottom: 2 }}>{field.label}</div>
+                                    <select value={String(nativeParams[field.key] ?? '')} onChange={e => setNativeDrafts(prev => ({ ...prev, [imgModelKey ?? '']: { ...prev[imgModelKey ?? ''], [field.key]: e.target.value } }))}
+                                        style={{ width: '100%', ...panel, color: '#fff', fontSize: 11, padding: 6 }}>
+                                        {field.options?.map(value => <option key={value} value={value} style={{ background: '#1f1f2e' }}>{value === 'MID_JOURNEY' ? 'MJ' : value === 'NIJI_JOURNEY' ? 'Niji' : value || '标准'}</option>)}
+                                    </select>
+                                </label>)}
+                            </div> : <div style={{ display: "flex", gap: 8 }}>
                                 <label style={{ flex: 1, minWidth: 0 }}>
                                     <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", marginBottom: 2 }}>质量</div>
                                     <select value={quality} onChange={(e) => setQuality(e.target.value)}
@@ -794,7 +843,7 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
                                         {resOptions.map((r) => <option key={r.v} value={r.v} style={{ background: "#1f1f2e" }}>{r.label}</option>)}
                                     </select>
                                 </label>
-                            </div>
+                            </div>}
                         </div>
 
                         <div style={{ display: "flex", gap: 10 }}>
@@ -1058,6 +1107,11 @@ const AssetWorkbench = ({ cat, unit, imagePurpose, textField, showVoice }: Asset
             )}
         </div>
     );
+};
+
+const AssetWorkbench = (props: AssetWorkbenchProps) => {
+    const instance = useProjectStore(s => s.projectInstanceId);
+    return <AssetWorkbenchSession key={`${instance}:${props.cat}`} {...props} />;
 };
 
 export default AssetWorkbench;

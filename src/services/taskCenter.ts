@@ -25,6 +25,7 @@ export type TaskUpdate = (
 
 /** taskId → 该任务的更新回调 */
 const handlers = new Map<string, TaskUpdate>();
+export const hasTrackedTasks = () => handlers.size > 0;
 
 let _tracker: TaskTracker | null = null;
 

@@ -18,7 +18,7 @@ import { useLibraryStore } from "@/store/libraryStore";
 import { useCanvasStore } from "@/store/canvasStore";
 import { dispatchCommand } from "@/command/dispatch";
 import { makeNode, NODE_W, NODE_H } from "@/canvas/nodeFactory";
-import { addNodeMaterialFromAsset } from "@/canvas/nodeMaterials";
+import { addNodeMaterialFromAsset, findPickedNodeMaterial, toggleNodeMaterialFromAsset } from "@/canvas/nodeMaterials";
 import { addShotMaterialFromAsset, materialKindFromAssetCat } from "@/lib/shotMaterialOps";
 import { usePromptModalStore } from "@/store/promptModalStore";
 import { ensureDragThumb, ensureLocalOriginal, saveRemoteAsset } from "@/services/assetPersist";
@@ -240,10 +240,19 @@ function startAssetDragToCanvas(e: React.MouseEvent, item: AssetItem): boolean {
 const panel: React.CSSProperties = { background: "#12151c", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10 };
 const accent = "#8b5cf6";
 
+function pickRef(item: AssetItem): Parameters<typeof addNodeMaterialFromAsset>[1] {
+	const blob = useProjectStore.getState().blobByUri(item.uri);
+	return { id: blob?.id, assetId: item.id, url: blob?.url || item.uri, name: item.name, media: "image",
+		usage: materialKindFromAssetCat(item.cat) === "character" ? "identity" : undefined };
+}
+
+const selectedAssetStyle: React.CSSProperties = { outline: "2px solid #6890F8", outlineOffset: -2, boxShadow: "inset 0 0 0 5px rgba(104,144,248,0.25)" };
+
 export default function AssetAssistant({ popout = false }: { popout?: boolean }) {
 	const [open, setOpen] = useState(false);
 	const pickTargetNodeId = useUiStore((s) => s.assetLibraryTargetNodeId);
 	const pickMode = !!pickTargetNodeId && !popout;
+	useCanvasStore((s) => pickMode ? s.nodes[pickTargetNodeId!] : undefined);
 	const shown = open || popout || pickMode;
 	const [major, setMajor] = useState<Major>("project");
 	const [sub, setSub] = useState<SubCat>("characters");
@@ -448,25 +457,19 @@ export default function AssetAssistant({ popout = false }: { popout?: boolean })
 			? { position: "fixed", zIndex: 10550, left: "50%", top: "50%", transform: "translate(-50%, -50%)", width: panelW, height: "min(740px, 86vh)", display: "flex", flexDirection: "column", ...panel, boxShadow: "0 16px 60px rgba(0,0,0,0.7)" }
 			: { position: "fixed", zIndex: zBase, width: panelW, height: "min(740px, 86vh)", display: "flex", flexDirection: "column", ...panel, boxShadow: "0 10px 40px rgba(0,0,0,0.55)", ...panelStyle };
 	const pickItem = (item: AssetItem) => {
-		if (!pickTargetNodeId) return false;
-		const blob = useProjectStore.getState().blobByUri(item.uri);
-		addNodeMaterialFromAsset(pickTargetNodeId, {
-			id: blob?.id,
-			assetId: item.id,
-			url: blob?.url || item.uri,
-			name: item.name,
-			media: "image",
-			usage: materialKindFromAssetCat(item.cat) === "character" ? "identity" : undefined,
-		});
-		useUiStore.getState().setAssetLibraryTargetNodeId(null);
+		if (!pickMode || !pickTargetNodeId) return false;
+		toggleNodeMaterialFromAsset(pickTargetNodeId, pickRef(item));
 		return true;
 	};
+	const closePicker = () => { useUiStore.getState().setAssetLibraryTargetNodeId(null); setOpen(false); setFormMenu(null); };
 	return (
+		<>
+		{pickMode && <div aria-label="退出资产选择" onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); closePicker(); }} style={{ position: "fixed", inset: 0, zIndex: 10549 }} />}
 		<div ref={panelRef} style={rootStyle}>
 			<div onMouseDown={popout || pickMode ? undefined : startPanelDrag} title={popout || pickMode ? undefined : "拖动标题栏可移动"}
 				style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", borderBottom: "1px solid rgba(255,255,255,0.08)", cursor: popout || pickMode ? "default" : panelDrag ? "grabbing" : "grab", userSelect: "none" }}>
-				<div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontSize: 14, fontWeight: 600 }}><Boxes size={17} /> {pickMode ? "选择一项资产" : "资产助手"}</div>
-				{pickMode && <button onClick={() => useUiStore.getState().setAssetLibraryTargetNodeId(null)} style={{ padding: "5px 10px", fontSize: 12, borderRadius: 6, border: "1px solid rgba(255,255,255,0.16)", background: "rgba(255,255,255,0.06)", color: "#fff", cursor: "pointer" }}>取消</button>}
+				<div style={{ display: "flex", alignItems: "center", gap: 8, color: "#fff", fontSize: 14, fontWeight: 600 }}><Boxes size={17} /> {pickMode ? "选择资产" : "资产助手"}</div>
+				{pickMode && <button onClick={closePicker} style={{ padding: "5px 10px", fontSize: 12, borderRadius: 6, border: "1px solid rgba(255,255,255,0.16)", background: "rgba(255,255,255,0.06)", color: "#fff", cursor: "pointer" }}>完成</button>}
 				{!popout && (
 					<div style={{ display: pickMode ? "none" : "flex", alignItems: "center", gap: 6 }} onMouseDown={(e) => e.stopPropagation()}>
 						<button
@@ -530,7 +533,7 @@ export default function AssetAssistant({ popout = false }: { popout?: boolean })
 
 			<div style={{ flex: 1, overflowY: "auto", padding: major === "shared" ? "12px 14px 8px" : "4px 14px 8px" }}>
 				{major === "shared" ? (
-					<SharedPanel />
+					<SharedPanel pickTargetNodeId={pickMode ? pickTargetNodeId : null} />
 				) : items.length === 0 ? (
 					<div style={{ color: "rgba(255,255,255,0.4)", fontSize: 12, textAlign: "center", padding: "50px 10px" }}>
 						{major === "favorite" ? "暂无收藏，点资产卡的 ☆ 收藏（收藏后云端永久保留）" : "该分类暂无已出图资产"}
@@ -538,19 +541,22 @@ export default function AssetAssistant({ popout = false }: { popout?: boolean })
 				) : (
 					<div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
 						{items.map((it, i) => {
+							const selected = pickMode && !!findPickedNodeMaterial(pickTargetNodeId!, pickRef(it));
 							const forms = it.forms ?? [];
 							const hasForms = major === "project" && !!it.id && forms.length > 1; // 有多个造型才可右击选择
 							return (
 								<div key={i} draggable={!pickMode} onDragStart={(e) => { if (!pickMode) onCardDragStart(e, it); }}
 									onMouseDown={(e) => { if (e.button === 0 && pickMode) { e.preventDefault(); e.stopPropagation(); pickItem(it); } else startAssetDragToCanvas(e, it); }}
-									onDoubleClick={() => openLightbox({ uri: it.uri, name: it.name, media: "image", voiceUri: it.voiceUri, voiceName: it.voiceName })}
+									onDoubleClick={pickMode ? undefined : () => openLightbox({ uri: it.uri, name: it.name, media: "image", voiceUri: it.voiceUri, voiceName: it.voiceName })}
 									onContextMenu={(e) => { e.preventDefault(); setFormMenu({ x: e.clientX, y: e.clientY, item: it }); }}
 									title={`${it.name}（双击放大 / 拖到素材区=垫图 / 画布=新建图片节点 / 软件外=复制原图 / 右键：检查素材${hasForms ? `·选择造型（${forms.length}）` : ""}）`}
-									style={{ position: "relative", aspectRatio: "1/1", borderRadius: 8, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)", background: `center/cover no-repeat url(${it.uri})`, cursor: "grab" }}>
+									aria-pressed={pickMode ? selected : undefined}
+									style={{ position: "relative", aspectRatio: "1/1", borderRadius: 8, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)", background: `center/cover no-repeat url(${it.uri})`, cursor: pickMode ? "pointer" : "grab", ...(selected ? selectedAssetStyle : {}) }}>
+									{selected && <span style={{ position: "absolute", left: 4, top: 4, color: "white", background: "#6890F8", borderRadius: 4, padding: "0 4px", pointerEvents: "none" }}>✓</span>}
 									{hasForms && (
 										<span title={`${forms.length} 个造型，右键选择`} style={{ position: "absolute", top: 3, left: 3, fontSize: 9.5, color: "#fff", background: "rgba(0,0,0,0.55)", borderRadius: 4, padding: "1px 5px", lineHeight: 1.4 }}>{forms.length}造型</span>
 									)}
-									<span onClick={(e) => { e.stopPropagation(); toggleFav(it); }} title={isFav(it.uri) ? "取消收藏" : "收藏"}
+									<span onMouseDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); toggleFav(it); }} title={isFav(it.uri) ? "取消收藏" : "收藏"}
 										style={{ position: "absolute", top: 3, right: 3, width: 22, height: 22, borderRadius: "50%", background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
 										<Star size={13} color={isFav(it.uri) ? "#fbbf24" : "#fff"} fill={isFav(it.uri) ? "#fbbf24" : "none"} />
 									</span>
@@ -571,7 +577,7 @@ export default function AssetAssistant({ popout = false }: { popout?: boolean })
 			</div>
 
 			<div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.4)", padding: "8px 14px", borderTop: "1px solid rgba(255,255,255,0.08)", lineHeight: 1.5 }}>
-				{pickMode ? "单击资产立即加入节点·切换分类和右键选择造型不会结束选择" : "拖到素材区 = 垫图·拖到画布 = 新建图片节点·拖到软件外 = 复制·右键资产 = 选择造型"}
+				{pickMode ? "点击选择，再次点击取消；点击外部退出" : "拖到素材区 = 垫图·拖到画布 = 新建图片节点·拖到软件外 = 复制·右键资产 = 选择造型"}
 			</div>
 
 			{formMenu && createPortal(
@@ -627,6 +633,7 @@ export default function AssetAssistant({ popout = false }: { popout?: boolean })
 				</>, document.body
 			)}
 		</div>
+		</>
 	);
 }
 
@@ -648,8 +655,8 @@ const shRow: React.CSSProperties = { display: "flex", alignItems: "center", gap:
 
 type SharedView = { level: "libs" } | { level: "folders"; libId: string } | { level: "assets"; libId: string; folderId: string };
 
-function SharedPanel() {
-	const pickTargetNodeId = useUiStore((s) => s.assetLibraryTargetNodeId);
+function SharedPanel({ pickTargetNodeId }: { pickTargetNodeId: string | null }) {
+	useCanvasStore((s) => pickTargetNodeId ? s.nodes[pickTargetNodeId] : undefined);
 	const libs = useSharedLibStore((s) => s.libs);
 	const foldersByLib = useSharedLibStore((s) => s.foldersByLib);
 	const assetsByFolder = useSharedLibStore((s) => s.assetsByFolder);
@@ -946,6 +953,8 @@ function SharedPanel() {
 				<div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
 					{shownAssets.map((rec) => {
 						const media = rec.mime?.startsWith("video/") ? "video" : rec.mime?.startsWith("audio/") ? "audio" : "image";
+						const ref: Parameters<typeof addNodeMaterialFromAsset>[1] = { id: rec.assetId || rec.id, url: rec.url || rec.localUri, name: rec.name, media };
+						const selected = !!pickTargetNodeId && !!findPickedNodeMaterial(pickTargetNodeId, ref);
 						const item: AssetItem = { uri: rec.localUri!, name: rec.name, cat: sharedCatOf(rec.assetId) };
 						return (
 							<div key={rec.id} draggable={!pickTargetNodeId}
@@ -954,14 +963,15 @@ function SharedPanel() {
 									ensureSharedBlob(rec);
 									if (e.button === 0 && pickTargetNodeId) {
 										e.preventDefault(); e.stopPropagation();
-										addNodeMaterialFromAsset(pickTargetNodeId, { id: rec.assetId || rec.id, url: rec.url || rec.localUri, name: rec.name, media });
-										useUiStore.getState().setAssetLibraryTargetNodeId(null);
+										toggleNodeMaterialFromAsset(pickTargetNodeId, ref);
 									} else if (media === "image") startAssetDragToCanvas(e, item);
 								}}
-								onDoubleClick={() => openLightbox({ uri: rec.localUri || rec.url, name: rec.name, media })}
+								onDoubleClick={pickTargetNodeId ? undefined : () => openLightbox({ uri: rec.localUri || rec.url, name: rec.name, media })}
 								onContextMenu={media !== "video" ? (e) => { e.preventDefault(); setBindMenu({ x: e.clientX, y: e.clientY, rec, media: media as "image" | "audio" }); } : undefined}
 								title={`${rec.name}（双击放大 / 拖到素材区=垫图 / 画布=新建图片节点${media !== "video" ? " / 右键：添加到项目资产" : ""}）`}
-								style={{ position: "relative", aspectRatio: "1/1", borderRadius: 8, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)", background: media === "image" ? `center/cover no-repeat url(${rec.localUri})` : "rgba(255,255,255,0.05)", cursor: "grab", display: "flex", alignItems: "center", justifyContent: "center" }}>
+								aria-pressed={pickTargetNodeId ? selected : undefined}
+								style={{ position: "relative", aspectRatio: "1/1", borderRadius: 8, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)", background: media === "image" ? `center/cover no-repeat url(${rec.localUri})` : "rgba(255,255,255,0.05)", cursor: pickTargetNodeId ? "pointer" : "grab", display: "flex", alignItems: "center", justifyContent: "center", ...(selected ? selectedAssetStyle : {}) }}>
+								{selected && <span style={{ position: "absolute", left: 4, top: 4, zIndex: 1, color: "white", background: "#6890F8", borderRadius: 4, padding: "0 4px", pointerEvents: "none" }}>✓</span>}
 								{media === "video" && <video src={rec.localUri} style={{ width: "100%", height: "100%", objectFit: "cover" }} muted preload="metadata" />}
 								{media === "audio" && <span style={{ fontSize: 22 }}>🎵</span>}
 								<span style={{ position: "absolute", left: 0, right: 0, bottom: 0, fontSize: 10, color: "#fff", background: "rgba(0,0,0,0.55)", padding: "2px 5px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{rec.name}</span>

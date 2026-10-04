@@ -16,6 +16,9 @@ import { runPurpose } from "@/services/purposeRunner";
 import { computeChangedFlags } from "@/lib/wordDiff";
 import { presetTag } from "@/lib/presetSchemes";
 import type { ShotMaterial } from "@/services/projectFile";
+import { useCanvasStore } from "@/store/canvasStore";
+import { formatNodeMaterialPrompt } from "@/canvas/nodeMaterials";
+import { materialPromptState } from "@/lib/materialPrompt";
 
 /** 剥掉模型可能包裹的 ```代码块``` 与首尾空白 */
 function cleanProposal(s: string): string {
@@ -59,7 +62,9 @@ function renderFindHighlight(text: string, find: string): React.ReactNode {
 }
 
 export default function PromptModal() {
-	const { open, title, value, placeholder, readOnly, onSave, extra, mentions, onImport, onMatchAssets, presets, close } = usePromptModalStore();
+	const { open, title, value, placeholder, readOnly, onSave, extra, mentions, onImport, onMatchAssets, presets, close, nodeId } = usePromptModalStore();
+	const node = useCanvasStore(s => nodeId ? s.nodes[nodeId] : undefined);
+	useCanvasStore(s => nodeId ? s.edges : undefined);
 	const [draft, setDraft] = useState(value);
 	const taRef = useRef<HTMLTextAreaElement>(null);
 	const editorRef = useRef<PromptMentionHandle>(null);
@@ -86,9 +91,9 @@ export default function PromptModal() {
 	const rawCands = mentions ? mentions() : [];
 	const presetOptions = presets ? presets() : [];
 	// 素材映射给编辑器：id=tag，顺序=候选顺序（materialTags 会据此重算出同样的 @ImageN 编号）
-	const mkey = rawCands.map((c) => `${c.tag}|${c.uri}|${c.name}|${c.media}`).join(";");
+	const mkey = rawCands.map((c) => `${c.tag}|${c.uri}|${c.name}|${c.media}|${c.assetId}`).join(";");
 	const richMaterials = useMemo<ShotMaterial[]>(
-		() => rawCands.map((c) => ({ id: c.tag, media: (c.media || "image") as ShotMaterial["media"], name: c.name || "", uri: c.uri || "", kind: "local" } as ShotMaterial)),
+		() => rawCands.map((c) => ({ id: c.tag, assetId: c.assetId, media: (c.media || "image") as ShotMaterial["media"], name: c.name || "", uri: c.uri || "", kind: "local" } as ShotMaterial)),
 		[mkey], // eslint-disable-line react-hooks/exhaustive-deps
 	);
 
@@ -102,7 +107,12 @@ export default function PromptModal() {
 		setDraft((d) => d.slice(0, start) + text + d.slice(end));
 		requestAnimationFrame(() => { el.focus(); const p = start + text.length; el.setSelectionRange(p, p); });
 	}, [rich]);
-	const api: PromptModalApi = { insertAtCursor };
+	const api: PromptModalApi = { insertAtCursor, getValue: () => draft, setValue: setDraft };
+	const presentation = materialPromptState(node?.data.params.materialPrompt);
+	const modeSignature = JSON.stringify(presentation);
+	useEffect(() => {
+		if (open && nodeId) setDraft(text => formatNodeMaterialPrompt(nodeId, text));
+	}, [open, nodeId, mkey, modeSignature]);
 
 	// 插入预设胶囊：富文本走胶囊、纯文本落标记文本（提交时由 resolvePresets 展开成完整预设词）
 	const insertPreset = useCallback((id: string, name: string) => {
@@ -312,21 +322,22 @@ export default function PromptModal() {
 					<div style={{ flex: 1, display: "flex", minHeight: 0, minWidth: 0, borderRight: proposal !== null ? "1px solid rgba(255,255,255,0.08)" : "none" }}>
 						{replOpen && findStr ? (
 							/* 一键替换的命中高亮预览（只读）：黄色=将被替换的内容；清空查找串/收起替换栏即恢复编辑 */
-							<div className="Qiji-scroll-thin" style={{ flex: 1, overflowY: "auto", padding: 16, fontSize: 14, lineHeight: 1.7, color: "#e6e6e6", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+							<div className="Qiji-scroll-thin" style={{ flex: 1, overflowY: "auto", padding: 16, fontSize: 16, lineHeight: 1.7, color: "#e6e6e6", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
 								{renderFindHighlight(draft, findStr)}
 							</div>
 						) : rich ? (
 							<PromptMentionEditor
 								ref={editorRef}
 								value={draft}
+								materialPrompt={presentation}
 								materials={richMaterials}
 								presets={presetOptions}
 								onChange={setDraft}
 								onMentionProbe={(pos) => setMentionPos(pos)}
 								onImportProbe={(pos) => setImportPos(onImport ? pos : null)}
 								placeholder={placeholder}
-								style={{ flex: 1, padding: 16, fontSize: 14, lineHeight: 1.7, color: "#e6e6e6", overflowY: "auto" }}
-								className="Qiji-scroll-thin"
+								style={{ flex: 1, padding: 16, fontSize: 16, lineHeight: 1.7, color: "#e6e6e6", overflowY: "auto" }}
+								className="Qiji-scroll-thin qj-prompt-readable"
 							/>
 						) : (
 							<textarea
@@ -338,7 +349,7 @@ export default function PromptModal() {
 								placeholder={placeholder}
 								spellCheck={false}
 								className="Qiji-scroll-thin"
-								style={{ flex: 1, resize: "none", padding: 16, background: "transparent", color: "#e6e6e6", fontSize: 14, lineHeight: 1.7, border: "none", outline: "none", fontFamily: "inherit" }}
+								style={{ flex: 1, resize: "none", padding: 16, background: "transparent", color: "#e6e6e6", fontSize: 16, lineHeight: 1.7, border: "none", outline: "none", fontFamily: "inherit" }}
 							/>
 						)}
 					</div>
@@ -354,7 +365,7 @@ export default function PromptModal() {
 									<button onClick={adoptProposal} disabled={chatBusy || !proposal} style={{ ...smallBtn, padding: "4px 9px", background: chatBusy || !proposal ? "rgba(139,92,246,0.4)" : "#8b5cf6", color: "#fff", borderColor: "#8b5cf6", cursor: chatBusy || !proposal ? "not-allowed" : "pointer" }}>采用</button>
 								</div>
 							</div>
-							<div className="Qiji-scroll-thin" style={{ flex: 1, overflowY: "auto", padding: 16, fontSize: 14, lineHeight: 1.7, color: "#e6e6e6", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+							<div className="Qiji-scroll-thin" style={{ flex: 1, overflowY: "auto", padding: 16, fontSize: 16, lineHeight: 1.7, color: "#e6e6e6", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
 								{proposal ? renderDiff(proposal, draft) : <span style={{ color: "rgba(255,255,255,0.4)" }}>{chatBusy ? "正在思考…" : "（无内容）"}</span>}
 							</div>
 						</div>

@@ -20,6 +20,8 @@ export interface RedeemCode {
 	note?: string;
 	/** 归属渠道商 id（渠道商门户签发时写入；空=平台直发） */
 	agentId?: string;
+	/** Actual issuance debit per code. Missing on legacy codes means face value was paid. */
+	agentDebit?: number;
 	/** 是否已被兑换 */
 	used: boolean;
 	usedBy?: string;
@@ -36,9 +38,9 @@ function persist(): void {
 }
 
 /** 生成一个 QJ-XXXX-XXXX-XXXX 形式的码（去掉易混字符无关，纯十六进制大写） */
-function genCode(): string {
+function genCode(prefix: string): string {
 	const raw = randomBytes(6).toString("hex").toUpperCase(); // 12 hex chars
-	return `QJ-${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 12)}`;
+	return `${prefix}-${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 12)}`;
 }
 
 export function listCodes(): RedeemCode[] {
@@ -46,7 +48,11 @@ export function listCodes(): RedeemCode[] {
 }
 
 /** 批量生成兑换码（count 1-500，credits>0；expiresAt 可空；agentId 归属渠道商） */
-export function createCodes(input: { count?: number; credits: number; expiresAt?: string; note?: string; agentId?: string }): RedeemCode[] {
+export function createCodes(input: { count?: number; credits: number; expiresAt?: string; note?: string; agentId?: string; agentDebit?: number; prefix?: string }): RedeemCode[] {
+	const prefix = (input.prefix ?? "QJ").trim().toUpperCase();
+	if (!/^[A-Z0-9]{2,12}$/.test(prefix)) throw new Error("兑换码前缀须为 2–12 位字母或数字");
+	if (["MC", "SC", "TC"].includes(prefix)) throw new Error("该兑换码前缀为系统保留前缀");
+	if (!Number.isFinite(Number(input.credits)) || Number(input.credits) <= 0) throw new Error("兑换码面额必须为正数");
 	const count = Math.max(1, Math.min(500, Math.floor(Number(input.count) || 1)));
 	const credits = Math.max(1, Math.floor(Number(input.credits) || 0));
 	const now = new Date().toISOString();
@@ -54,8 +60,8 @@ export function createCodes(input: { count?: number; credits: number; expiresAt?
 	const made: RedeemCode[] = [];
 	const taken = new Set(codes.map((c) => c.code));
 	for (let i = 0; i < count; i++) {
-		let code = genCode();
-		while (taken.has(code)) code = genCode();
+		let code = genCode(prefix);
+		while (taken.has(code)) code = genCode(prefix);
 		taken.add(code);
 		made.push({
 			code,
@@ -64,6 +70,7 @@ export function createCodes(input: { count?: number; credits: number; expiresAt?
 			expiresAt: input.expiresAt || undefined,
 			note: input.note || undefined,
 			agentId: input.agentId || undefined,
+			agentDebit: input.agentId ? input.agentDebit ?? 0 : undefined,
 			used: false,
 			createdAt: now,
 		});
@@ -78,20 +85,20 @@ export function codesByAgent(agentId: string): RedeemCode[] {
 	return listCodes().filter((c) => c.agentId === agentId);
 }
 
-/** 平台直发的兑换码（无归属渠道商——对**所有**用户可用） */
+/** 平台直发的兑换码，仅源站用户可用。 */
 export function platformCodes(): RedeemCode[] {
 	return listCodes().filter((c) => !c.agentId);
 }
 
 /**
  * 兑换码可用性（归属闸，⚠ 勿放宽）：
- *  - 平台直发（无 agentId）→ 所有用户可兑换；
+ *  - 平台直发（无 agentId）→ 仅源站用户可兑换；
  *  - 渠道商签发 → **仅其直属名下用户**可兑换（别家渠道商的用户、平台直属用户一律不可）。
  * 不放宽到「上级渠道商的码给下游用户用」：兑换=凭空发积分，用户消耗时按归属链**逐级**扣各商积分池
  *（第112轮双扣费）——上级给下游的用户发码等于消耗下游的池子，是经济漏洞。
  */
 export function codeUsableBy(rec: RedeemCode, userAgentId?: string): boolean {
-	return !rec.agentId || rec.agentId === userAgentId;
+	return (rec.agentId || undefined) === (userAgentId || undefined);
 }
 
 /** 取单个码（供渠道商作废前校验归属/状态） */
@@ -117,23 +124,32 @@ export interface PruneCodesResult {
 	agentRefunds: { agentId: string; credits: number; count: number }[];
 }
 
+/** Used-only cleanup never triggers refunds or removes unredeemed codes. */
+export function pruneUsedCodes(agentId?: string): { removed: number } {
+	const keep = codes.filter(c => !c.used || (c.agentId || undefined) !== agentId);
+	const removed = codes.length - keep.length;
+	if (removed) { saveJson(FILE, keep); codes = keep; }
+	return { removed };
+}
+
 /**
  * 清除失效兑换码（第225轮）：已使用的 + 已过期的一次清掉。
  * ⚠ 已过期且未使用的渠道商码要把面额退回其积分池（签发时是真金划转，过期=永远兑不了，
  *   直接删=白吞商的钱）——本函数只聚合应退清单，真退款在路由层做（store 不依赖 agents）。
  */
-export function pruneInvalidCodes(now = Date.now()): PruneCodesResult {
+export function pruneInvalidCodes(now = Date.now(), scope?: { agentId?: string }): PruneCodesResult {
 	const keep: RedeemCode[] = [];
 	let usedRemoved = 0;
 	let expiredRemoved = 0;
 	const refunds = new Map<string, { credits: number; count: number }>();
 	for (const c of codes) {
+		if (scope && (c.agentId || undefined) !== (scope.agentId || undefined)) { keep.push(c); continue; }
 		if (c.used) { usedRemoved += 1; continue; }
 		if (c.expiresAt && now > Date.parse(c.expiresAt)) {
 			expiredRemoved += 1;
 			if (c.agentId) {
 				const r = refunds.get(c.agentId) ?? { credits: 0, count: 0 };
-				r.credits += Math.max(0, Math.floor(c.credits || 0));
+				r.credits += Math.max(0, Math.floor(c.agentDebit ?? c.credits ?? 0));
 				r.count += 1;
 				refunds.set(c.agentId, r);
 			}

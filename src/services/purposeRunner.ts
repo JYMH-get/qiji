@@ -54,7 +54,7 @@ export interface RunPurposeInput {
 export type RunPurposeResult =
 	/** rawLink=true：服务端未转存结果（meta.rehosted=false，resultUri=上游原始时效直链）——
 	 *  调用方应本机下载（saveRemoteAsset 带重试）+ uploadBlobToOss 传回服务端落 OSS（第158轮） */
-	| { status: "success"; resultUri: string; assetId?: string; rawLink?: boolean; taskId: string; modelKey: string; adapterKey: string }
+	| { status: "success"; resultUri: string; assetId?: string; rawLink?: boolean; saveToOss?: boolean; taskId: string; modelKey: string; adapterKey: string }
 	/** lost=true：服务端找不到原任务（多因服务端重启）——失败的一种，但可凭 taskId 重连找回，调用方据此提供「重连原任务」 */
 	| { status: "failed"; error: string; taskId?: string; modelKey: string; adapterKey?: string; lost?: boolean }
 	/** 未配置可用模型（管理端未连/未选模型）——runner 已顺带打开设置引导配置，调用方如实报错即可 */
@@ -65,14 +65,14 @@ function awaitTask(
 	taskId: string,
 	adapterKey: string,
 	onProgress?: (progress: number, status: string, partialText?: string, extra?: TaskExtra) => void,
-): Promise<{ status: "success" | "failed"; resultUri?: string; assetId?: string; rawLink?: boolean; error?: string; lost?: boolean }> {
+): Promise<{ status: "success" | "failed"; resultUri?: string; assetId?: string; rawLink?: boolean; saveToOss?: boolean; error?: string; lost?: boolean }> {
 	return new Promise((resolve) => {
 		trackTask({
 			taskId,
 			adapterKey,
 			onUpdate: (progress, status, resultUri, error, assetId, partialText, rawLink, extra) => {
 				onProgress?.(progress, status, partialText, extra);
-				if (status === "success") resolve({ status: "success", resultUri, assetId, rawLink });
+				if (status === "success") resolve({ status: "success", resultUri, assetId, rawLink, saveToOss: extra?.saveToOss });
 				else if (status === "failed") resolve({ status: "failed", error });
 				// lost：服务端丢任务——作为失败返回，但带 lost 标记供调用方提供「重连原任务」
 				else if (status === "lost") resolve({ status: "failed", error, lost: true });
@@ -86,7 +86,13 @@ function awaitTask(
  * 返回 no_model 表示当前没有可用的真实适配器（未显式传 modelKey 时已顺带打开「设置 → 管理端」引导连接；
  * 无任何 mock 兜底，调用方如实报错即可）。
  */
-export async function runPurpose(
+export async function runPurpose(purpose: Purpose, inp: RunPurposeInput = {}): Promise<RunPurposeResult> {
+	const { beginClientActivity } = await import("./clientUpdateActivity");
+	const end = beginClientActivity();
+	try { return await runPurposeImpl(purpose, inp); } finally { end(); }
+}
+
+async function runPurposeImpl(
 	purpose: Purpose,
 	inp: RunPurposeInput = {},
 ): Promise<RunPurposeResult> {
@@ -95,7 +101,7 @@ export async function runPurpose(
 		const { taskId, adapterKey } = inp.resumeTask;
 		const done = await awaitTask(taskId, adapterKey, inp.onProgress);
 		if (done.status === "success") {
-			return { status: "success", resultUri: done.resultUri ?? "", assetId: done.assetId, rawLink: done.rawLink, taskId, modelKey: inp.modelKey ?? "", adapterKey };
+			return { status: "success", resultUri: done.resultUri ?? "", assetId: done.assetId, rawLink: done.rawLink, saveToOss: done.saveToOss, taskId, modelKey: inp.modelKey ?? "", adapterKey };
 		}
 		return { status: "failed", error: done.error || "生成失败", taskId, modelKey: inp.modelKey ?? "", adapterKey, lost: done.lost };
 	}
@@ -154,7 +160,7 @@ export async function runPurpose(
 				status: "success",
 				resultUri: done.resultUri ?? "",
 				assetId: done.assetId,
-				rawLink: done.rawLink,
+				rawLink: done.rawLink, saveToOss: done.saveToOss,
 				taskId,
 				modelKey,
 				adapterKey: adapter.key,

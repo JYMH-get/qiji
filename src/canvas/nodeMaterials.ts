@@ -14,6 +14,8 @@ import { useLibraryStore } from "@/store/libraryStore";
 import { TAG_KIND, buildLegend, applyLegend, LEGEND_START } from "@/lib/shotMaterials";
 import { findProjectAssetByImage } from "@/lib/projectAssets";
 import type { ShotMaterial } from "@/services/projectFile";
+import { compileMaterialPrompt, materialPromptState, nextMaterialPromptMode, syncMaterialPrompt } from "@/lib/materialPrompt";
+import { mapUpstreamText } from "@/lib/upstreamText";
 
 // 兼容旧引用/单测：删素材后修正正文内联 @ 引用的纯函数已抽到 shotMaterials
 export { renumberBodyRefs as renumberPromptAfterRemoval } from "@/lib/shotMaterials";
@@ -87,6 +89,7 @@ export function listNodeMaterials(nodeId: string, inputOverride?: Record<string,
 	const cs = useCanvasStore.getState();
 	const node = cs.nodes[nodeId];
 	if (!node) return [];
+	const imageOnly = getPlugin(node.type)?.capability === "image";
 	const assetsMap = useLibraryStore.getState().assets;
 	const blobs = useProjectStore.getState().assetBlobs;
 	type Raw = Omit<NodeMatEntry, "n" | "tag">;
@@ -102,6 +105,7 @@ export function listNodeMaterials(nodeId: string, inputOverride?: Record<string,
 		const a = up?.data.resultAssetId ? assetsMap[up.data.resultAssetId] : null;
 		if (!a?.uri) continue;
 		if (a.kind !== "image" && a.kind !== "video" && a.kind !== "audio") continue;
+		if (imageOnly && a.kind === "audio") continue;
 		const p = getPlugin(up!.type);
 		const sid = a.serverAssetId || a.id;
 		const bound = a.kind === "image" ? findProjectAssetByImage(a.uri, sid) : null;
@@ -121,6 +125,7 @@ export function listNodeMaterials(nodeId: string, inputOverride?: Record<string,
 	const input = (inputOverride ?? (node.data.input as Record<string, LegendRef[]>) ?? {});
 	const KIND: Record<MatGroup, MatMedia> = { images: "image", videos: "video", audios: "audio" };
 	for (const g of ["images", "videos", "audios"] as const) {
+		if (imageOnly && g === "audios") continue;
 		(Array.isArray(input[g]) ? input[g] : []).forEach((ref, idx) => {
 			if (!ref || (!ref.url && !ref.id)) return;
 			const uri = (ref.id && (blobs[ref.id]?.localUri || assetsMap[ref.id]?.uri)) || ref.url || "";
@@ -212,6 +217,19 @@ export function addNodeMaterialFromAsset(
 	syncNodeLegend(nodeId); // 添加素材同步加入图例前缀
 }
 
+/** 选择状态使用与添加去重相同的媒体、文件 ID 和地址，不混淆同角色的不同造型。 */
+export function findPickedNodeMaterial(nodeId: string, asset: Parameters<typeof addNodeMaterialFromAsset>[1]): NodeMatEntry | undefined {
+	const url = (asset.id && useProjectStore.getState().assetBlobs[asset.id]?.url) || asset.url || "";
+	return listNodeMaterials(nodeId).find(m => m.self && m.media === (asset.media ?? "image")
+		&& ((asset.id && m.id === asset.id) || (url && (m.url === url || m.uri === url))));
+}
+
+export function toggleNodeMaterialFromAsset(nodeId: string, asset: Parameters<typeof addNodeMaterialFromAsset>[1]): void {
+	const existing = findPickedNodeMaterial(nodeId, asset);
+	if (existing?.self) removeNodeMaterial(nodeId, existing.self.group, existing.self.idx);
+	else addNodeMaterialFromAsset(nodeId, asset);
+}
+
 /** 画布素材卡用途落到自加素材引用；上游连线无可写 ref，仍由节点索引字段兼容。 */
 export function setNodeMaterialUsage(nodeId: string, key: string, usage: "reference" | "identity"): void {
 	const entry = listNodeMaterials(nodeId).find((item) => item.key === key);
@@ -255,6 +273,31 @@ export function buildNodeLegend(nodeId: string, inputOverride?: Record<string, L
 	return buildLegend(mats, false);
 }
 
+export function nodePromptMaterials(nodeId: string): ShotMaterial[] {
+	return listNodeMaterials(nodeId).map(e => ({ id: e.key, kind: "local", name: e.name, uri: e.uri || e.url, media: e.media, assetId: e.assetId, voiceForAssetId: e.voiceForAssetId }));
+}
+
+export function cycleNodeMaterialPrompt(nodeId: string, draft?: string): string {
+	const node = useCanvasStore.getState().nodes[nodeId];
+	if (!node) return draft || "";
+	const state = materialPromptState(node.data.params.materialPrompt) ?? { mode: "legend", retained: [], previous: nodePromptMaterials(nodeId) };
+	const text = draft ?? mapUpstreamText(String(node.data.params.prompt || ""), upstreamTextSources(nodeId).map(s => s.text));
+	const next = syncMaterialPrompt(text, nodePromptMaterials(nodeId), state, nextMaterialPromptMode(state.mode));
+	useCanvasStore.getState().updateNodeParams(nodeId, { prompt: next.prompt, materialPrompt: next.state });
+	useProjectStore.getState().scheduleAutoSave("canvas");
+	return next.prompt;
+}
+
+export function formatNodeMaterialPrompt(nodeId: string, text: string): string {
+	const state = materialPromptState(useCanvasStore.getState().nodes[nodeId]?.data.params.materialPrompt);
+	return state ? syncMaterialPrompt(text, nodePromptMaterials(nodeId), state).prompt : applyLegend(text, buildNodeLegend(nodeId));
+}
+
+export function compileNodeMaterialPrompt(nodeId: string, text: string): string {
+	const state = materialPromptState(useCanvasStore.getState().nodes[nodeId]?.data.params.materialPrompt);
+	return compileMaterialPrompt(text, nodePromptMaterials(nodeId), state);
+}
+
 /** 当前素材加入顺序快照（listNodeMaterials 枚举序的 key 列表，供写回 node.data.matOrder） */
 export function computeMatOrder(nodeId: string, inputOverride?: Record<string, LegendRef[]>): string[] {
 	return listNodeMaterials(nodeId, inputOverride).map((e) => e.key);
@@ -277,13 +320,15 @@ export function syncNodeLegend(
 	const prompt = typeof n.data.params.prompt === "string" ? (n.data.params.prompt as string) : "";
 	// 添加素材：始终补/更新图例；删除素材：仅当提示词已有图例才重建（不给没图例的提示词硬塞），并重编号正文 @ 引用
 	const legend = !removed || prompt.includes(LEGEND_START) ? buildNodeLegend(nodeId) : "";
-	const next = applyLegend(prompt, legend, removed && removed.n > 0 ? removed : undefined, options);
+	const presentation = materialPromptState(n.data.params.materialPrompt);
+	const transformed = presentation ? syncMaterialPrompt(prompt, nodePromptMaterials(nodeId), presentation) : undefined;
+	const next = transformed?.prompt ?? applyLegend(prompt, legend, removed && removed.n > 0 ? removed : undefined, options);
 	const matOrder = computeMatOrder(nodeId);
 	const prev = Array.isArray(n.data.matOrder) ? n.data.matOrder : [];
 	const orderChanged = matOrder.length !== prev.length || matOrder.some((k, i) => k !== prev[i]);
-	if (next !== prompt || orderChanged) {
+	if (next !== prompt || orderChanged || (transformed && JSON.stringify(transformed.state) !== JSON.stringify(presentation))) {
 		useCanvasStore.setState({
-			nodes: { ...cs.nodes, [nodeId]: { ...n, data: { ...n.data, matOrder, params: { ...n.data.params, prompt: next } } } },
+			nodes: { ...cs.nodes, [nodeId]: { ...n, data: { ...n.data, matOrder, params: { ...n.data.params, prompt: next, ...(transformed ? { materialPrompt: transformed.state } : {}) } } } },
 		});
 		useProjectStore.getState().scheduleAutoSave("canvas");
 		return true;

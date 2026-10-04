@@ -1,0 +1,15 @@
+import fs from 'node:fs';import os from 'node:os';import path from 'node:path';import {execFileSync} from 'node:child_process';
+const root=path.resolve(import.meta.dirname,'..'),sandbox=fs.mkdtempSync(path.join(os.tmpdir(),'qiji-team-wallets-'));
+fs.mkdirSync(path.join(sandbox,'src'));fs.mkdirSync(path.join(sandbox,'server/scripts'),{recursive:true});
+fs.copyFileSync(path.join(root,'src/contract.ts'),path.join(sandbox,'src/contract.ts'));
+for(const d of ['src','skills'])fs.cpSync(path.join(root,'server',d),path.join(sandbox,'server',d),{recursive:true});
+fs.copyFileSync(path.join(root,'server/package.json'),path.join(sandbox,'server/package.json'));fs.symlinkSync(path.join(root,'server/node_modules'),path.join(sandbox,'server/node_modules'),'junction');
+for(const f of ['smoke-team-wallets.mjs','smoke-team-wallet-restart.mjs','smoke-team-wallet-pending.mjs'])fs.copyFileSync(path.join(root,'server/scripts',f),path.join(sandbox,'server/scripts',f));
+const opts={cwd:path.join(sandbox,'server'),stdio:'inherit',env:{...process.env,QIJI_TEST_SNAPSHOT:'1',ADMIN_TOKEN:'admin-dev'}};
+execFileSync(process.execPath,['--import','tsx','scripts/smoke-team-wallets.mjs'],opts);
+execFileSync(process.execPath,['--import','tsx','scripts/smoke-team-wallet-restart.mjs'],opts);
+execFileSync(process.execPath,['--import','tsx','scripts/smoke-team-wallet-restart.mjs'],opts);
+execFileSync(process.execPath,['--import','tsx','scripts/smoke-team-wallet-pending.mjs','prepare'],opts);
+execFileSync(process.execPath,['--import','tsx','scripts/smoke-team-wallet-pending.mjs','check'],opts);
+execFileSync(process.execPath,['--import','tsx','scripts/smoke-team-wallet-pending.mjs','check'],opts);
+const out=path.join(root,'outputs/team-wallets-20260915');fs.mkdirSync(out,{recursive:true});fs.writeFileSync(path.join(out,'sandbox.txt'),sandbox);console.log('Sandbox:',sandbox);

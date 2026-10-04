@@ -13,6 +13,7 @@
  * 与简梦/服务端视频链路的图例约定同源；素材传入顺序 = 胶囊编号顺序（collectRefs 保序）。
  */
 import type { ModelAdapter, SubmitResult, PollResult } from "./types";
+import { withLocalGenerationReport } from '@/services/localGenerationReports';
 import type { ModelOption } from "./channelAdapter";
 import type { Capability } from "@/contract";
 import { registerAdapter } from "./registry";
@@ -22,7 +23,7 @@ import { dreaminaQueryTask, dreaminaSubmitVideo } from "@/services/dreaminaCli";
 import { isDreaminaAuthed } from "@/store/dreaminaStore";
 import { getDreaminaFeature } from "@/store/connectionStore";
 import { clampDuration } from "@/lib/genParams";
-import { precheckThirdPartyFee, chargeThirdPartyFee, THIRD_PARTY_FEE_CREDITS, thirdPartyFeeCredits } from "@/services/thirdPartyFee";
+import { THIRD_PARTY_FEE_CREDITS, thirdPartyFeeCredits } from "@/services/thirdPartyFee";
 
 /** 渠道显示名（画布面板「渠道」pill / 二级模型选择的分组名） */
 export const DREAMINA_CHANNEL = "即梦";
@@ -156,7 +157,6 @@ function makeDreaminaAdapter(choice: (typeof DREAMINA_MODEL_CHOICES)[number]): M
 	async submit(input, params): Promise<SubmitResult> {
 		if (!getDreaminaFeature()) throw new Error("即梦功能未对当前账号开放");
 		if (!isDreaminaAuthed()) throw new Error("尚未连接即梦：请到「个人中心 → 即梦授权」登录后重试");
-		precheckThirdPartyFee(); // 手续费余额不足直接拒单（不打第三方）
 
 		// prompt：表格视频链路把正文放 variables.prompt；画布/直调可能给 input.prompt。
 		// 图例与 @ 胶囊原样保留（素材顺序=编号顺序，见顶注）。
@@ -208,8 +208,6 @@ function makeDreaminaAdapter(choice: (typeof DREAMINA_MODEL_CHOICES)[number]): M
 			resolution: is25 ? String(params.resolution ?? "720p") : clampDreaminaResolution(params.resolution, modelVersion),
 			modelVersion,
 		});
-		// 第三方受理成功（submit_id 已拿到）→ 扣 Qiji 手续费（best-effort，不阻塞出 taskId）
-		void chargeThirdPartyFee(DREAMINA_CHANNEL);
 		return { taskId: makeTaskId(submitId) };
 	},
 
@@ -240,7 +238,10 @@ function makeDreaminaAdapter(choice: (typeof DREAMINA_MODEL_CHOICES)[number]): M
 }
 
 /** 渠道内各款模型的适配器（key=清单 id） */
-export const dreaminaAdapters: ModelAdapter[] = DREAMINA_MODEL_CHOICES.map((c) => makeDreaminaAdapter(c));
+export const dreaminaAdapters: ModelAdapter[] = DREAMINA_MODEL_CHOICES.map((c) => withLocalGenerationReport(makeDreaminaAdapter(c),params => {
+  const raw=Number(params.duration);
+  return c.modelVersion.includes('2.5') ? (Number.isFinite(raw)?raw:5) : clampDuration(params.duration);
+}));
 
 /** App 启动时注册（一次即可；不依赖 catalog，key 不会被 syncManagedAdapters 覆盖） */
 export function registerDreaminaAdapter(): void {

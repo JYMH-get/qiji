@@ -8,6 +8,7 @@
 import {
 	Endpoints,
 	type Catalog,
+	type RoutePriceAvailability,
 	type GenerateRequest,
 	type TaskState,
 	type BatchRequest,
@@ -15,7 +16,9 @@ import {
 	type AssetUploadResult,
 	type SessionUser,
 	type UserStats,
+	type UserMessagePage,
 	type UserConsumeStats,
+	type TeamUsageReport,
 	type UserLogItem,
 	type UserLogDetail,
 	type SharedLibraryInfo,
@@ -28,6 +31,8 @@ import {
 	type DownloadManifest,
 	type DownloadLinkStorage,
 	type DownloadMediaKind,
+	type AssetRef,
+	type MaterialPrepareResponse,
 } from "@/contract";
 import { useConnectionStore, getDeviceId } from "@/store/connectionStore";
 
@@ -176,7 +181,27 @@ async function request<T>(
 	return data as T;
 }
 
+type RedeemedWallet = Pick<SessionUser,'credits'|'ownCredits'|'team'>;
+function syncRedeemedWallet(data: RedeemedWallet, before: ReturnType<typeof useConnectionStore.getState>): void {
+	const current = useConnectionStore.getState();
+	if (!current.user || current.accessKey !== before.accessKey || current.serverUrl !== before.serverUrl || current.user.id !== before.user?.id) return;
+	current.setSession(true,{...current.user,credits:data.credits,
+		...(typeof data.ownCredits === 'number' ? {ownCredits:data.ownCredits,team:data.team} : {})});
+}
+
 export const managedClient = {
+  startLocalGenerationReport(body: Record<string, unknown>): Promise<{id:string}> {
+    return request('POST', '/v1/local-generation-reports', body, 15000);
+  },
+  finishLocalGenerationReport(id: string, body: Record<string, unknown>): Promise<unknown> {
+    return request('PUT', '/v1/local-generation-reports/' + encodeURIComponent(id), body, 15000);
+  },
+	routeAvailability(): Promise<RoutePriceAvailability> {
+		return request<RoutePriceAvailability>("GET", "/v1/route-availability");
+	},
+	async prepareMaterial(body: { model: string; asset: AssetRef; retry?: boolean; action?: 'inspect' | 'upload' }): Promise<MaterialPrepareResponse> {
+		return request<MaterialPrepareResponse>("POST", "/v1/materials/prepare", body, 120000);
+	},
 	async backupLocalPromptUse(body: GenerateRequest): Promise<void> {
 		const response = await fetch(url('/v1/user-prompt-backups'), { method: 'POST', headers: headers(true), body: JSON.stringify(body), signal: AbortSignal.timeout(10000) });
 		if (!response.ok) throw new Error(`预设备份失败 HTTP ${response.status}`);
@@ -218,8 +243,16 @@ export const managedClient = {
 		return { ok: true, user: (data as any).user, accessKey: (data as any).accessKey };
 	},
 
-	// ── 注册体系（P2 商业化改造）：图形验证码 → 发验证码 → 邮箱/手机号注册（可填邀请码）/ 找回密码 ──
+	// ── 注册体系（P2 商业化改造）：图形验证码 → 发验证码 → 邮箱/手机号注册（必填邀请码）/ 找回密码 ──
 
+	async registrationOptions(): Promise<import('@/lib/registrationOptions').RegistrationOptions> {
+		const resp = await fetch(url('/v1/registration-options'), { signal: AbortSignal.timeout(15000), cache: 'no-store' });
+		if (!resp.ok) throw new Error('无法读取验证方式，请稍后重试');
+		return resp.json();
+	},
+	async updateProfile(name: string): Promise<{ id: string; name: string }> {
+		return request('PUT', '/v1/profile', { name });
+	},
 	/** 图形验证码（发验证码前置；一次性，错了重取） */
 	async getCaptcha(): Promise<{ ok: boolean; id?: string; svg?: string; error?: string }> {
 		try {
@@ -251,7 +284,7 @@ export const managedClient = {
 	},
 
 	/** 邮箱/手机号注册：验证码核销 → 建号 → 回传 accessKey（直接进入登录态）。
-	 *  inviteCode 可选：渠道商邀请码=注册即归属该商；个人邀请码=记录邀请关系。 */
+	 *  inviteCode 必填：源站、渠道商或个人邀请码决定注册归属。 */
 	async registerAccount(target: string, code: string, password: string, name?: string, inviteCode?: string): Promise<{ ok: boolean; user?: SessionUser; accessKey?: string; error?: string }> {
 		try {
 			const resp = await fetch(url(Endpoints.registerAccount), {
@@ -342,7 +375,21 @@ export const managedClient = {
 		return request<UserStats>("GET", Endpoints.me, undefined, 15000);
 	},
 
-	/** 消耗统计（今日/昨日/近7天）：缺省=自己；团长可传 userId=团员 或 scope:"team"=全团合计 */
+	/** 团长专属团队日报，范围由服务端确定。 */
+	async getPersonalProductReport(opts: {days?: number; from?: string; to?: string}): Promise<TeamUsageReport> {
+		const p = new URLSearchParams();
+		for (const [key,value] of Object.entries(opts)) if (value !== undefined) p.set(key,String(value));
+		const {person,...period} = await request<Omit<TeamUsageReport,'team'> & {person:TeamUsageReport['team']}>("GET", `/v1/me/product-reports?${p}`, undefined, 15000);
+		return {...period,team:person};
+	},
+
+	async getTeamUsageReport(opts: {days?: number; from?: string; to?: string}): Promise<TeamUsageReport> {
+		const p = new URLSearchParams();
+		for (const [key,value] of Object.entries(opts)) if (value !== undefined) p.set(key,String(value));
+		return request<TeamUsageReport>("GET", `/v1/team/usage-reports?${p}`, undefined, 15000);
+	},
+
+	/** 消耗统计：缺省本人；团长可查团员或全团。 */
 	async getStats(opts?: { userId?: string; scope?: "team" }): Promise<UserConsumeStats> {
 		const p = new URLSearchParams();
 		if (opts?.userId) p.set("userId", opts.userId);
@@ -382,6 +429,29 @@ export const managedClient = {
 	/** 团队详情：不在团队返回 team:null + 收到的邀请；团长见成员全量、团员见概要 */
 	async getTeam(): Promise<{ team: TeamDetail | null; invites?: TeamInviteInfo[] }> {
 		return request<{ team: TeamDetail | null; invites?: TeamInviteInfo[] }>("GET", Endpoints.team, undefined, 15000);
+	},
+
+	async setTeamPaymentSource(source: 'team' | 'personal'): Promise<{ok:boolean;error?:string}> {
+		const before = useConnectionStore.getState();
+		try {
+			await request('PUT', Endpoints.teamPaymentSource, {source});
+			const heartbeat = await managedClient.heartbeat();
+			const current = useConnectionStore.getState();
+			if (heartbeat.ok && heartbeat.user && current.accessKey === before.accessKey && current.serverUrl === before.serverUrl) current.setSession(true,heartbeat.user);
+			return {ok:true};
+		} catch(e) { return {ok:false,error:(e as Error).message}; }
+	},
+
+	async getMessages(offset = 0): Promise<UserMessagePage> {
+		return request('GET', `${Endpoints.messages}?offset=${Math.max(0,Math.floor(offset))}`, undefined, 15000);
+	},
+
+	async precheckThirdPartyFee(): Promise<void> {
+		await request('POST', Endpoints.thirdPartyFeePrecheck, {}, 15000);
+	},
+
+	async readMessages(id?:string): Promise<{ok:boolean;unread:number}> {
+		return request('POST', Endpoints.messagesRead, id ? {id} : {}, 15000);
 	},
 
 	/** 开团（需管理端发放的团队码；开团者=团长，自动附带团队共享素材库） */
@@ -495,8 +565,10 @@ export const managedClient = {
 
 	/** 会员卡核销：开通/续费会员（未过期顺延）+ 开通即到账算力 */
 	async redeemMembershipCard(code: string): Promise<{ ok: boolean; added?: number; credits?: number; membership?: import("@/contract").MembershipInfo; error?: string }> {
+		const before = useConnectionStore.getState();
 		try {
-			const data = await request<{ ok: boolean; added: number; credits: number; membership?: import("@/contract").MembershipInfo }>("POST", Endpoints.membershipRedeem, { code }, 20000);
+			const data = await request<RedeemedWallet & { ok: boolean; added: number; membership?: import("@/contract").MembershipInfo }>("POST", Endpoints.membershipRedeem, { code }, 20000);
+			syncRedeemedWallet(data,before);
 			return { ok: true, added: data.added, credits: data.credits, membership: data.membership };
 		} catch (err) {
 			return { ok: false, error: err instanceof ManagedClientError ? err.message : (err as Error).message };
@@ -505,8 +577,10 @@ export const managedClient = {
 
 	/** 兑换积分码：成功返回新余额与本次入账面额 */
 	async redeem(code: string): Promise<{ ok: boolean; credits?: number; added?: number; error?: string }> {
+		const before = useConnectionStore.getState();
 		try {
-			const data = await request<{ ok: boolean; credits: number; added: number }>("POST", Endpoints.redeem, { code });
+			const data = await request<RedeemedWallet & { ok: boolean; added: number }>("POST", Endpoints.redeem, { code });
+			syncRedeemedWallet(data,before);
 			return { ok: true, credits: data.credits, added: data.added };
 		} catch (err) {
 			return { ok: false, error: err instanceof ManagedClientError ? err.message : (err as Error).message };
@@ -784,9 +858,6 @@ export const managedClient = {
 		} catch {
 			return [];
 		}
-	},
-	async redeemStorageCode(code: string): Promise<{ ok: boolean; granted?: QuotaGrantDto; quota?: FavQuotaDto }> {
-		return request("POST", Endpoints.storageCodeRedeem, { code }, 20000);
 	},
 
 	/**

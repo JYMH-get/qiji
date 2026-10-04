@@ -146,7 +146,7 @@ export function addFavorite(
 	// 平台收藏（管理端审核）不占用户配额，也不受限
 	if (ownerType !== "platform" && quota.usedBytes + assetBytes > quota.limitBytes) {
 		const need = quota.usedBytes + assetBytes - quota.limitBytes;
-		return { ok: false, error: "收藏空间已满，请取消部分收藏或使用扩容卡（不影响正常生成与使用）", needBytes: need };
+		return { ok: false, error: "收藏空间已满，请取消部分收藏或联系管理员调整配额（不影响正常生成与使用）", needBytes: need };
 	}
 	stmtFavAdd.run(assetId, ownerType, ownerId, now());
 	stmtRefTouch.run(now(), assetId); // 收藏即视为一次引用

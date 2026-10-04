@@ -25,6 +25,7 @@ declare module "fastify" {
  */
 const NODE_ALLOWED_ROUTES = new Set([
 	"/v1/catalog",
+	"/v1/route-availability",
 	"/v1/generate",
 	"/v1/user-prompt-backups",
 	"/v1/batch",
@@ -32,6 +33,7 @@ const NODE_ALLOWED_ROUTES = new Set([
 	"/v1/tasks/:taskId",
 	"/v1/tasks/:id/result-asset",
 	"/v1/assets",
+	"/v1/materials/prepare",
 	"/v1/assets/direct",
 	"/v1/assets/direct/:id/complete",
 	"/v1/assets/ref",
@@ -45,6 +47,7 @@ const NODE_ALLOWED_ROUTES = new Set([
 	"/v1/favorites/:assetId",
 	"/v1/favorites/flags",
 	"/v1/node/me",
+	"/v1/node/announcements",
 ]);
 
 function bearer(req: FastifyRequest): string | undefined {

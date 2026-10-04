@@ -5,23 +5,21 @@
  *  - 开团需要**团队码**（管理端生成，一码开一团，核销不复用）；
  *  - **绑定=邀请-同意制（⚠ 经济安全，勿回退成团长单方面直绑）**：团长按登录账号发出邀请（invites），
  *    对方在自己的团队页**接受**才入团（可拒绝；团长可撤销；7 天未处理自动过期）——防团长强拉陌生人。
- *  - 积分方式由团长决定：
- *      dispatch（分发积分模式，默认）：团员消耗扣自己积分；团长可把自己的积分分发给团员/从团员收回（零和转账）。
- *      shared（共享积分模式）：团员消耗**直接扣团长积分**（共享池=团长余额，团员自己的积分不动）；
- *        计费接入见 routes.ts planBilling/applyBilling（扣款人=团长，请求记录仍记实际用户）。
- *  - **收回上限=分发净额（⚠ 经济安全，勿回退成任意收缴）**：granted 台账记录团长对每名团员的
- *    分发净额（分发 + / 收回 −），收回不得超过 min(净额, 团员当前余额)——团长永远动不到团员自有积分；
- *    团员退出/被移除/解散时，分发余量（同一口径）自动退回团长（防「入团领分发→退团带走」套利）。
+ *  - 团长设置 shared / dispatch，成员自行选择团队或个人积分；不足不得自动切换。
+ *    shared 直接使用团长余额，dispatch 使用与个人余额分离的团队钱包。
+ *    团队消费的售价、会员与渠道成本均按团长归属，个人消费按本人归属。
+ *  - 收回只允许操作团队钱包剩余积分，不能动个人积分。退出/移除/解散时余量退回团长；
+ *    在途任务保存原钱包与归属，退出后的退款仍归团长，不流入成员个人余额。
  *  - 每个团队码默认附带一份共享素材库（开团自动创建、团员自动成为成员、解散随删；团长可删文件夹/素材），
  *    库的创建/级联在路由层完成（本 store 只记 sharedLibId，不 import sharedLibs 保持单向依赖）。
  *  - **成员不限归属**（第173轮用户定「自由点」）：跨渠道商/平台直属都可互相绑定成团。计费仍各按各的口径：
- *    共享模式扣团长池、用户售价按各自归属定价、渠道商链按**消耗者自己的归属链**逐笔结算——互不越界；
+ *    团队消费统一使用团长的价格、会员与渠道成本体系，个人消费使用成员自己的体系；
  *    团队共享库经 SharedLibrary.teamId 豁免受众隔离（仅团队成员可见，路由层判定）。
  * 写频率=用户操作级（非热路径），saveJson 同步落盘（小文件）。
  */
 import { loadJson, saveJson, genId } from "./db.ts";
 import { randomBytes } from "node:crypto";
-import { getUser, transferCredits } from "./users.ts";
+import { getUser, initializeTeamWallet, activeTeamCredits, closeTeamWallet, transferTeamCredits } from "./users.ts";
 import { getTeamMemberLimit, normTeamLimit } from "./settings.ts";
 
 export type TeamCreditMode = "shared" | "dispatch";
@@ -33,11 +31,13 @@ export interface Team {
 	/** 团员 id 列表（不含团长） */
 	memberIds: string[];
 	creditMode: TeamCreditMode;
+	/** 成员自主选择使用团队或个人积分，团长只查看选择，不替成员切换。 */
+	paymentSources?: Record<string, 'team' | 'personal'>;
 	/** 团队人数上限（**含团长**）按团覆盖（第173轮，管理端设）；空=跟随全局默认（settings.teamMemberLimit，缺省 50） */
 	memberLimit?: number;
 	/** 待接受的入团邀请（邀请-同意制）：对方接受才入团；7 天未处理过期（sanitize 懒清） */
 	invites?: { userId: string; createdAt: string }[];
-	/** 分发净额台账 userId → 团长对该团员的净分发（分发+ / 收回−，恒 ≥0）——收回上限与退团自动结算都按它 */
+	/** 旧版混合余额的迁移依据；迁移后以 users.teamWallets 的余额为准。 */
 	granted?: Record<string, number>;
 	/** 开团自动创建的团队共享素材库 id（路由层创建后写入；解散时级联删除） */
 	sharedLibId?: string;
@@ -66,6 +66,17 @@ interface Db {
 
 const FILE = "teams.json";
 const db: Db = { teams: [], codes: [], ...loadJson<Partial<Db>>(FILE, {}) };
+
+// Run after credit ledger recovery, before accepting requests. An old pending debit
+// still refers to the mixed balance; splitting first would invalidate its pre/post.
+// Wallet presence is the durable marker preventing a second split on restart.
+export function migrateTeamWallets(): void {
+	for (const team of db.teams) {
+		for (const userId of team.memberIds) {
+			if ((team.granted?.[userId] ?? 0) > 0) initializeTeamWallet(userId, team.id, team.leaderId, team.granted![userId]);
+		}
+	}
+}
 
 function persist(): void {
 	saveJson(FILE, db);
@@ -122,6 +133,27 @@ export function getTeam(id: string): Team | undefined {
 /** 用户所在团队（团长或团员；一个用户同时只能在一个团队） */
 export function teamOfUser(userId: string): Team | undefined {
 	return db.teams.find((t) => t.leaderId === userId || t.memberIds.includes(userId));
+}
+
+export function teamPaymentSource(team: Team, userId: string): 'team' | 'personal' {
+	return team.paymentSources?.[userId] ?? (team.leaderId === userId ? 'personal' : 'team');
+}
+
+export function setTeamPaymentSource(teamId: string, userId: string, source: unknown): TeamResult {
+	const team = getTeam(teamId);
+	if (!team || (team.leaderId !== userId && !team.memberIds.includes(userId))) return { ok: false, error: '你不在此团队中' };
+	if (source !== 'team' && source !== 'personal') return { ok: false, error: '请选择团队积分或个人积分' };
+	(team.paymentSources ??= {})[userId] = source;
+	team.updatedAt = new Date().toISOString();
+	persist();
+	return { ok: true, team };
+}
+
+export function allocateTeamCredits(teamId: string, userId: string, delta: number): { ok: boolean; error?: string } {
+	const team = getTeam(teamId);
+	if (!team || !team.memberIds.includes(userId)) return { ok: false, error: '该用户不在团队中' };
+	initializeTeamWallet(userId, teamId, team.leaderId, team.granted?.[userId] ?? 0);
+	return transferTeamCredits(team.leaderId, userId, teamId, delta);
 }
 
 export type TeamResult = { ok: true; team: Team } | { ok: false; error: string };
@@ -237,7 +269,10 @@ export function acceptInvite(teamId: string, userId: string): TeamResult {
 
 /** 团长对某团员的分发净额（=收回上限的基数；另受团员当前余额约束） */
 export function grantedOf(teamId: string, userId: string): number {
-	return Math.max(0, Math.floor(getTeam(teamId)?.granted?.[userId] ?? 0));
+	const team = getTeam(teamId);
+	if (!team || !team.memberIds.includes(userId)) return 0;
+	initializeTeamWallet(userId, teamId, team.leaderId, team.granted?.[userId] ?? 0);
+	return activeTeamCredits(userId, teamId);
 }
 
 /** 分发/收回后登记净额（delta 正=分发、负=收回；下限 0 防御浮点/越界） */
@@ -255,9 +290,8 @@ export function bumpGranted(teamId: string, userId: string, delta: number): void
 export function settleMemberGrant(teamId: string, userId: string): number {
 	const t = getTeam(teamId);
 	if (!t) return 0;
-	const granted = grantedOf(teamId, userId);
-	const back = Math.min(granted, getUser(userId)?.credits ?? 0);
-	if (back > 0 && getUser(t.leaderId)) transferCredits(userId, t.leaderId, back);
+	initializeTeamWallet(userId, teamId, t.leaderId, t.granted?.[userId] ?? 0);
+	const back = closeTeamWallet(userId, teamId);
 	if (t.granted?.[userId] !== undefined) {
 		delete t.granted[userId];
 		persist();
@@ -269,8 +303,10 @@ export function removeTeamMember(teamId: string, userId: string): TeamResult {
 	const t = getTeam(teamId);
 	if (!t) return { ok: false, error: "团队不存在" };
 	if (!t.memberIds.includes(userId)) return { ok: false, error: "该用户不在团队中" };
+	settleMemberGrant(teamId, userId);
 	t.memberIds = t.memberIds.filter((id) => id !== userId);
 	if (t.granted) delete t.granted[userId];
+	if (t.paymentSources) delete t.paymentSources[userId];
 	t.updatedAt = new Date().toISOString();
 	persist();
 	return { ok: true, team: t };
@@ -280,6 +316,7 @@ export function removeTeamMember(teamId: string, userId: string): TeamResult {
 export function dissolveTeam(id: string): Team | undefined {
 	const t = getTeam(id);
 	if (!t) return undefined;
+	for (const userId of t.memberIds) settleMemberGrant(id, userId);
 	db.teams = db.teams.filter((x) => x.id !== id);
 	persist();
 	return t;
@@ -289,6 +326,14 @@ export function dissolveTeam(id: string): Team | undefined {
 
 export function listTeamCodes(): TeamCode[] {
 	return [...db.codes].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+/** Cleanup only the redeemed code record; live teams and wallets remain intact. */
+export function pruneUsedTeamCodes(agentId?: string): { removed: number } {
+	const keep = db.codes.filter(c => !(c.usedByTeamId || c.usedAt) || (c.agentId || undefined) !== agentId);
+	const removed = db.codes.length - keep.length;
+	if (removed) { saveJson(FILE, {...db, codes: keep}); db.codes = keep; }
+	return { removed };
 }
 
 /** 某渠道商签发的团队码（门户「团队」页） */

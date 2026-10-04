@@ -7,6 +7,8 @@
  * 会话 / 任务等经 localStorage 与主窗口同源共享。
  */
 
+import { getAccessibilityBrowserArgs } from "@/services/accessibilitySettings";
+
 export type PopoutWhich = "jianyi" | "asset";
 
 const WHICHES: PopoutWhich[] = ["jianyi", "asset"];
@@ -55,7 +57,9 @@ export async function openPopout(which: PopoutWhich): Promise<void> {
 			return;
 		}
 		const { w, h } = SIZES[which];
-		const win = new WebviewWindow(label, {
+		const additionalBrowserArgs = await getAccessibilityBrowserArgs();
+		// Tauri's native WindowConfig accepts this field, but the JS option type omits it.
+		const options: NonNullable<ConstructorParameters<typeof WebviewWindow>[1]> & { additionalBrowserArgs: string } = {
 			url,
 			title: `Qiji · ${TITLES[which]}`,
 			width: w,
@@ -65,7 +69,9 @@ export async function openPopout(which: PopoutWhich): Promise<void> {
 			resizable: true,
 			decorations: true,
 			dragDropEnabled: false, // 与主窗口一致：不拦截网页内 HTML5 拖拽
-		});
+			additionalBrowserArgs,
+		};
+		const win = new WebviewWindow(label, options);
 		win.once("tauri://error", (e) => console.error("[popout] 创建窗口失败", which, e));
 	} catch (err) {
 		console.error("[popout] openPopout 失败，退回新标签页", err);

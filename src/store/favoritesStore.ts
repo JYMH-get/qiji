@@ -54,7 +54,6 @@ interface FavState {
 	isFav: (assetId?: string | null) => boolean;
 	/** 返回是否成功；失败原因在 lastError */
 	toggle: (assetId: string) => Promise<boolean>;
-	redeemStorageCode: (code: string) => Promise<{ ok: boolean; error?: string }>;
 	clearError: () => void;
 	reset: () => void;
 }
@@ -112,15 +111,6 @@ export const useFavoritesStore = create<FavState>((set, get) => ({
 		}
 	},
 
-	redeemStorageCode: async (code) => {
-		try {
-			await managedClient.redeemStorageCode(code);
-			await get().load(true);
-			return { ok: true };
-		} catch (e) {
-			return { ok: false, error: (e as Error).message || "核销失败" };
-		}
-	},
 
 	clearError: () => set({ lastError: "" }),
 	reset: () => set({ ids: new Set(), items: [], quota: null, grants: [], loaded: false, lastError: "" }),

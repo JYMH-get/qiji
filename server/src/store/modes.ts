@@ -46,7 +46,6 @@ const now = (): string => new Date().toISOString();
 // v8（第147轮）：新增「简梦P」（jmp）——Sora/Veo 系视频渠道（sora2/sora-v3-*/veo31-*）7 模型归入。
 // v9（第151轮）：新增「简梦M」（jmm）——MuseAI（museai.vip）视频渠道 jmm 系 4 模型归入。
 // v10（第152轮）：新增「简梦Z」（jmz）——zexitongxue.com 视频渠道 jmz 系 14 模型归入（第153轮图片 7 款同归）。
-// v11（第154轮）：新增「简梦H」（jmh）——ZhengAPI（zhengapi.top）图片渠道 jmh 系 6 模型归入。
 // v12（第156轮）：苏打水收编——三模式 jmgf/jm431/jm933 合一为「简梦S」（jms），旧三模式删除。
 // v13（第157轮）：新增「云雾」（yunwu）——yunwu.ai 文本渠道（标准 OpenAI chat 协议）归入。
 // v14（第160轮）：新增「简梦T」（jmt）——llm.chre3.com 视频渠道（sd2-c8·Seedance 2.0 满血版）归入。
@@ -64,8 +63,10 @@ const now = (): string => new Date().toISOString();
 //   （content[] 多模态：9 图 + 3 音频 + 3 视频参考、小写 @imageN 引用、首尾帧 role）归入。
 // v25（2026-09-03）：新增「官方」（official）——dreamina Seedance 2.0 / 2.5 六款模型归入。
 // v26（2026-09-07）：新增「007」（007）——正版 Seedance 2.5 模型归入。
-const MODES_SEED_VERSION = 27; // 只补缺失模式；版本保持单调
+const MODES_SEED_VERSION = 31; // 只补缺失模式；版本保持单调
 const DEFAULT_MODES: Mode[] = [
+  { id: 'zongheng', name: '纵横', order: 31, createdAt: now(), updatedAt: now() },
+  { id: 'xingguang', name: '星光', order: 30, createdAt: now(), updatedAt: now() },
 	{ id: "qiji", name: "Qiji 视频", order: 1, createdAt: now(), updatedAt: now() },
 	{ id: "qiji-img", name: "Qiji 图片", order: 2, createdAt: now(), updatedAt: now() },
 	{ id: "jms", name: "简梦S", order: 3, createdAt: now(), updatedAt: now() },
@@ -76,7 +77,6 @@ const DEFAULT_MODES: Mode[] = [
 	{ id: "jmp", name: "简梦P", order: 10, createdAt: now(), updatedAt: now() },
 	{ id: "jmm", name: "简梦M", order: 11, createdAt: now(), updatedAt: now() },
 	{ id: "jmz", name: "简梦Z", order: 12, createdAt: now(), updatedAt: now() },
-	{ id: "jmh", name: "简梦H", order: 13, createdAt: now(), updatedAt: now() },
 	{ id: "yunwu", name: "云雾", order: 14, createdAt: now(), updatedAt: now() },
 	{ id: "jmt", name: "简梦T", order: 15, createdAt: now(), updatedAt: now() },
 	{ id: "jmf", name: "简梦F", order: 16, createdAt: now(), updatedAt: now() },
@@ -85,6 +85,8 @@ const DEFAULT_MODES: Mode[] = [
 	{ id: "yali", name: "Yali", order: 19, createdAt: now(), updatedAt: now() },
 	{ id: "skylee", name: "Skylee", order: 20, createdAt: now(), updatedAt: now() },
 	{ id: "congge", name: "congge", order: 21, createdAt: now(), updatedAt: now() },
+	{ id: "xiha888", name: "xiha888", order: 29, createdAt: now(), updatedAt: now() },
+	{ id: "longyou-v2", name: "龙幽", order: 28, createdAt: now(), updatedAt: now() },
 	{ id: "autodl", name: "autodl", order: 22, createdAt: now(), updatedAt: now() },
 	{ id: "qijicloud", name: "奇迹云", order: 23, createdAt: now(), updatedAt: now() },
 	{ id: "bys", name: "BYS", order: 24, createdAt: now(), updatedAt: now() },

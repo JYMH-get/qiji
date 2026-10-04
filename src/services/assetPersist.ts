@@ -49,15 +49,19 @@ function extOf(url: string, mime?: string): string {
 }
 
 /** 取（必要时创建）当前项目的 assets 目录 */
-async function projectAssetsDir(): Promise<string> {
+async function projectAssetsDir(shouldContinue: () => boolean = () => true): Promise<string> {
+	if (!shouldContinue()) throw new Error("资产所属项目已切换");
 	const st = useProjectStore.getState();
 	let savePath = st.savePath;
 	if (!savePath) savePath = await st.ensureProjectPath();
+	if (!shouldContinue()) throw new Error("资产所属项目已切换");
 	const { join, dirname } = await import("@tauri-apps/api/path");
 	const folder = await dirname(savePath);
 	const assets = await join(folder, "assets");
 	const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
-	if (!(await exists(assets))) await mkdir(assets, { recursive: true });
+	const present = await exists(assets);
+	if (!shouldContinue()) throw new Error("资产所属项目已切换");
+	if (!present) await mkdir(assets, { recursive: true });
 	return assets;
 }
 
@@ -169,20 +173,26 @@ export async function ensureLocalOriginal(uri: string, opts?: { hintId?: string;
  * （genMeta/assetRefImages），是项目文件膨胀到百 MB、进而保存中断损坏的根源。
  * 字节直接来自 File（无需二次下载），比 ensureLocalOriginal(fetch data:) 更省。
  */
-export async function saveUploadedLocal(file: Blob, id: string, url?: string, name?: string): Promise<AssetBlob | null> {
+export async function saveUploadedLocal(file: Blob, id: string, url?: string, name?: string, opts?: Pick<RemoteFetchOpts, "shouldContinue">): Promise<AssetBlob | null> {
 	if (!isTauri()) return null;
+	const current = opts?.shouldContinue ?? (() => true);
 	try {
+		if (!current()) return null;
 		const bytes = new Uint8Array(await file.arrayBuffer());
+		if (!current()) return null;
 		const mime = file.type || undefined;
 		const ext = extOf(name || (file as File).name || "", mime);
-		const dir = await projectAssetsDir();
+		const dir = await projectAssetsDir(current);
 		const { join } = await import("@tauri-apps/api/path");
 		const dest = await join(dir, `${id}.${ext}`);
 		const { writeFile } = await import("@tauri-apps/plugin-fs");
+		if (!current()) return null;
 		await writeFile(dest, bytes);
 		const { convertFileSrc } = await import("@tauri-apps/api/core");
+		if (!current()) return null;
 		const localUri = convertFileSrc(dest);
 		await registerWithServer(id, dest);
+		if (!current()) return null;
 		// url 只记真公网链（不记 webview 伪域，防毒化 ensurePublicUrl 缓存，同 saveRemoteAsset）
 		const blob: AssetBlob = {
 			id,
@@ -192,6 +202,7 @@ export async function saveUploadedLocal(file: Blob, id: string, url?: string, na
 		useProjectStore.getState().registerAssetBlob(blob);
 		return blob;
 	} catch (e) {
+		if (!current()) return null;
 		console.warn("[assetPersist] saveUploadedLocal failed:", e);
 		return null;
 	}
@@ -216,6 +227,10 @@ async function nativeDownload(url: string, timeoutSecs?: number): Promise<{ path
 
 /** 远程下载选项（第158轮）：服务端未转存的原始直链结果用 图3×30s / 视频2×120s 快重试 */
 export interface RemoteFetchOpts {
+	/** 异步素材工作绑定原项目/目标；失效后不再落盘或登记到当前项目。 */
+	shouldContinue?: () => boolean;
+	/** false：按本地导入素材落盘，原链仅记来源，不作为可复用 OSS 链接。 */
+	keepRemoteUrl?: boolean;
 	/** 下载尝试次数（缺省 1，保持既有行为——大视频/OSS 直链单次 180s 已够） */
 	attempts?: number;
 	/** 单次下载超时秒数（缺省 180） */
@@ -228,21 +243,26 @@ export interface RemoteFetchOpts {
  */
 export async function saveRemoteAsset(assetId: string, url: string, opts?: RemoteFetchOpts): Promise<AssetBlob | null> {
 	if (!isTauri() || !url || /^(data:|blob:)/.test(url)) return null;
+	const current = opts?.shouldContinue ?? (() => true);
+	if (!current()) return null;
 	const attempts = Math.max(1, opts?.attempts ?? 1);
 	try {
-		const dir = await projectAssetsDir();
+		const dir = await projectAssetsDir(current);
 		const { join } = await import("@tauri-apps/api/path");
 		const fs = await import("@tauri-apps/plugin-fs");
 		for (let attempt = 1; attempt <= attempts; attempt++) {
+			if (!current()) return null;
 			try {
 				let mime: string | undefined;
 				let ext: string;
 				let dest: string;
 				const nd = await nativeDownload(url, opts?.timeoutSecs);
+				if (!current()) { if (nd) await fs.remove(nd.path).catch(() => {}); return null; }
 				if (nd) {
 					mime = nd.contentType || undefined;
 					ext = extOf(url, mime);
 					dest = await join(dir, `${assetId}.${ext}`);
+					if (!current()) { await fs.remove(nd.path).catch(() => {}); return null; }
 					await fs.copyFile(nd.path, dest);
 					await fs.remove(nd.path).catch(() => {});
 				} else {
@@ -253,25 +273,30 @@ export async function saveRemoteAsset(assetId: string, url: string, opts?: Remot
 					ext = extOf(url, mime);
 					dest = await join(dir, `${assetId}.${ext}`);
 					const bytes = new Uint8Array(await resp.arrayBuffer());
+					if (!current()) return null;
 					await fs.writeFile(dest, bytes);
 				}
 				const { convertFileSrc } = await import("@tauri-apps/api/core");
+				if (!current()) return null;
 				const localUri = convertFileSrc(dest);
 				await registerWithServer(assetId, dest);
+				if (!current()) return null;
 				// 缩略图（P1）：图片资产落地后顺手生成 256px WebP 传到 thumb/ 前缀。
 				// 用刚落好的本地副本降采样（零额外下载）；全程 best-effort，失败不影响任何事。
-				if (!mime || mime.startsWith("image/")) {
+				if (opts?.keepRemoteUrl !== false && (!mime || mime.startsWith("image/"))) {
 					void import("./thumbGen").then((m) => m.ensureThumb(assetId, { localPath: dest, uri: localUri }, mime)).catch(() => {});
 				}
 				// url 不记 webview 伪域直链（同 ensureLocalOriginal：进 url 会毒化 ensurePublicUrl 缓存）
-				return { id: assetId, url: isWebviewLocalUri(url) ? undefined : url, localPath: dest, localUri, ext, mime };
+				return { id: assetId, url: opts?.keepRemoteUrl === false || isWebviewLocalUri(url) ? undefined : url, ...(opts?.keepRemoteUrl === false ? { srcUri: url } : {}), localPath: dest, localUri, ext, mime };
 			} catch (e) {
+				if (!current()) return null;
 				if (attempt >= attempts) throw e;
 				await new Promise((r) => setTimeout(r, 1000 * attempt));
 			}
 		}
 		return null;
 	} catch (e) {
+		if (!current()) return null;
 		console.warn("[assetPersist] saveRemoteAsset failed:", e);
 		return null;
 	}

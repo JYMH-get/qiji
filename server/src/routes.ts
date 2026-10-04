@@ -1,8 +1,20 @@
+import { paymentContextFor, paymentFeaturesFor, type PaymentContext } from './billingContext.ts';
+import { registerTeamUsageReportRoutes } from './routes/usageReports.ts';
+import { registerLocalGenerationReports } from './routes/localGenerationReports.ts';
+import { resolveRegistrationInvite } from './tenantIdentity.ts';
+import { listMessagesForUser, readMessagesForUser, notifyTeamCreditShortage, listNodeAnnouncements } from './store/messages.ts';
+import { ensureRelayAnnouncements } from './relayMessages.ts';
 import { prepareTextBilling, type TextPriceSnapshot } from './store/textBilling.ts';
-import { inferenceRequestErrorForCaller } from './inferenceRequestValidation.ts';
+import { pricedAgentLine } from './store/agentLinePrices.ts';
+import { rememberNodeRetail, linkNodeRetail, nodeRetailResult } from './nodeRetail.ts';
+import { taskOwner, setTaskOwner } from './store/tasks.ts';
+import { dualModeRequestErrorForCaller, inferenceRequestErrorForCaller } from './inferenceRequestValidation.ts';
 import { userPromptBackups } from './store/userPromptBackups.ts';
 import { dispatchRouted as dispatchGenerate } from "./autoRouteDispatch.ts";
-import { publicModelDef, prepareRoutingRequest } from "./autoRouting.ts";
+import { publicModelDef, prepareRoutingRequest, routingBillingParams } from "./autoRouting.ts";
+import { resolveLinePreparationModel } from "./autoRouting.ts";
+import { prepareOfficialMaterial, inspectOfficialMaterial } from "./officialMaterials.ts";
+import { resolveUpstream } from "./translators/upstream.ts";
 /**
  * 用户端路由。
  *  公开：/v1/login（校验 accessKey）、/v1/assets/:id/raw（<img> 直读，无法带头）。
@@ -11,34 +23,36 @@ import { publicModelDef, prepareRoutingRequest } from "./autoRouting.ts";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { requireAccessKey, deviceIdOf } from "./auth.ts";
 import { buildCatalog } from "./catalog.ts";
+import { publicLineAvailability } from './lineAvailability.ts';
+import { publicCatalogPricing, publicAvailabilityPricing } from './publicPricing.ts';
 import { rehostVideo } from "./translators/index.ts";
 import { getOssConfig } from "./store/settings.ts";
 import { getTaskState, createCompletedTask, setTaskBilling, setBillingReverseHook, rewriteTaskRawResult } from "./store/tasks.ts";
-import { settle, reverse, type SettleResult } from "./store/credits.ts";
+import { settle, reverse, refundRequest, type SettleResult } from "./store/credits.ts";
 import { createAsset, getAsset, getAssetBytes, assetUrl, isAssetAlive, reputAsset, beginDirectAsset, commitDirectAsset, runWithAssetOwner, touchAssetRefs, thumbKeyOf, setAssetThumb, thumbUrlOf, findAssetBySha } from "./store/assets.ts";
-import { listFavorites, addFavorite, removeFavorite, favoriteFlags, favoriteUsage, grantQuota, grantedBytes, listGrants } from "./store/favorites.ts";
-import { getStorageCode, useStorageCode } from "./store/storageCodes.ts";
+import { listFavorites, addFavorite, removeFavorite, favoriteFlags, favoriteUsage, grantedBytes, listGrants } from "./store/favorites.ts";
 import { getFavQuotaBytes, getRegisterSettings } from "./store/settings.ts";
 import { genCaptcha, verifyCaptcha, issueCode, verifyCode, checkAndNoteRegister, isBlacklistedEmailDomain } from "./store/regGuard.ts";
 import { sendCodeMail, isSmtpConfigured } from "./services/mailer.ts";
 import { sendSmsCode, isSmsConfigured } from "./services/smsAliyun.ts";
 import { profileOf } from "./store/storage.ts";
 import { isOssConfigured, ossPresignPut, ossPublicUrl } from "./store/oss.ts";
-import { getUser, getUserByAccessKey, getUserByAccount, verifyUserPassword, bindAccount, setUserPassword, createUser, registerDeviceOnLogin, isEmailAccount, isPhoneAccount, getUserByInviteCode, ensureUserInviteCode, invitedCountOf, grantCredits, transferCredits, dailySpentToday, genAccessKey, persistUsers, activeMembershipOf, applyMembershipGrant } from "./store/users.ts";
+import { getUser, getUserByAccessKey, getUserByAccount, verifyUserPassword, bindAccount, setUserPassword, createUser, registerDeviceOnLogin, isEmailAccount, isPhoneAccount, ensureUserInviteCode, invitedCountOf, grantCredits, dailySpentToday, genAccessKey, persistUsers, activeMembershipOf, applyMembershipGrant } from "./store/users.ts";
 import { getMembershipPlan, getMembershipCard, useMembershipCard, membershipModelDiscountOf } from "./store/membership.ts";
 import type { User } from "./store/users.ts";
 import {
 	teamOfUser, createTeam, updateTeam, removeTeamMember, dissolveTeam, sanitizeTeams, effectiveTeamLimit,
-	inviteToTeam, removeInvite, invitesForUser, acceptInvite, grantedOf, bumpGranted, settleMemberGrant,
+	inviteToTeam, removeInvite, invitesForUser, acceptInvite, grantedOf, allocateTeamCredits, settleMemberGrant, teamPaymentSource, setTeamPaymentSource,
 } from "./store/teams.ts";
 import type { Team } from "./store/teams.ts";
-import { resolveModelCost, modelAllowedForAgent } from "./store/models.ts";
+import { resolveModelCost, modelAllowedForAgent, getModelDef } from "./store/models.ts";
 import type { ModelDef } from "./store/models.ts";
 import { familyName } from "./store/families.ts";
 import { refVideoBillingParams } from "./refVideoBilling.ts";
 import { checkMaterialLimits } from "./materialLimits.ts";
 import { scrubChannelInfo } from "./errorScrub.ts";
-import { audienceOf, applyAgentFeatureGate, getAgentByInviteCode } from "./store/agents.ts";
+import { AGENT_CREDIT_SHORTAGE } from './creditFeedback.ts';
+import { audienceOf, applyAgentFeatureGate, getAgent } from "./store/agents.ts";
 import { modeName, modeDisabled } from "./store/modes.ts";
 import {
 	getLibrary, searchLibraries, verifyLibraryPassword, joinLibrary, leaveLibrary, memberLibraries, isMember,
@@ -47,7 +61,7 @@ import {
 } from "./store/sharedLibs.ts";
 import { isRelay, sourceFetch, jsonOf, relayCatalog, estimateCostFromCatalog, chargeLocalMirror, ledgerRecord, ledgerSettleTerminal } from "./relay.ts";
 import { config } from "./config.ts";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -56,7 +70,7 @@ import { redeemCode } from "./store/redeemCodes.ts";
 import { startLog, finishLog, listLogs, getLog, rewriteLogResult, logSummary, PURPOSE_LABELS, type LogEntry } from "./store/logs.ts";
 import { routeLogLabel } from './routeLogDisplay.ts';
 import { buildDownloadManifest, parseDownloadQuery } from "./store/assetExport.ts";
-import type { GenerateRequest, BatchRequest, BatchState, TaskState, Capability } from "./contract.ts";
+import type { GenerateRequest, BatchRequest, BatchState, TaskState, Capability, AssetRef } from "./contract.ts";
 
 function baseUrlOf(req: FastifyRequest): string {
 	return `${req.protocol}://${req.headers.host}`;
@@ -87,44 +101,41 @@ let _batchSeq = 0;
 /** 团队信息投影（第172轮，登录/心跳/个人中心共用）。
  *  ⚠ 共享积分模式的团员 credits 下发**团队池余额**（=团长余额）——客户端积分显示/402 预检
  *  天然对齐服务端实扣（planBilling 扣的就是这口池），无需客户端特判。 */
-function sessionTeamView(user: User): { credits: number; team?: { id: string; name: string; role: "leader" | "member"; creditMode: Team["creditMode"]; leaderName?: string; memberCount: number; poolCredits?: number; sharedLibId?: string } } {
-	const team = teamOfUser(user.id);
-	if (!team) return { credits: user.credits };
-	const leader = getUser(team.leaderId);
-	const role: "leader" | "member" = team.leaderId === user.id ? "leader" : "member";
-	const shared = team.creditMode === "shared";
-	return {
-		credits: shared && role === "member" && leader ? leader.credits : user.credits,
-		team: {
-			id: team.id,
-			name: team.name,
-			role,
-			creditMode: team.creditMode,
-			leaderName: leader ? (leader.name || leader.account) : undefined,
-			memberCount: team.memberIds.length + 1,
-			poolCredits: shared && leader ? leader.credits : undefined,
-			sharedLibId: team.sharedLibId,
-		},
-	};
+function sessionTeamView(user: User) {
+  const context = paymentContextFor(user), team = context.team;
+  if (!team) return { credits: user.credits, ownCredits: user.credits, team: undefined };
+  const leader = getUser(team.leaderId), role = team.leaderId === user.id ? 'leader' as const : 'member' as const;
+  const teamCredits = team.creditMode === 'shared' || role === 'leader' ? leader?.credits ?? 0 : grantedOf(team.id, user.id);
+  return { credits: context.balance, ownCredits: user.credits,
+    team: { id:team.id,name:team.name,role,creditMode:team.creditMode,
+      leaderName:leader?.name || leader?.account,memberCount:team.memberIds.length+1,
+      poolCredits:team.creditMode === 'shared' ? leader?.credits ?? 0 : undefined,
+      teamCredits,personalCredits:user.credits,paymentSource:teamPaymentSource(team,user.id),sharedLibId:team.sharedLibId } };
 }
 
-/**
- * 计费解算（P1 经济模型翻转，2026-08 商业化改造，⚠ 勿回退成链式双扣费）：
- *  - **统一定价**：所有用户（平台直属/渠道商名下）一律按源站平台价扣自己的积分；
- *  - **渠道商不再按请求结算**——其成本已在「买积分 + 给用户分发（兑换码/激活码面额实扣）」
- *    环节体现，settle 的 agents 恒为空数组；
- *  - 余额不足 → reject 402。
- * ⚠ 此处语义须与 catalog 投影（客户端预估=平台价，无渠道商换价）保持一致。
- */
-/**
- * 团队共享积分（第172轮）：用户在积分方式=shared 的团队里且不是团长 → 扣款人=团长（共享池=团长余额）。
- * 团长缺失（被删等，懒清理未跑到）回退扣自己。dispatch 模式/无团队=扣自己。
- */
-function teamPayerFor(user: User): { payer: User; team?: Team } {
-	const team = teamOfUser(user.id);
-	if (!team || team.creditMode !== "shared" || team.leaderId === user.id) return { payer: user, team };
-	const leader = getUser(team.leaderId);
-	return { payer: leader ?? user, team };
+function userCatalogAudience(user: User): string {
+  return `${audienceOf(user.agentId)}:wallet:${paymentContextFor(user).key}`;
+}
+
+function catalogForUser(user: User) {
+  const context = paymentContextFor(user), catalog = buildCatalog(context.priceOwner.agentId);
+  const modes = paymentFeaturesFor(user)?.modes;
+  catalog.models = catalog.models.filter(model => !model.modeId || modes?.[model.modeId] !== false);
+  catalog.modes = catalog.modes?.filter(mode => catalog.models.some(model => model.modeId === mode.id));
+  catalog.version += `.userModes:${createHash('sha256').update(JSON.stringify(modes ?? {})).digest('hex').slice(0, 12)}`;
+  if (context.priceOwner.agentId !== user.agentId) {
+    const own = buildCatalog(user.agentId);
+    catalog.templates = own.templates;
+    catalog.presets = own.presets;
+    catalog.version += `.templates:${own.version}`;
+  }
+  catalog.version += `.wallet:${encodeURIComponent(context.key)}`;
+  return catalog;
+}
+
+/** 所选钱包决定付款人、用户售价、会员和渠道成本；余额不足不切换钱包。 */
+function teamPayerFor(user: User): PaymentContext {
+  return paymentContextFor(user);
 }
 
 /**
@@ -157,30 +168,31 @@ function membershipDiscounted(payer: User, cost: number, modelId?: string): numb
 	if (cost <= 0) return cost;
 	const m = activeMembershipOf(payer);
 	if (!m) return cost;
-	const pct = (modelId ? membershipModelDiscountOf(modelId) : undefined) ?? m.discountPercent;
+	const pct = (modelId ? membershipModelDiscountOf(modelId, payer.agentId) : undefined) ?? m.discountPercent;
 	if (pct <= 0) return 0; // 限免：会员免费
 	if (pct >= 100) return cost;
 	return Math.max(1, Math.ceil((cost * pct) / 100));
 }
 
-function planBilling(
-	user: User,
-	md: ModelDef | undefined,
-	params?: Record<string, unknown>,
-): { cost: number; payer: User; reject?: string; tokenSnapshot?: TextPriceSnapshot } {
-	// 共享积分模式：余额校验/扣费对象=团长的池；价格口径不变（统一平台价，catalog 预估仍=实扣）
-	const { payer } = teamPayerFor(user);
-	const tokenSnapshot = md?.capability === 'text' && md.tokenPricing?.enabled ? {modelId:md.id,pricing:structuredClone(md.tokenPricing),at:Date.now(),discountPercent:membershipDiscounted(payer, 10000, md.id) / 100} : undefined;
-  const cost = tokenSnapshot ? 10 : membershipDiscounted(payer, md ? resolveModelCost(md, params) : 0, md?.id);
-	if (cost > 0 && payer.credits < cost) {
-		return {
-			cost, payer,
-			reject: payer.id === user.id
-				? `额度不足：本次需 ${cost}，剩余 ${payer.credits}`
-				: `团队积分不足：本次需 ${cost}，团队池剩余 ${payer.credits}`,
-		};
-	}
-	return { cost, payer, tokenSnapshot };
+type BillingPlan = PaymentContext & { cost:number; agents:{id:string;cost:number}[]; reject?:string; tokenSnapshot?:TextPriceSnapshot };
+function planBilling(user: User, md: ModelDef | undefined, params?: Record<string, unknown>): BillingPlan {
+  const context = paymentContextFor(user), { payer,priceOwner } = context;
+  if (context.unavailableError) return {...context,cost:0,agents:[],reject:context.unavailableError};
+  const retail = pricedAgentLine(md, priceOwner.agentId, 'retail'), purchase = pricedAgentLine(md, priceOwner.agentId, 'purchase');
+  const userToken = retail?.capability === 'text' && retail.tokenPricing?.enabled ? structuredClone(retail.tokenPricing) : undefined;
+  const agentToken = priceOwner.agentId && purchase?.capability === 'text' && purchase.tokenPricing?.enabled ? structuredClone(purchase.tokenPricing) : undefined;
+  const discountPercent = membershipDiscounted(priceOwner, 10000, md?.id) / 100;
+  const cost = userToken ? 10 : membershipDiscounted(priceOwner, retail ? resolveModelCost(retail, params) : 0, md?.id);
+  const agents = priceOwner.agentId ? [{ id:priceOwner.agentId,cost:purchase ? resolveModelCost(purchase, params) : 0 }] : [];
+  const tokenSnapshot: TextPriceSnapshot | undefined = userToken || agentToken ? { modelId:md!.id,pricing:userToken??agentToken!,at:Date.now(),discountPercent,
+    accounts:{user:{cost,pricing:userToken,discountPercent},agents:agents.map(a=>({...a,pricing:agentToken,discountPercent:100}))} } : undefined;
+  const plan: BillingPlan = { ...context,payer,cost,agents,tokenSnapshot };
+  if (!priceOwner.enabled || priceOwner.agentId && !getAgent(priceOwner.agentId)?.enabled) return {...plan,reject:'积分所属账户已停用，请联系服务商'};
+  if (cost > 0 && context.balance < cost) {
+    if (context.source !== 'personal' && context.team) notifyTeamCreditShortage(context.team.id,context.team.leaderId,user.id,user.name,context.source,cost,context.balance);
+    return { ...plan,reject: context.source === 'personal' ? `个人积分不足：本次需 ${cost}，剩余 ${context.balance}` : `团队积分不足：本次需 ${cost}，剩余 ${context.balance}。请联系团长或在团队页将积分消耗方式改为个人` };
+  }
+  return plan;
 }
 
 /**
@@ -192,12 +204,12 @@ function planBilling(
  * 失败退款退掉一笔从未扣过的钱 → 凭空造币。现在校验与扣款同处一个同步块，窗口归零。
  *
  * 钱从 plan.payer 扣（共享模式=团长的池）、消耗统计记在实际用户名下。
- * P1 起 agents 恒空（渠道商不再按请求结算）；settle/reverse 框架保留——
- * 切换前的历史扣款（billing 快照带 agentCosts）退款仍会原路两侧同退。
+ * 渠道商用户按售价扣付款人、按进货价扣渠道商；任一侧不足时整笔拒绝。
+ * 失败依照实扣快照分别退款；文本实际用量结算也冻结两侧价格。
  */
 function chargeBilling(
 	user: User,
-	plan: { cost: number; payer: User; tokenSnapshot?: TextPriceSnapshot },
+	plan: BillingPlan,
 	ref?: string,
 ): SettleResult {
 	const outcome = settle({
@@ -206,7 +218,9 @@ function chargeBilling(
 		payerId: plan.payer.id,
 		statsUserId: user.id,
 		userAmount: plan.cost,
-		agents: [],
+		userWallet: plan.wallet,
+		creditSource: plan.source,
+		agents: plan.agents,
   });
   if (outcome.ok && ref && plan.tokenSnapshot) prepareTextBilling(ref, outcome.charged, plan.tokenSnapshot);
   return outcome;
@@ -215,18 +229,17 @@ function chargeBilling(
 /**
  * 渠道节点计费（P3 独立部署）：付款人=该商积分池，平台价，无用户侧。
  *  - settle 走 agents 段（userAmount=0，payerId 仅留痕）——池不足=一分不动；
- *  - 池不足对节点回「服务暂不可用，请联系你的服务商」同款中性文案（终端用户不该看到
- *    分销机制），另附 reason 供节点侧管理端识别真因。
+ *  - 池不足明确提示渠道商积分不足，另附 reason 供节点侧管理端识别真因。
  */
 function planNodeBilling(agent: import("./store/agents.ts").Agent, md: ModelDef | undefined, params?: Record<string, unknown>): { cost: number; reject?: string } {
   const cost = md ? resolveModelCost(md, params) : 0;
 	if (cost > 0 && agent.credits < cost) {
-		return { cost, reject: "服务暂不可用，请联系你的服务商" };
+		return { cost, reject: AGENT_CREDIT_SHORTAGE };
 	}
 	return { cost };
 }
 
-function chargeNodeBilling(agent: import("./store/agents.ts").Agent, cost: number, traceUserId: string, ref?: string, md?: ModelDef): SettleResult {
+function chargeNodeBilling(agent: import("./store/agents.ts").Agent, cost: number, traceUserId: string, ref?: string, md?: ModelDef, retail?: ModelDef): SettleResult {
 	const outcome = settle({
 		reason: "generate",
 		ref,
@@ -236,6 +249,8 @@ function chargeNodeBilling(agent: import("./store/agents.ts").Agent, cost: numbe
 		agents: cost > 0 ? [{ id: agent.id, cost }] : [],
   });
   if (outcome.ok && ref && md?.tokenPricing?.enabled) prepareTextBilling(ref, outcome.charged, {modelId:md.id,pricing:structuredClone(md.tokenPricing),at:Date.now(),discountPercent:100});
+  else if (outcome.ok && ref && retail?.tokenPricing?.enabled) prepareTextBilling(ref, outcome.charged, {modelId:retail.id,pricing:structuredClone(retail.tokenPricing),at:Date.now(),discountPercent:100,
+    accounts:{user:{cost:0,discountPercent:100},agents:[{id:agent.id,cost,discountPercent:100}]}});
   return outcome;
 }
 
@@ -264,6 +279,10 @@ function nodeUserName(req: FastifyRequest): string | undefined {
  * 新增上游渠道时在 ALLOW_SUFFIXES 补后缀即可。
  */
 const REHOST_ALLOW_SUFFIXES = [
+	"cnd-coo-new.pages.dev",
+	".xingapi.top", "xingapi.top",
+	"api.lk888.ai", // xiha888；结果 CDN 域待真实回执核实
+	"api.hjmie.cc.cd", // 龙幽带 video_token 的结果代理
 	".r2.dev",
 	".r2.cloudflarestorage.com",
 	".cloudflarestorage.com",
@@ -383,13 +402,16 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 	// 团队共享积分（第172轮）：钱退给实际扣款人 payerId（共享模式=团长的池），消耗统计回冲实际用户。
 	// 第183轮：合成一把尺——用户侧与归属链各级在**一次结算**里同退，走 credits.settle
 	setBillingReverseHook((b) => {
-		settle({
+		return refundRequest({
 			reason: "refund",
 			ref: b.ref,
+			taskId: b.ref,
+			logId: b.logId,
 			payerId: b.payerId ?? b.userId,
 			statsUserId: b.userId,
-			userAmount: -b.cost,
-			agents: b.agents.map((a) => ({ id: a.id, cost: -a.cost })),
+			userAmount: b.cost,
+			userWallet: b.userWallet,
+			agents: b.agents,
 		});
 	});
 
@@ -416,7 +438,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 		registerDeviceOnLogin(user, body.deviceId || body.machineCode || deviceIdOf(req));
 		// 回传 accessKey：账号登录时客户端据此拿到真凭证并存储
 		const tv = sessionTeamView(user);
-		return { ok: true, accessKey: user.accessKey, user: { id: user.id, name: user.name, credits: tv.credits, team: tv.team, membership: activeMembershipOf(user), features: applyAgentFeatureGate(user.agentId, user.features), catalogAudience: audienceOf(user.agentId) } };
+		return { ok: true, accessKey: user.accessKey, user: { id: user.id, name: user.name, credits: tv.credits, ownCredits: tv.ownCredits, team: tv.team, membership: activeMembershipOf(user), features: paymentFeaturesFor(user), catalogAudience: userCatalogAudience(user) } };
 	});
 
 	// （P2b 移除：激活码注册端点 /v1/register——激活码机制整体退役，注册一律走 /v1/register/account）
@@ -439,6 +461,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
 	// 图形验证码（发验证码前置；一次性）
 	app.get("/v1/captcha", async () => genCaptcha());
+	app.get('/v1/registration-options', async (_req, reply) => {
+		reply.header('Cache-Control', 'no-store');
+		return { enabled: getRegisterSettings().enabled, email: isSmtpConfigured(), phone: isSmsConfigured() };
+	});
 
 	// 发验证码（注册）：图形码 → 目标格式/黑名单/占用 → 频控 → SMTP/短信发出
 	app.post("/v1/register/send-code", async (req, reply) => {
@@ -480,31 +506,19 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 		if (getUserByAccount(t.target)) return reply.code(400).send({ error: { message: "该账号已注册，请直接登录" } });
 		if ((body.password ?? "").trim().length < 6) return reply.code(400).send({ error: { message: "密码至少 6 位" } });
 		// 邀请码先行解析（验证码核销是一次性的——先把能拒的都拒完再核销，防用户白烧一枚验证码）
-		let agentId: string | undefined;
-		let invitedBy: string | undefined;
-		const invite = (body.inviteCode ?? "").trim();
-		if (invite) {
-			const ag = getAgentByInviteCode(invite);
-			const inviter = ag ? undefined : getUserByInviteCode(invite);
-			if (ag) {
-				if (!ag.enabled) return reply.code(400).send({ error: { message: "该邀请码所属服务商已停用" } });
-				agentId = ag.id;
-			} else if (inviter) {
-				invitedBy = inviter.id;
-			} else {
-				return reply.code(400).send({ error: { message: "邀请码无效，请核对后重试（可留空注册）" } });
-			}
-		}
+		const invitation = resolveRegistrationInvite(body.inviteCode);
+		if (!invitation.ok) return reply.code(400).send({ error:{ message:invitation.error } });
+		const { agentId, inviterId: invitedBy } = invitation;
 		const vc = verifyCode("register", t.target, body.code ?? "");
 		if (!vc.ok) return reply.code(400).send({ error: { message: vc.error } });
 		const ipGate = checkAndNoteRegister(clientIp(req));
 		if (!ipGate.ok) return reply.code(429).send({ error: { message: ipGate.error } });
-		const user = createUser({ credits: cfg.giftCredits, note: "自助注册", agentId, invitedBy });
+		const user = createUser({ credits: agentId ? getAgent(agentId)?.registrationGiftCredits ?? 0 : cfg.giftCredits, note: "自助注册", agentId, invitedBy });
 		const bound = bindAccount(user, t.target, body.password ?? "", body.name);
 		if (!bound.ok) return reply.code(400).send({ error: { message: bound.error } }); // 竞态兜底（send-code 后被抢注）
 		registerDeviceOnLogin(user, body.deviceId || body.machineCode || deviceIdOf(req));
 		const tv = sessionTeamView(user);
-		return { ok: true, accessKey: user.accessKey, user: { id: user.id, name: user.name, credits: tv.credits, team: tv.team, features: applyAgentFeatureGate(user.agentId, user.features), catalogAudience: audienceOf(user.agentId) } };
+		return { ok: true, accessKey: user.accessKey, user: { id: user.id, name: user.name, credits: tv.credits, ownCredits: tv.ownCredits, team: tv.team, features: paymentFeaturesFor(user), catalogAudience: userCatalogAudience(user) } };
 	});
 
 	// 找回密码——发验证码：目标不存在也返回 ok（不暴露账号存在性），只是不真正发送
@@ -585,6 +599,28 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 	// ── 以下需要 accessKey ──
 	await app.register(async (api) => {
 		api.addHook("preHandler", requireAccessKey);
+    api.get('/v1/node/announcements',async(req,reply)=>{
+      if(!req.agentNode || isRelay()) return reply.code(403).send({error:{message:'此端点仅供渠道节点同步源站公告'}});
+      return listNodeAnnouncements(req.agentNode.id,req.query as {cursor?:number;limit?:number});
+    });
+    api.get('/v1/messages',async req=>{
+      const remoteScope=await ensureRelayAnnouncements(),query=req.query as {offset?:number;limit?:number};
+      return listMessagesForUser(req.user!,{offset:query.offset,limit:query.limit,remoteScope});
+    });
+    api.post('/v1/messages/read',async(req,reply)=>{
+      const body=(req.body??{}) as {id?:unknown};
+      if(body.id!==undefined && (typeof body.id!=='string' || !body.id || body.id.length>400)) return reply.code(400).send({error:{message:'消息 ID 无效'}});
+      const remoteScope=await ensureRelayAnnouncements();
+      readMessagesForUser(req.user!,body.id as string|undefined,remoteScope);
+      return {ok:true,...listMessagesForUser(req.user!,{limit:1,remoteScope})};
+    });
+    api.put('/v1/team/payment-source',async(req,reply)=>{
+      const user=req.user!,team=teamOfUser(user.id);
+      if(!team)return reply.code(400).send({error:{message:'你不在团队中'}});
+      const r=setTeamPaymentSource(team.id,user.id,(req.body as {source?:unknown})?.source);
+      if(!r.ok)return reply.code(400).send({error:{message:r.error}});
+      return {ok:true,...sessionTeamView(user)};
+    });
 		api.post('/v1/user-prompt-backups', {bodyLimit: 2 * 1024 * 1024}, async (req, reply) => {
 			const body = req.body as GenerateRequest;
 			if (!body || typeof body.clientTaskId !== 'string' || !body.clientTaskId || body.clientTaskId.length > 200 || typeof body.model !== 'string' || !/^(libtv-|dreamina-|comfyui-)/.test(body.model) || !Array.isArray(body.usedPresets) || body.usedPresets.length > 100) {
@@ -610,7 +646,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			// 第121轮：先过渠道商级闸门（商关的模式对其名下用户硬禁，AND 合成）
 			// 第172轮：team 随心跳下发（共享积分模式的团员 credits=团队池余额，见 sessionTeamView）
 			const tv = sessionTeamView(u);
-			return { ok: true, user: { id: u.id, name: u.name, credits: tv.credits, team: tv.team, membership: activeMembershipOf(u), features: applyAgentFeatureGate(u.agentId, u.features), catalogAudience: audienceOf(u.agentId) } };
+			return { ok: true, user: { id: u.id, name: u.name, credits: tv.credits, ownCredits: tv.ownCredits, team: tv.team, membership: activeMembershipOf(u), features: paymentFeaturesFor(u), catalogAudience: userCatalogAudience(u) } };
 		});
 
 		// P3 渠道节点自身状态：节点管理端「源站连接」卡显示池余额/连通性用（仅 ank- 凭证可达）
@@ -630,7 +666,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 				inviteCode: ensureUserInviteCode(u),
 				invitedCount: invitedCountOf(u.id),
 				membership: activeMembershipOf(u),
-				catalogAudience: audienceOf(u.agentId),
+				catalogAudience: userCatalogAudience(u),
 			};
 		});
 
@@ -647,6 +683,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			return { ok: true, apiKey: u.accessKey };
 		});
 
+		registerTeamUsageReportRoutes(api);
+		registerLocalGenerationReports(api,planBilling);
 		// 个人消耗统计（第173轮：今日/昨日/近7天，按请求日志聚合——共享模式下消耗仍记在消耗者名下）。
 		// 团长可查团员（?userId=）或全团合计（?scope=team）；越权一律 404 不暴露存在性。
 		api.get("/v1/stats", async (req, reply) => {
@@ -707,6 +745,19 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 		});
 
 		// 个人中心：管理端手工建号的用户绑定账号+密码（一次性；改密走 /v1/password/change）
+		api.put('/v1/profile', async (req, reply) => {
+			if (!req.user) return reply.code(403).send({ error: { message: '仅用户可修改自己的用户名' } });
+			const body = req.body as Record<string, unknown> | null;
+			if (!body || Array.isArray(body) || typeof body.name !== 'string' || Object.keys(body).some(k => k !== 'name'))
+				return reply.code(400).send({ error: { message: '仅支持修改用户名' } });
+			const name = body.name.trim();
+			if (!name || [...name].length > 40 || /[\u0000-\u001f\u007f]/.test(name))
+				return reply.code(400).send({ error: { message: '用户名须为 1–40 个字符，不能包含换行或控制字符' } });
+			req.user.name = name;
+			req.user.updatedAt = new Date().toISOString();
+			persistUsers();
+			return { id: req.user.id, name };
+		});
 		api.post("/v1/bind-account", async (req, reply) => {
 			const u = req.user!;
 			if (u.account) return reply.code(400).send({ error: { message: "已绑定账号，如需修改请联系管理员" } });
@@ -734,7 +785,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			// P3 relay 边界：会员是源站签发体系，节点 v1 暂不支持（方案不下发=客户端显示未开放）
 			if (isRelay()) return { plan: undefined, membership: undefined };
 			const u = req.user!;
-			const p = getMembershipPlan();
+			const p = getMembershipPlan(u.agentId);
 			return {
 				plan: p.enabled
 					? { name: p.name, priceLabel: p.priceLabel, days: p.days, credits: p.credits, discountPercent: p.discountPercent, benefitsNote: p.benefitsNote }
@@ -750,40 +801,77 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			const u = req.user!;
 			const { code } = (req.body ?? {}) as { code?: string };
 			if (!code?.trim()) return reply.code(400).send({ error: { message: "缺少会员卡号" } });
-			if (!getMembershipPlan().enabled) return reply.code(400).send({ error: { message: "会员功能暂未开放，请联系管理员" } });
+			if (!getMembershipPlan(u.agentId).enabled) return reply.code(400).send({ error: { message: "会员功能暂未开放，请联系管理员" } });
 			const card = getMembershipCard(code);
 			if (!card) return reply.code(404).send({ error: { message: "会员卡不存在" } });
-			const r = useMembershipCard(code, u.id, u.name || u.account || "");
+			const r = useMembershipCard(code, u.id, u.name || u.account || "", u.agentId);
 			if (!r.ok) return reply.code(400).send({ error: { message: r.error } });
 			applyMembershipGrant(u.id, { planName: r.card.planName, days: r.card.days, discountPercent: r.card.discountPercent });
-			const credits = r.card.credits > 0 ? (grantCredits(u.id, r.card.credits) ?? u.credits) : u.credits;
-			return { ok: true, added: r.card.credits, credits, membership: activeMembershipOf(u) };
+			if (r.card.credits > 0) grantCredits(u.id, r.card.credits);
+			return { ok: true, added: r.card.credits, ...sessionTeamView(u), membership: activeMembershipOf(u) };
 		});
 
 		// 兑换积分码：一次性码，成功则把面额充入余额
 		api.post("/v1/redeem", async (req, reply) => {
 			const u = req.user!;
 			const { code } = (req.body ?? {}) as { code?: string };
-			// 归属闸（第175轮）：渠道商签发的码仅其名下用户可兑换；平台直发的码全体可用
+			// 兑换码与用户必须属于同一积分体系，源站码也不跨渠道商通用。
 			const r = redeemCode(code ?? "", u.id, u.name, u.agentId);
 			if (!r.ok) return reply.code(400).send({ error: { message: r.error } });
-			const credits = grantCredits(u.id, r.credits) ?? u.credits;
-			return { ok: true, added: r.credits, credits };
+			grantCredits(u.id, r.credits);
+			return { ok: true, added: r.credits, ...sessionTeamView(u) };
+		});
+
+		// Local CLI calls precheck their Qiji service fee without generating or charging.
+		api.post('/v1/fees/third-party/precheck', async (req, reply) => {
+			const user = req.user!, context = paymentContextFor(user);
+			if (context.unavailableError) return reply.code(402).send({error:{message:context.unavailableError}});
+			if (!isRelay()) {
+				const plan = planBilling(user,getModelDef('fee-thirdparty'));
+				if (plan.reject) return reply.code(402).send({error:{message:plan.reject}});
+				return {ok:true};
+			}
+			const catalog = await relayCatalog();
+			const cost = catalog?.fees?.thirdParty ?? 5;
+			if (context.balance < cost) {
+				if (context.source !== 'personal' && context.team) notifyTeamCreditShortage(context.team.id,context.team.leaderId,user.id,user.name,context.source,cost,context.balance);
+				return reply.code(402).send({error:{message:context.source === 'personal' ? `个人积分不足：本次需 ${cost}，剩余 ${context.balance}` : `团队积分不足：本次需 ${cost}，剩余 ${context.balance}。请联系团长或在团队页将积分消耗方式改为个人`}});
+			}
+			return {ok:true};
 		});
 
 		// 拉取目录（since 版本一致回 304）
+		api.get('/v1/route-availability',async(req,reply)=>{
+			reply.header('Cache-Control','no-store');
+			const agentId=req.agentNode?.id??(req.user ? paymentContextFor(req.user).priceOwner.agentId : undefined);
+			const modes=(req.user ? paymentFeaturesFor(req.user) : applyAgentFeatureGate(agentId))?.modes;
+			if(isRelay()){
+				let response:Response;
+				try{response=await sourceFetch('/v1/route-availability',{signal:AbortSignal.timeout(15000)});}
+				catch{return reply.code(502).send({error:{message:'源站线路统计暂不可达，请稍后重试'}});}
+				const data=await jsonOf(response);
+				if(!response.ok)return reply.code(response.status).send(data);
+				if(!data||!Array.isArray(data.rows)||!data.rows.every(row=>row&&typeof row.id==='string'))return reply.code(502).send({error:{message:'源站线路统计格式异常'}});
+				return {...data,rows:data.rows.filter((row:{id:string})=>modes?.[row.id]!==false).map(publicAvailabilityPricing)};
+			}
+			const payer=req.user?teamPayerFor(req.user).priceOwner:undefined;
+			return publicLineAvailability(req.user ? catalogForUser(req.user) : buildCatalog(agentId),modes,id=>payer?membershipDiscounted(payer,10000,id)/100:100);
+		});
 		api.get("/v1/catalog", async (req, reply) => {
 			// P3 relay：目录=源站目录缓存透传（源站已按本商开放范围过滤、平台价；正文类模板本就不下发）
 			if (isRelay()) {
-				const cat = await relayCatalog();
-				if (!cat) return reply.code(502).send({ error: { message: "源站目录暂不可达，请稍后重试" } });
+				const rawCatalog = await relayCatalog();
+				if (!rawCatalog) return reply.code(502).send({ error: { message: "源站目录暂不可达，请稍后重试" } });
+				const cat=publicCatalogPricing(rawCatalog);
 				const since0 = (req.query as { since?: string })?.since;
 				if (since0 && since0 === cat.version) return reply.code(304).send();
 				return cat;
 			}
 			// 模板按用户归属渠道商下发：平台模板 + 该渠道商自营模板（req.user 由 requireAccessKey 注入）。
 			// P3 渠道节点：按该商开放范围/改名/自营模板过滤（与其名下源站用户同一视角，平台价）。
-			const catalog = buildCatalog(req.agentNode ? req.agentNode.id : req.user?.agentId);
+			const internalCatalog=req.user ? catalogForUser(req.user) : buildCatalog(req.agentNode?.id, (req.query as {pricing?:string}).pricing !== 'retail' ? 'purchase' : 'retail');
+			// Trusted relay servers need billing estimates; each relay strips text rates at its own client boundary.
+			const catalog = req.agentNode ? internalCatalog : publicCatalogPricing(internalCatalog);
 			const since = (req.query as { since?: string })?.since;
 			if (since && since === catalog.version) return reply.code(304).send();
 			return catalog;
@@ -793,8 +881,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 		api.post("/v1/generate", async (req, reply) => {
 			const body = req.body as GenerateRequest;
 			if (!body?.model) return reply.code(400).send({ error: { message: "缺少 model" } });
-      if (!isRelay()) {
-        const error = inferenceRequestErrorForCaller(body, req);
+      {
+        const error = isRelay() ? dualModeRequestErrorForCaller(body, req) : inferenceRequestErrorForCaller(body, req);
         if (error) return reply.code(400).send({ error: { message: error } });
       }
 
@@ -803,14 +891,14 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			// 以源站回传为准才有「金额恒等」；源站拒单（402/403/400）时本地一分未动。
 			if (isRelay()) {
 				const user = req.user!;
-				const { payer } = teamPayerFor(user);
+				const mirrorContext = teamPayerFor(user), {payer} = mirrorContext;
+				if (mirrorContext.unavailableError) return reply.code(402).send({error:{message:mirrorContext.unavailableError}});
 				const estimate = estimateCostFromCatalog(await relayCatalog(), body.model, body.params as Record<string, unknown> | undefined);
-				if (estimate > 0 && payer.credits < estimate) {
+				if (estimate > 0 && mirrorContext.balance < estimate) {
+          if(mirrorContext.source!=='personal'&&mirrorContext.team)notifyTeamCreditShortage(mirrorContext.team.id,mirrorContext.team.leaderId,user.id,user.name,mirrorContext.source,estimate,mirrorContext.balance);
 					return reply.code(402).send({
 						error: {
-							message: payer.id === user.id
-								? `额度不足：本次需 ${estimate}，剩余 ${payer.credits}`
-								: `团队积分不足：本次需 ${estimate}，团队池剩余 ${payer.credits}`,
+							message: mirrorContext.source === 'personal' ? `个人积分不足：本次需 ${estimate}，剩余 ${mirrorContext.balance}` : `团队积分不足：本次需 ${estimate}，剩余 ${mirrorContext.balance}。请联系团长或在团队页将积分消耗方式改为个人`,
 						},
 					});
 				}
@@ -830,19 +918,19 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 					// 源站拒单：本地未扣，状态码+错误原样转（池不足文案源站已中性化）
 					return reply.code(res.status).send(j ?? { error: { message: `源站返回 ${res.status}` } });
 				}
-				const actual = Math.max(0, Number(j?.cost) || 0);
+				const actual = Math.max(0, Number(j?.retailCost ?? j?.cost) || 0);
 				const payerId = payer.id !== user.id ? payer.id : undefined;
 				if (j?.taskId) {
 					const taskId = String(j.taskId);
-					const log = startLog({ req: body, userId: user.id, userName: user.name, cost: actual, payerId, headers: req.headers });
-					const c = chargeLocalMirror(payer, user.id, actual, log.id);
+					const log = startLog({ req: body, userId: user.id, userName: user.name, cost: actual, payerId, userWallet:mirrorContext.wallet, creditSource:mirrorContext.source, teamId:mirrorContext.team?.id, headers: req.headers });
+					const c = chargeLocalMirror(payer, user.id, actual, log.id, mirrorContext.wallet);
 					if (c.shortfall > 0) req.log.warn(`[relay] 本地余额不足实扣 ${actual}（差 ${c.shortfall}）：user=${user.id} task=${taskId}`);
-					ledgerRecord(taskId, { u: user.id, p: payerId, c: actual - c.shortfall, log: log.id });
+					ledgerRecord(taskId, { u: user.id, p: payerId, wallet:mirrorContext.wallet, c: actual - c.shortfall, log: log.id });
 					return { taskId };
 				}
 				if (String(j?.status ?? "") === "success") {
-					const log = startLog({ req: body, userId: user.id, userName: user.name, cost: actual, payerId, headers: req.headers });
-					const c = chargeLocalMirror(payer, user.id, actual, log.id);
+					const log = startLog({ req: body, userId: user.id, userName: user.name, cost: actual, payerId, userWallet:mirrorContext.wallet, creditSource:mirrorContext.source, teamId:mirrorContext.team?.id, headers: req.headers });
+					const c = chargeLocalMirror(payer, user.id, actual, log.id, mirrorContext.wallet);
 					if (c.shortfall > 0) req.log.warn(`[relay] 本地余额不足实扣 ${actual}（差 ${c.shortfall}）：user=${user.id} log=${log.id}`);
 					finishLog(log.id, { status: "success", response: j?.result });
 					return { status: "success", result: j?.result };
@@ -853,13 +941,13 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 				return reply.code(200).send({ status: "failed", error: errText });
 			}
 
-			const routeError = prepareRoutingRequest(body, req.agentNode?.id ?? req.user?.agentId, applyAgentFeatureGate(req.agentNode?.id ?? req.user?.agentId, req.user?.features)?.modes);
+			const routeError = prepareRoutingRequest(body, req.agentNode?.id ?? (req.user ? paymentContextFor(req.user).priceOwner.agentId : undefined), req.user ? paymentFeaturesFor(req.user)?.modes : applyAgentFeatureGate(req.agentNode?.id)?.modes);
 			if (routeError) return reply.code(400).send({ error: { message: routeError } });
 
 			// ── P3 渠道节点分支：计费=商积分池（平台价），响应回传实扣 cost 供节点镜像扣本地用户 ──
 			if (req.agentNode) {
 				const agent = req.agentNode;
-				const md = publicModelDef(body.model);
+				const md = pricedAgentLine(publicModelDef(body.model), req.agentNode!.id, 'purchase');
 				if (md && !modelAllowedForAgent(md, agent.id)) {
 					return reply.code(403).send({ error: { message: `模型「${md.label}」未对当前账号开放` } });
 				}
@@ -876,7 +964,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 					const matErr = checkMaterialLimits(md.label, md.matLimits, body.inputs);
 					if (matErr) return reply.code(400).send({ error: { message: matErr } });
 				}
-				const rb = await refVideoBillingParams(md, body.params as Record<string, unknown> | undefined, body.inputs);
+				const rb = await refVideoBillingParams(md, routingBillingParams(body), body.inputs);
 				if (rb.error) return reply.code(400).send({ error: { message: rb.error } });
 				const plan = planNodeBilling(agent, md, rb.params);
 				if (plan.reject) return reply.code(402).send({ error: { message: plan.reject }, reason: "pool_insufficient" });
@@ -884,28 +972,34 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 				// 节点日志：cost=0（源站无用户侧扣款）+ agentCosts=[池实扣]——门户/管理端经 logCostFor
 				// 取到池实扣；启动对账孤儿退款按 agentCosts 原路退池（userAmount 0 对留痕 userId 天然 no-op）。
 				const log = startLog({ req: body, userId: trace, userName: nodeUserName(req), cost: 0, agentCosts: plan.cost > 0 ? [{ id: agent.id, cost: plan.cost }] : undefined, ownerId: agent.id, headers: req.headers });
-				const billed = chargeNodeBilling(agent, plan.cost, trace, log.id, md);
+				const retail = pricedAgentLine(publicModelDef(body.model), agent.id, 'retail');
+				const retailCost = rememberNodeRetail(log.id, agent.id, retail, rb.params);
+				const billed = chargeNodeBilling(agent, plan.cost, trace, log.id, md, retail);
 				if (!billed.ok) {
 					finishLog(log.id, { status: "failed", error: billed.error });
 					return reply.code(402).send({ error: { message: billed.error }, reason: "pool_insufficient" });
 				}
-				const r = await runWithAssetOwner({ userId: trace, agentId: agent.id }, () => dispatchGenerate(body, log.id, req.agentNode?.id ?? req.user?.agentId, applyAgentFeatureGate(req.agentNode?.id ?? req.user?.agentId, req.user?.features)?.modes));
+				const r = await runWithAssetOwner({ userId: trace, agentId: agent.id }, () => dispatchGenerate(body, log.id, agent.id, applyAgentFeatureGate(agent.id)?.modes));
 				if (r.kind === "sync" && r.status === "failed") {
 					reverse(billed.charged, "refund", log.id);
 				} else if (r.kind === "async") {
 					setTaskBilling(r.taskId, trace, 0, billed.charged.agents, undefined);
+					linkNodeRetail(log.id, r.taskId);
 				}
-				if (r.kind === "async") return { taskId: r.taskId, cost: plan.cost };
+				if (r.kind === "async") return { taskId: r.taskId, cost: plan.cost, retailCost };
 				if (r.status === "failed") return reply.code(200).send({ status: "failed", error: r.error ? scrubChannelInfo(r.error) : r.error, cost: 0 });
-				return { status: "success", result: r.result, cost: plan.cost };
+				const quote = nodeRetailResult(log.id, agent.id, r.result);
+				return { status: "success", result: quote?.result ?? r.result, cost: getLog(log.id)?.agentCosts?.find(a => a.id === agent.id)?.cost ?? plan.cost, retailCost: quote?.cost ?? retailCost };
 			}
 
 			// 额度前置校验：不足则拒绝、不下单
 			const user = req.user!;
 			const requestAgentId = user.agentId;
+			const requestPayment = paymentContextFor(user);
+			const requestAccessKey = user.accessKey, requestPriceOwnerKey = requestPayment.priceOwner.accessKey;
 			const md = publicModelDef(body.model);
 			// 模型可用性校验：开放范围（第110轮 shareScope）+ 渠道商禁用清单（第121轮）双闸，任一不过直接拒绝，不下单不记账
-			if (md && !modelAllowedForAgent(md, user.agentId)) {
+			if (md && !modelAllowedForAgent(md, requestPayment.priceOwner.agentId)) {
 				return reply.code(403).send({ error: { message: `模型「${md.label}」未对当前账号开放` } });
 			}
 			// 模式门禁（第130轮）：模型归属的模式若对该用户（含渠道商链硬闸）关闭 → 403 拒单。
@@ -915,7 +1009,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 				if (modeDisabled(md.modeId)) {
 					return reply.code(403).send({ error: { message: `模式「${modeName(md.modeId)}」已停用` } });
 				}
-				const eff = applyAgentFeatureGate(user.agentId, user.features);
+				const eff = paymentFeaturesFor(user);
 				if (eff?.modes?.[md.modeId] === false) {
 					return reply.code(403).send({ error: { message: `模式「${modeName(md.modeId)}」未对当前账号开放` } });
 				}
@@ -929,10 +1023,10 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			}
 			// 参考视频按秒计费（第140轮）：模型声明 refVideoSecondsWeight 时，服务端探测每条参考视频时长
 			// （不足1秒算1秒）折算进计费秒数——读不出时长明确拒单（不下单不扣费；发上游的 params 不受影响）
-			const rb = await refVideoBillingParams(md, body.params as Record<string, unknown> | undefined, body.inputs);
+			const rb = await refVideoBillingParams(md, routingBillingParams(body), body.inputs);
 			// 用户迁移会原位更新 user；探测期间归属变化后，旧权限检查不能继续用于新归属扣费/记账。
-			if (user.agentId !== requestAgentId) {
-				return reply.code(409).send({ error: { message: "账号归属已变更，请刷新模型列表后重试" } });
+			if (user.accessKey !== requestAccessKey || requestPayment.priceOwner.accessKey !== requestPriceOwnerKey || user.agentId !== requestAgentId || paymentContextFor(user).key !== requestPayment.key) {
+				return reply.code(409).send({ error: { message: "积分来源或账号归属已变更，请刷新模型列表后重试" } });
 			}
 			if (rb.error) {
 				return reply.code(400).send({ error: { message: rb.error } });
@@ -947,7 +1041,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			// agentCosts=归属链各级结算侧实扣（第124轮）：门户/管理端按各自视角显示「自身消耗」用
 			// payerId（第183轮）：团队共享模式下钱是从团长池扣的，退款必须退回同一个池——
 			// 启动对账走的是日志而非任务表，不记这个字段就会把钱退给从没付过款的团员（凭空造币）
-			const log = startLog({ req: body, userId: req.user?.id, userName: req.user?.name, cost, payerId: plan.payer.id !== user.id ? plan.payer.id : undefined, ownerId: user.agentId, headers: req.headers });
+			const log = startLog({ req: body, userId: req.user?.id, userName: req.user?.name, cost, agentCosts: plan.agents, payerId: plan.payer.id !== user.id ? plan.payer.id : undefined, ownerId: user.agentId, userWallet: plan.wallet, creditSource: plan.source, pricingAgentId: plan.priceOwner.agentId, teamId: plan.team?.id, headers: req.headers });
 			// 预扣（第183轮）：**必须在 dispatch 之前**，理由见 chargeBilling 注释
 			const billed = chargeBilling(user, plan, log.id);
 			if (!billed.ok) {
@@ -955,13 +1049,13 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 				return reply.code(402).send({ error: { message: billed.error } });
 			}
 			// 归属上下文：整条生成链（含后台轮询循环里 rehostVideo 产出的成片）落台账时自动带上 user_id/agent_id
-			const r = await runWithAssetOwner({ userId: user.id, agentId: user.agentId }, () => dispatchGenerate(body, log.id, req.agentNode?.id ?? req.user?.agentId, applyAgentFeatureGate(req.agentNode?.id ?? req.user?.agentId, req.user?.features)?.modes));
+			const r = await runWithAssetOwner({ userId: user.id, agentId: user.agentId }, () => dispatchGenerate(body, log.id, plan.priceOwner.agentId, paymentFeaturesFor(user)?.modes));
 
 			// 同步失败 → 原路同退（用户与渠道商两侧同进同退）；异步 → 登记**实扣**金额供失败退款
 			if (r.kind === "sync" && r.status === "failed") {
 				reverse(billed.charged, "refund", log.id);
 			} else if (r.kind === "async") {
-				setTaskBilling(r.taskId, user.id, billed.charged.userAmount, billed.charged.agents, plan.payer.id);
+				setTaskBilling(r.taskId, user.id, billed.charged.userAmount, billed.charged.agents, plan.payer.id, billed.charged.userWallet);
 			}
 
 			if (r.kind === "async") return { taskId: r.taskId };
@@ -992,16 +1086,19 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 					return reply.code(502).send({ error: { message: `源站不可达：${(err as Error).message}` } });
 				}
 			}
+			const owner = taskOwner(taskId), caller = req.agentNode ? nodeUserTrace(req) : req.user!.id;
+			if (owner && owner !== caller) return reply.code(404).send({ error: { message: '任务不存在' } });
 			const state = getTaskState(taskId);
 			if (!state) return reply.code(404).send({ error: { message: "任务不存在" } });
+			if (req.agentNode) { const quote = nodeRetailResult(taskId, req.agentNode.id, state.result); if (quote) state.result = quote.result; }
 			return fillAssetUrls(state, baseUrlOf(req));
 		});
 
 		// 批量提交（每个子任务也记录请求）
 		api.post("/v1/batch", async (req, reply) => {
 			const body = req.body as BatchRequest;
-      if (!isRelay() && Array.isArray(body?.tasks)) for (const task of body.tasks) {
-        const error = inferenceRequestErrorForCaller(task, req);
+      if (Array.isArray(body?.tasks)) for (const task of body.tasks) {
+        const error = isRelay() ? dualModeRequestErrorForCaller(task, req) : inferenceRequestErrorForCaller(task, req);
         if (error) return reply.code(400).send({ error: { message: error } });
       }
 			if (!Array.isArray(body?.tasks)) return reply.code(400).send({ error: { message: "缺少 tasks" } });
@@ -1009,11 +1106,13 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			// ── P3 relay：整批转发源站，按回传 costs（与 taskIds 对位）逐任务镜像扣本地 ──
 			if (isRelay()) {
 				const user = req.user!;
-				const { payer } = teamPayerFor(user);
+				const mirrorContext = teamPayerFor(user), {payer} = mirrorContext;
+				if (mirrorContext.unavailableError) return reply.code(402).send({error:{message:mirrorContext.unavailableError}});
 				const cat = await relayCatalog();
 				const totalEstimate = body.tasks.reduce((s, t) => s + estimateCostFromCatalog(cat, t.model, t.params as Record<string, unknown> | undefined), 0);
-				if (totalEstimate > 0 && payer.credits < totalEstimate) {
-					return reply.code(402).send({ error: { message: `额度不足：本批预估需 ${totalEstimate}，剩余 ${payer.credits}` } });
+				if (totalEstimate > 0 && mirrorContext.balance < totalEstimate) {
+          if(mirrorContext.source!=='personal'&&mirrorContext.team)notifyTeamCreditShortage(mirrorContext.team.id,mirrorContext.team.leaderId,user.id,user.name,mirrorContext.source,totalEstimate,mirrorContext.balance);
+          return reply.code(402).send({error:{message:mirrorContext.source==='personal'?`个人积分不足：本批预估需 ${totalEstimate}，剩余 ${mirrorContext.balance}`:`团队积分不足：本批预估需 ${totalEstimate}，剩余 ${mirrorContext.balance}。请联系团长或在团队页将积分消耗方式改为个人`}});
 				}
 				let res: Response;
 				try {
@@ -1029,15 +1128,14 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 				const j = await jsonOf(res);
 				if (!res.ok) return reply.code(res.status).send(j ?? { error: { message: `源站返回 ${res.status}` } });
 				const taskIds = Array.isArray(j?.taskIds) ? (j.taskIds as string[]) : [];
-				const costs = Array.isArray(j?.costs) ? (j.costs as number[]) : [];
+				const costs = Array.isArray(j?.retailCosts) ? (j.retailCosts as number[]) : Array.isArray(j?.costs) ? (j.costs as number[]) : [];
 				const payerId = payer.id !== user.id ? payer.id : undefined;
 				taskIds.forEach((tid, i) => {
 					const c0 = Math.max(0, Number(costs[i]) || 0);
-					if (c0 <= 0) return;
-					const log = startLog({ req: (body.tasks[i] ?? { model: "unknown" }) as GenerateRequest, userId: user.id, userName: user.name, cost: c0, payerId, headers: req.headers });
-					const c = chargeLocalMirror(payer, user.id, c0, log.id);
+					const log = startLog({ req: (body.tasks[i] ?? { model: "unknown" }) as GenerateRequest, userId: user.id, userName: user.name, cost: c0, payerId, userWallet:mirrorContext.wallet, creditSource:mirrorContext.source, teamId:mirrorContext.team?.id, headers: req.headers });
+					const c = chargeLocalMirror(payer, user.id, c0, log.id, mirrorContext.wallet);
 					if (c.shortfall > 0) req.log.warn(`[relay] 批量本地余额不足实扣 ${c0}（差 ${c.shortfall}）：user=${user.id} task=${tid}`);
-					ledgerRecord(tid, { u: user.id, p: payerId, c: c0 - c.shortfall, log: log.id });
+					ledgerRecord(tid, { u: user.id, p: payerId, wallet:mirrorContext.wallet, c: c0 - c.shortfall, log: log.id });
 				});
 				return { batchId: j?.batchId, taskIds };
 			}
@@ -1049,12 +1147,14 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 				const uname = nodeUserName(req);
 				const taskIds: string[] = [];
 				const costs: number[] = [];
+				const retailCosts: number[] = [];
 				const effGate = applyAgentFeatureGate(agent.id, undefined)?.modes;
 				for (const t of body.tasks) {
-					const tmd = publicModelDef(t.model);
+					const tmd = pricedAgentLine(publicModelDef(t.model), agent.id, 'purchase');
 					const fail = (msg: string) => {
 						taskIds.push(createCompletedTask("text", "failed", undefined, msg, t.clientTaskId).taskId);
 						costs.push(0);
+						retailCosts.push(0);
 					};
 					const routeError = prepareRoutingRequest(t, agent.id, effGate);
 					if (routeError) { fail(routeError); continue; }
@@ -1065,53 +1165,61 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 						const matErr = checkMaterialLimits(tmd.label, tmd.matLimits, t.inputs);
 						if (matErr) { fail(matErr); continue; }
 					}
-					const rb = await refVideoBillingParams(tmd, t.params as Record<string, unknown> | undefined, t.inputs);
+					const rb = await refVideoBillingParams(tmd, routingBillingParams(t), t.inputs);
 					if (rb.error) { fail(rb.error); continue; }
 					const plan = planNodeBilling(agent, tmd, rb.params);
 					if (plan.reject) { fail(plan.reject); continue; }
 					const log = startLog({ req: t, userId: trace, userName: uname, cost: 0, agentCosts: plan.cost > 0 ? [{ id: agent.id, cost: plan.cost }] : undefined, ownerId: agent.id, headers: req.headers });
-					const billed = chargeNodeBilling(agent, plan.cost, trace, log.id, tmd);
+					const retail = pricedAgentLine(publicModelDef(t.model), agent.id, 'retail');
+					const retailCost = rememberNodeRetail(log.id, agent.id, retail, rb.params);
+					const billed = chargeNodeBilling(agent, plan.cost, trace, log.id, tmd, retail);
 					if (!billed.ok) {
 						finishLog(log.id, { status: "failed", error: billed.error });
 						fail(billed.error);
 						continue;
 					}
-					const r = await runWithAssetOwner({ userId: trace, agentId: agent.id }, () => dispatchGenerate(t, log.id, req.agentNode?.id ?? req.user?.agentId, applyAgentFeatureGate(req.agentNode?.id ?? req.user?.agentId, req.user?.features)?.modes));
+					const r = await runWithAssetOwner({ userId: trace, agentId: agent.id }, () => dispatchGenerate(t, log.id, agent.id, applyAgentFeatureGate(agent.id)?.modes));
 					if (r.kind === "sync" && r.status === "failed") {
 						reverse(billed.charged, "refund", log.id);
 						taskIds.push(createCompletedTask("text", r.status, r.result, r.error, t.clientTaskId).taskId);
 						costs.push(0);
+						retailCosts.push(0);
 						continue;
 					}
 					if (r.kind === "async") {
 						setTaskBilling(r.taskId, trace, 0, billed.charged.agents, undefined);
 						taskIds.push(r.taskId);
 					} else {
-						taskIds.push(createCompletedTask("text", r.status, r.result, r.error, t.clientTaskId).taskId);
+						taskIds.push(createCompletedTask("text", r.status, nodeRetailResult(log.id, agent.id, r.result)?.result ?? r.result, r.error, t.clientTaskId).taskId);
 					}
-					costs.push(plan.cost);
+					linkNodeRetail(log.id, taskIds[taskIds.length - 1]);
+					costs.push(getLog(log.id)?.agentCosts?.find(a => a.id === agent.id)?.cost ?? plan.cost);
+					retailCosts.push(r.kind === 'sync' ? nodeRetailResult(log.id, agent.id, r.result)?.cost ?? retailCost : retailCost);
 				}
 				_batchSeq += 1;
 				const batchId = `b${String(_batchSeq).padStart(6, "0")}`;
 				batches.set(batchId, taskIds);
-				return { batchId, taskIds, costs };
+				for (const id of taskIds) setTaskOwner(id, trace);
+				return { batchId, taskIds, costs, retailCosts };
 			}
 
 			const user = req.user!;
 			const requestAgentId = user.agentId;
+			const requestPayment = paymentContextFor(user);
+			const requestAccessKey = user.accessKey, requestPriceOwnerKey = requestPayment.priceOwner.accessKey;
 			const taskIds: string[] = [];
-			const effModes = applyAgentFeatureGate(user.agentId, user.features)?.modes; // 模式门禁（第130轮）：整批同一用户，算一次
+			const effModes = paymentFeaturesFor(user)?.modes; // 模式门禁（第130轮）：整批同一用户，算一次
 			for (const t of body.tasks) {
 				// 已受理项保留原计费快照；迁移后的未受理项失败，避免继续使用旧归属的整批门禁。
-				if (user.agentId !== requestAgentId) {
-					taskIds.push(createCompletedTask("text", "failed", undefined, "账号归属已变更，请刷新模型列表后重试", t.clientTaskId).taskId);
+				if (user.accessKey !== requestAccessKey || requestPayment.priceOwner.accessKey !== requestPriceOwnerKey || user.agentId !== requestAgentId || paymentContextFor(user).key !== requestPayment.key) {
+					taskIds.push(createCompletedTask("text", "failed", undefined, "积分来源或账号归属已变更，请刷新模型列表后重试", t.clientTaskId).taskId);
 					continue;
 				}
 				// 逐任务校验：模型未开放/模式已禁/任一侧额度不足 → 记一条 failed 任务、跳过下单
 				const tmd = publicModelDef(t.model);
-				const routeError = prepareRoutingRequest(t, user.agentId, effModes);
+				const routeError = prepareRoutingRequest(t, requestPayment.priceOwner.agentId, effModes);
 				if (routeError) { taskIds.push(createCompletedTask("video", "failed", undefined, routeError, t.clientTaskId).taskId); continue; }
-				if (tmd && !modelAllowedForAgent(tmd, user.agentId)) {
+				if (tmd && !modelAllowedForAgent(tmd, requestPayment.priceOwner.agentId)) {
 					taskIds.push(createCompletedTask("text", "failed", undefined, `模型「${tmd.label}」未对当前账号开放`, t.clientTaskId).taskId);
 					continue;
 				}
@@ -1133,9 +1241,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 					}
 				}
 				// 参考视频按秒计费（第140轮，与 /v1/generate 同尺）：读不出时长 → 记 failed 任务、跳过下单
-				const rb = await refVideoBillingParams(tmd, t.params as Record<string, unknown> | undefined, t.inputs);
-				if (user.agentId !== requestAgentId) {
-					taskIds.push(createCompletedTask("text", "failed", undefined, "账号归属已变更，请刷新模型列表后重试", t.clientTaskId).taskId);
+				const rb = await refVideoBillingParams(tmd, routingBillingParams(t), t.inputs);
+				if (user.accessKey !== requestAccessKey || requestPayment.priceOwner.accessKey !== requestPriceOwnerKey || user.agentId !== requestAgentId || paymentContextFor(user).key !== requestPayment.key) {
+					taskIds.push(createCompletedTask("text", "failed", undefined, "积分来源或账号归属已变更，请刷新模型列表后重试", t.clientTaskId).taskId);
 					continue;
 				}
 				if (rb.error) {
@@ -1147,7 +1255,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 					taskIds.push(createCompletedTask("text", "failed", undefined, plan.reject, t.clientTaskId).taskId);
 					continue;
 				}
-				const log = startLog({ req: t, userId: req.user?.id, userName: req.user?.name, cost: plan.cost, payerId: plan.payer.id !== user.id ? plan.payer.id : undefined, ownerId: user.agentId, headers: req.headers });
+				const log = startLog({ req: t, userId: req.user?.id, userName: req.user?.name, cost: plan.cost, agentCosts: plan.agents, payerId: plan.payer.id !== user.id ? plan.payer.id : undefined, ownerId: user.agentId, userWallet: plan.wallet, creditSource: plan.source, pricingAgentId: plan.priceOwner.agentId, teamId: plan.team?.id, headers: req.headers });
 				// 预扣（第183轮，与 /v1/generate 同尺）：批量里前一条扣完余额，后一条这里才会真被拦下
 				const billed = chargeBilling(user, plan, log.id);
 				if (!billed.ok) {
@@ -1155,11 +1263,11 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 					taskIds.push(createCompletedTask("text", "failed", undefined, billed.error, t.clientTaskId).taskId);
 					continue;
 				}
-				const r = await runWithAssetOwner({ userId: user.id, agentId: user.agentId }, () => dispatchGenerate(t, log.id, req.agentNode?.id ?? req.user?.agentId, applyAgentFeatureGate(req.agentNode?.id ?? req.user?.agentId, req.user?.features)?.modes));
+				const r = await runWithAssetOwner({ userId: user.id, agentId: user.agentId }, () => dispatchGenerate(t, log.id, plan.priceOwner.agentId, paymentFeaturesFor(user)?.modes));
 				if (r.kind === "sync" && r.status === "failed") {
 					reverse(billed.charged, "refund", log.id);
 				} else if (r.kind === "async") {
-					setTaskBilling(r.taskId, user.id, billed.charged.userAmount, billed.charged.agents, plan.payer.id);
+					setTaskBilling(r.taskId, user.id, billed.charged.userAmount, billed.charged.agents, plan.payer.id, billed.charged.userWallet);
 				}
 				if (r.kind === "async") taskIds.push(r.taskId);
 				else taskIds.push(createCompletedTask("text", r.status, r.result, r.error, t.clientTaskId).taskId);
@@ -1167,6 +1275,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			_batchSeq += 1;
 			const batchId = `b${String(_batchSeq).padStart(6, "0")}`;
 			batches.set(batchId, taskIds);
+			for (const id of taskIds) setTaskOwner(id, user.id);
 			return { batchId, taskIds };
 		});
 
@@ -1175,10 +1284,13 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			const { batchId } = req.params as { batchId: string };
 			const taskIds = batches.get(batchId);
 			if (!taskIds) return reply.code(404).send({ error: { message: "批次不存在" } });
+			const caller = req.agentNode ? nodeUserTrace(req) : req.user!.id;
+			if (taskIds.some(id => taskOwner(id) && taskOwner(id) !== caller)) return reply.code(404).send({ error: { message: '批次不存在' } });
 			const baseUrl = baseUrlOf(req);
 			const states = taskIds
 				.map((id) => getTaskState(id))
 				.filter((s): s is TaskState => !!s)
+				.map(s => req.agentNode ? { ...s, result: nodeRetailResult(s.taskId, req.agentNode.id, s.result)?.result ?? s.result } : s)
 				.map((s) => fillAssetUrls(s, baseUrl));
 			const summary = {
 				total: states.length,
@@ -1193,6 +1305,34 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 				summary,
 			};
 			return out;
+		});
+
+		// 素材库预处理：只创建/查询素材，不创建生成任务、不预扣积分。
+		api.post("/v1/materials/prepare", async (req, reply) => {
+			if (isRelay()) return relayProxy(req, reply, { body: req.body ?? {} });
+			const body = (req.body ?? {}) as { model?: unknown; asset?: AssetRef; retry?: unknown; action?: unknown };
+			if (typeof body.model !== "string" || !body.model || !body.asset || typeof body.asset !== "object" || Array.isArray(body.asset)) {
+				return reply.code(400).send({ error: { message: "缺少模型或素材" } });
+			}
+			const asset = body.asset;
+			if ((asset.id !== undefined && typeof asset.id !== "string") || (asset.url !== undefined && typeof asset.url !== "string") || (!asset.id && !asset.url)) {
+				return reply.code(400).send({ error: { message: "素材引用无效" } });
+			}
+			if (asset.officialAssetType !== undefined && !['Image', 'Video', 'Audio'].includes(asset.officialAssetType)) return reply.code(400).send({ error: { message: "官方素材类型无效" } });
+			const agentId = req.agentNode?.id ?? (req.user ? paymentContextFor(req.user).priceOwner.agentId : undefined);
+			const features = req.user ? paymentFeaturesFor(req.user) : applyAgentFeatureGate(agentId);
+			const allowed = buildCatalog(agentId).models.some((m) => m.id === body.model);
+			const model = body.model.startsWith('route:') ? resolveLinePreparationModel(body.model, agentId, features?.modes) : publicModelDef(body.model);
+			if (!allowed || !model || !modelAllowedForAgent(model, agentId) || features?.modes?.[body.model] === false || (!body.model.startsWith('route:') && model.modeId && features?.modes?.[model.modeId] === false)) {
+				return reply.code(403).send({ error: { message: "当前模型未对账号开放" } });
+			}
+			const owner = req.agentNode ? { userId: nodeUserTrace(req), agentId: req.agentNode.id } : { userId: req.user!.id, agentId: req.user?.agentId };
+			try {
+				const state = await runWithAssetOwner(owner, () => body.action === 'inspect' ? inspectOfficialMaterial(asset, model, resolveUpstream(model)) : prepareOfficialMaterial(asset, model, resolveUpstream(model), { retry: body.action === 'upload' || body.retry === true }));
+				return { ...state, error: state.error ? scrubChannelInfo(state.error) : undefined };
+			} catch (error) {
+				return reply.code(400).send({ error: { message: scrubChannelInfo((error as Error).message) } });
+			}
 		});
 
 		// ── 素材直传 OSS（第170轮）：预签名两段式——国内用户字节直传国内桶，绕开跨境服务器中转 ──
@@ -1329,29 +1469,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 		});
 
 		// 扩容卡核销：个人卡→本人配额；团队卡→须为团长，落到团队共享库配额
-		api.post("/v1/storage-codes/redeem", async (req, reply) => {
-			// P3 relay 边界：扩容卡是源站/门户签发体系，节点 v1 暂不支持（收藏配额=默认档）
-			if (isRelay()) return reply.code(400).send({ error: { message: "渠道节点暂不支持扩容卡，请联系你的服务商" } });
-			const u = req.user!;
-			const { code } = (req.body ?? {}) as { code?: string };
-			if (!code) return reply.code(400).send({ error: { message: "缺少扩容卡号" } });
-			const card = getStorageCode(code.trim());
-			if (!card) return reply.code(404).send({ error: { message: "扩容卡不存在" } });
-			let owner: { type: "user" | "team"; id: string };
-			if (card.target === "team") {
-				const team = teamOfUser(u.id);
-				if (!team) return reply.code(400).send({ error: { message: "你还没有团队，团队扩容卡需由团长使用" } });
-				if (team.leaderId !== u.id) return reply.code(403).send({ error: { message: "只有团长可以使用团队扩容卡" } });
-				owner = { type: "team", id: team.id };
-			} else {
-				owner = { type: "user", id: u.id };
-			}
-			const r = useStorageCode(code.trim(), owner);
-			if (!r.ok) return reply.code(400).send({ error: { message: r.error } });
-			// ⚠ 用卡上冻结的规格授予（不是核销时的管理端档位）——事后调档不该改变用户已买到手的东西
-			const g = grantQuota(owner.type, owner.id, r.card.bytes, r.card.days, r.card.code);
-			return { ok: true, granted: g, quota: owner.type === "user" ? userFavQuota(u) : undefined };
-		});
+		api.post("/v1/storage-codes/redeem", async (_req, reply) => reply.code(410).send({error:{message:'扩容卡已取消'}}));
 
 		// 转存兜底：客户端拿到「上游直链」（服务端受理时转存失败，meta.rehosted=false）时，
 		// 请求管理端把该 url 下载并转存到 OSS，返回永久公网直链 + 全局资产 id。
@@ -1469,7 +1587,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			if (!log || log.userId !== req.user!.id) return reply.code(404).send({ error: { message: "记录不存在" } });
 			// 只返回 ①（客户端→服务端：requestHeaders+request）②（服务端→客户端：response）；③④上游报文不下发；
 			// agentCosts（归属链各级结算价）与 ownerId（归属渠道商内部 id）对用户保密，一并剥除
-			const { upstreamRequest, upstreamResponse, routing, agentCosts, ownerId, ...safe } = log as LogEntry & Record<string, unknown>;
+			const { upstreamRequest, upstreamResponse, routing, agentCosts, ownerId, userWallet, pricingAgentId, ...safe } = log as LogEntry & Record<string, unknown>;
 			return { ...safe, modelLabel:routeLogLabel(log, 'user'), purposeLabel: log.purpose ? PURPOSE_LABELS[log.purpose] || log.purpose : "" };
 		});
 
@@ -1601,7 +1719,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			return {
 				id: u.id, name: u.name || u.account || "（未注册）", account: u.account, credits: u.credits,
 				dailySpent: dailySpentToday(u), totalSpent: u.totalSpent || 0, lastSeenAt: u.lastSeenAt, enabled: u.enabled,
-				granted, reclaimable: Math.min(granted, u.credits || 0),
+				granted, teamCredits:granted, personalCredits:u.credits, reclaimable:Math.max(0,granted), paymentSource:teamId ? teamPaymentSource(teamOfUser(u.id)!,u.id) : 'personal',
 			};
 		};
 
@@ -1626,6 +1744,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			const role: "leader" | "member" = team.leaderId === u.id ? "leader" : "member";
 			const base = {
 				id: team.id, name: team.name, role, creditMode: team.creditMode,
+				personalCredits:u.credits, teamCredits:sessionTeamView(u).team?.teamCredits??0, paymentSource:teamPaymentSource(team,u.id),
 				leaderName: leader ? (leader.name || leader.account) : "（已删）",
 				memberCount: team.memberIds.length + 1,
 				memberLimit: effectiveTeamLimit(team),
@@ -1760,15 +1879,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 			if (!userId || !team.memberIds.includes(userId)) return reply.code(400).send({ error: { message: "该用户不在团队中" } });
 			const n = Math.floor(Number(delta) || 0);
 			if (!n) return reply.code(400).send({ error: { message: "金额需为非零整数（正=分发，负=收回）" } });
-			if (n < 0) {
-				const cap = Math.min(grantedOf(team.id, userId), getUser(userId)?.credits ?? 0);
-				if (-n > cap) {
-					return reply.code(400).send({ error: { message: `只能收回你分发的余量（当前可收回 ${cap}）——团员自有积分不可收缴` } });
-				}
-			}
-			const r = n > 0 ? transferCredits(u.id, userId, n) : transferCredits(userId, u.id, -n);
-			if (!r.ok) return reply.code(400).send({ error: { message: (n > 0 ? "分发失败：" : "收回失败：对方") + r.error } });
-			bumpGranted(team.id, userId, n);
+			const r = allocateTeamCredits(team.id,userId,n);
+			if (!r.ok) return reply.code(400).send({error:{message:r.error}});
 			return { ok: true, leaderCredits: getUser(u.id)?.credits ?? 0, member: teamMemberView(userId, team.id) };
 		});
 

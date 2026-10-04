@@ -1,3 +1,4 @@
+import { useDualModeFeature } from '@/store/connectionStore';
 import { useNavigate } from "react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useProjectStore } from "@/store/projectStore";
@@ -96,7 +97,9 @@ const Frame164 = () => {
     const [modelSel, setModelSel] = useState<{ text?: string; image?: string; video?: string }>({});
     const [episodeTplId, setEpisodeTplId] = useState(QUICK_NN_ID); // 剧集拆分方式（默认 快速·n-n，第121轮用户定）
     const [assetTplId, setAssetTplId] = useState("");              // 资产拆分模板；""=跟随管理端默认款（isDefault）
-    const [sameSource, setSameSource] = useState(false);           // 图视同源
+    const [sameSourceChoice, setSameSource] = useState(false);
+    const dualModeEnabled = useDualModeFeature();
+    const sameSource = !dualModeEnabled || sameSourceChoice;           // 图视同源
     const [inferTplId, setInferTplId] = useState("");              // 多卡推理模板（storyboard.toVideoPrompt）
     const [unifiedTplId, setUnifiedTplId] = useState("");          // 同源多卡模板（storyboard.unified）
 
@@ -474,7 +477,7 @@ const Frame164 = () => {
                                                 <p className="qiji-field-hint" style={{ ...hintStyle, marginTop: 0 }}>{`资产拆分模板名称指定比例 ${assetTplAspect}——资产出图将按 ${assetTplAspect}（其余步骤不受影响）。`}</p>
                                             )}
                                             <label className="qiji-check-label" style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12 }} title="开启后：故事板与视频共用同一段「同源提示词」，推理走同源模板">
-                                                <input type="checkbox" checked={sameSource} onChange={(e) => setSameSource(e.target.checked)} />
+                                                <input type="checkbox" checked={sameSource} disabled={!dualModeEnabled} onChange={(e) => setSameSource(e.target.checked)} />
                                                 {"图视同源（故事板与视频共用同一段提示词）"}
                                             </label>
                                             {sameSource ? (

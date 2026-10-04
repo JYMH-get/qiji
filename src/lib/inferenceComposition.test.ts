@@ -293,3 +293,23 @@ describe('输出格式承载全部输入，附件保持完整', () => {
     expect(result).toBe(`格式\n原文哨兵\n变量引导哨兵\n\n${creativeBody}`);
   });
 });
+
+
+describe('双模权限在输出校验前拦截', () => {
+  const closed = { user: { features: { dualMode: false } } };
+  it.each(['storyboard.toVideoPrompt', 'storyboard.singleShot', 'storyboard.toImagePrompt'] as const)('关闭后拒绝旧客户端用途 %s 和提示词覆盖', purpose => {
+    expect(inferenceRequestErrorForCaller(request({ purpose, inference: undefined, promptOverride: '旧客户端正文' }), closed)).toContain('双模已关闭');
+  });
+  it('仅拆分缺省双模被拒绝，显式同源可用', () => {
+    expect(inferenceRequestErrorForCaller(request({ purpose: 'storyboard.split', templateId: splitTemplate.id, inference: undefined }), closed)).toContain('双模已关闭');
+    expect(inferenceRequestErrorForCaller(request({ purpose: 'storyboard.split', templateId: splitTemplate.id, inference: { source: 'template', outputMode: 'unified' } }), closed)).toBeUndefined();
+  });
+  it.each(['storyboard.unified', 'storyboard.unifiedShot'] as const)('关闭后允许 %s，矛盾双模字段不能绕过', purpose => {
+    expect(inferenceRequestErrorForCaller(request({ purpose }), closed)).toBeUndefined();
+    expect(inferenceRequestErrorForCaller(request({ purpose, inference: { source: 'template', outputMode: 'storyboard' } }), closed)).toContain('双模已关闭');
+  });
+  it('缺省和显式开启兼容双模', () => {
+    expect(inferenceRequestErrorForCaller(request(), { user: {} })).toBeUndefined();
+    expect(inferenceRequestErrorForCaller(request(), { user: { features: { dualMode: true } } })).toBeUndefined();
+  });
+});

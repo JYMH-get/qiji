@@ -32,11 +32,16 @@ export function normalizeTextUsage(raw: any, protocol: 'openai' | 'anthropic' = 
   const cached = protocol === 'anthropic' ? raw.cache_read_input_tokens : raw.prompt_tokens_details?.cached_tokens ?? raw.prompt_cache_hit_tokens;
   const cacheWrite = protocol === 'anthropic' ? raw.cache_creation_input_tokens : undefined;
   let input = protocol === 'anthropic' ? raw.input_tokens : raw.prompt_tokens;
-  const output = protocol === 'anthropic' ? raw.output_tokens : raw.completion_tokens;
+  let output = protocol === 'anthropic' ? raw.output_tokens : raw.completion_tokens;
   if (!count(input) || !count(output) || (cached != null && !count(cached)) || (cacheWrite != null && !count(cacheWrite))) return undefined;
   if (protocol === 'anthropic') input += (cached ?? 0) + (cacheWrite ?? 0);
   if (!count(input) || !count(input + output) || (cached ?? 0) > input) return undefined;
   const reasoning = raw.completion_tokens_details?.reasoning_tokens;
+  // Some gateways report visible completion separately. Only an exact upstream
+  // total proves that reasoning is additional; inclusive formats stay unchanged.
+  if (protocol === 'openai' && count(reasoning) && reasoning > 0 && count(raw.total_tokens)
+    && raw.total_tokens === input + output + reasoning) output += reasoning;
+  if (!count(output) || !count(input + output)) return undefined;
   if (reasoning != null && (!count(reasoning) || reasoning > output)) return undefined;
   return { source: 'upstream', inputTokens: input, outputTokens: output, totalTokens: input + output,
     ...(cached != null ? { cachedInputTokens: cached } : {}), ...(cacheWrite != null ? { cacheWriteTokens: cacheWrite } : {}),

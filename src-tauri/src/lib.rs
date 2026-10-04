@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
+mod accessibility;
+mod diagnostics;
 
 /// 本地资产 HTTP 服务状态：仅服务"显式登记过"的 id→本地文件（安全，无路径穿越）。
 #[derive(Clone)]
@@ -523,6 +525,26 @@ async fn nyxen_accelerate_upload(source_url: String, kind: String) -> Result<Str
         .filter(|value| value.starts_with("https://") || value.starts_with("http://"))
         .ok_or_else(|| "加速桶响应缺少有效 URL".to_string())?;
     Ok(url)
+}
+
+#[tauri::command]
+async fn nyxen_acceleration_valid(url: String) -> Result<bool, String> {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Ok(false);
+    }
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(20))
+        .build().map_err(|e| format!("初始化素材检查失败：{e}"))?;
+    let mut response = client.head(&url).send().await.map_err(|e| format!("检查加速链接失败：{e}"))?;
+    if response.status().as_u16() == 405 {
+        response = client.get(&url).header(reqwest::header::RANGE, "bytes=0-0")
+            .send().await.map_err(|e| format!("检查加速链接失败：{e}"))?;
+    }
+    if response.status().is_server_error() { return Err("加速桶暂时不可用，请稍后重试".into()); }
+    let html = response.headers().get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok()).is_some_and(|v| v.starts_with("text/html"));
+    Ok(response.status().is_success() && !html)
 }
 
 // ── ComfyUI 直连（第三方本地渠道）：webview 受 CORS 约束（ComfyUI 默认不带 CORS 头），
@@ -1054,13 +1076,37 @@ fn jianying_write_draft_file(draft_path: String, file_name: String, content: Str
 // （第218轮：硬件指纹 get_hw_fingerprint 整体退役——身份=API 密钥，设备区分=前端随机 UUID，
 //  不再采集任何硬件信息。）
 
+static CLIENT_UPDATE_INSTALLING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[tauri::command]
+fn set_client_update_installing(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    if enabled && app.webview_windows().len() != 1 {
+        return Err("请先保存并关闭其他 Qiji 窗口，再安装更新".into());
+    }
+    CLIENT_UPDATE_INSTALLING.store(enabled, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let mut context = tauri::generate_context!();
+    // Tauri creates configured windows before Builder::setup. Defer those
+    // windows until the application-local preference has been read and frozen.
+    let startup_windows: Vec<_> = context.config().app.windows.iter()
+        .filter(|window| window.create).cloned().collect();
+    for window in &mut context.config_mut().app.windows {
+        window.create = false;
+    }
     tauri::Builder::default()
         // 单实例（第205轮多窗口协同）：二次启动同一 exe（用户的「多开」）不再另起独立进程——
         // 独立进程各持项目内存态、整文件互相覆盖丢数据；改为在本进程新开一个完整应用窗口，
         // 窗口间经 Tauri 事件系统实时同步（见 src/services/projectSync.ts）。须注册在最前。
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if CLIENT_UPDATE_INSTALLING.load(std::sync::atomic::Ordering::SeqCst) { return; }
+            let browser_args = match accessibility::active_browser_args(app) {
+                Ok(arguments) => arguments,
+                Err(error) => { log::error!("{error}"); return; }
+            };
             let label = format!(
                 "main-{}",
                 std::time::SystemTime::now()
@@ -1077,13 +1123,20 @@ pub fn run() {
             .inner_size(1024.0, 768.0)
             .decorations(false)
             .disable_drag_drop_handler()
-            .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --enable-features=WebGPU")
+            .additional_browser_args(&browser_args)
             .build();
         }))
+        .plugin(accessibility::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(diagnostics::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_drag::init())
-        .setup(|app| {
+        .setup(move |app| {
+            #[cfg(desktop)]
+            {
+                app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+                app.handle().plugin(tauri_plugin_process::init())?;
+            }
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -1095,6 +1148,14 @@ pub fn run() {
             let files: Arc<Mutex<HashMap<String, PathBuf>>> = Arc::new(Mutex::new(HashMap::new()));
             let base = start_asset_server(files.clone());
             app.manage(AssetServer { base, files });
+
+            let browser_args = accessibility::active_browser_args(app.handle())
+                .map_err(std::io::Error::other)?;
+            for window_config in startup_windows {
+                tauri::WebviewWindowBuilder::from_config(app.handle(), &window_config)?
+                    .additional_browser_args(&browser_args)
+                    .build()?;
+            }
 
             // 生产版禁用开发者工具：在 WebView2 层关掉 devtools + 浏览器加速键（F12/Ctrl+R 刷新/Ctrl+P 打印等）。
             // 只在 release 生效——dev/debug 版保留 F12 供开发调试。
@@ -1120,6 +1181,12 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            accessibility::get_accessibility_settings,
+            accessibility::set_accessibility_settings,
+            accessibility::get_accessibility_browser_args,
+            diagnostics::record_client_diagnostic,
+            diagnostics::export_client_diagnostics,
+            set_client_update_installing,
             asset_http_base,
             register_asset,
             extract_video_frame,
@@ -1129,6 +1196,7 @@ pub fn run() {
             download_url,
             download_to,
             nyxen_accelerate_upload,
+            nyxen_acceleration_valid,
             comfy_http_json,
             comfy_upload_file,
             run_libtv,
@@ -1140,6 +1208,6 @@ pub fn run() {
             jianying_copy_assets,
             jianying_write_draft_file
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }

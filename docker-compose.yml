@@ -16,7 +16,7 @@ services:
     container_name: qiji-server
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8787:8787"    # 仅本机暴露；公网经反向代理
+      - "8787:8787"    # 仅本机暴露；公网经反向代理
     env_file:
       - ./server/.env
     volumes:

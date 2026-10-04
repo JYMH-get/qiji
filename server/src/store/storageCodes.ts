@@ -10,7 +10,6 @@
  *   管理端事后调档不应改变用户已经买到手的东西。
  */
 import { loadJson, saveJson } from "./db.ts";
-import { randomBytes } from "node:crypto";
 
 export interface StorageCode {
 	code: string; // sc-xxxxxxxxxxxxxxxx
@@ -54,45 +53,20 @@ export function getStorageCode(code: string): StorageCode | undefined {
 
 /** 批量签发（上限 200/次，与团队码同尺）。规格由调用方从 settings 现取并冻结进卡里 */
 export function createStorageCodes(
-	count: number,
-	target: "user" | "team",
-	spec: { bytes: number; days: number },
-	opts?: { note?: string; agentId?: string },
+	_count: number,
+	_target: "user" | "team",
+	_spec: { bytes: number; days: number },
+	_opts?: { note?: string; agentId?: string },
 ): StorageCode[] {
-	const n = Math.max(1, Math.min(200, Math.floor(count) || 1));
-	const now = new Date().toISOString();
-	const made: StorageCode[] = [];
-	for (let i = 0; i < n; i++) {
-		made.push({
-			code: "sc-" + randomBytes(8).toString("hex"),
-			target,
-			bytes: spec.bytes,
-			days: spec.days,
-			note: opts?.note?.trim() || undefined,
-			agentId: opts?.agentId,
-			createdAt: now,
-		});
-	}
-	db.codes.push(...made);
-	persist();
-	return made;
+	throw new Error("扩容卡功能已取消");
 }
 
 /**
  * 核销。调用方须先确认 owner 有资格（个人卡=本人；团队卡=团长）。
  * 幂等性：已核销的卡再次核销明确报错（不重复授予额度）。
  */
-export function useStorageCode(code: string, owner: { type: "user" | "team"; id: string }): { ok: true; card: StorageCode } | { ok: false; error: string } {
-	const c = db.codes.find((x) => x.code === code.trim());
-	if (!c) return { ok: false, error: "扩容卡不存在" };
-	if (c.usedBy) return { ok: false, error: "该扩容卡已被使用" };
-	if (c.target !== owner.type) {
-		return { ok: false, error: c.target === "team" ? "这是团队扩容卡，请由团长在团队页使用" : "这是个人扩容卡，不能用于团队" };
-	}
-	c.usedBy = owner;
-	c.usedAt = new Date().toISOString();
-	persist();
-	return { ok: true, card: c };
+export function useStorageCode(_code: string, _owner: { type: "user" | "team"; id: string }): { ok: true; card: StorageCode } | { ok: false; error: string } {
+	return { ok: false, error: "扩容卡功能已取消" };
 }
 
 /** 作废：未核销的可删（无退回，与激活码同规则）；已核销的留档不可删 */

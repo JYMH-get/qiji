@@ -20,6 +20,7 @@
  *  uiSnapshot（每窗口自己的停留页）、recentProjects/isDirty/isSaving 等窗口本地态。 */
 export const SHARED_PROJECT_FIELDS = [
 	"name",
+	"cloudBackupId",
 	"scriptText",
 	"visualStyle",
 	"visualStyleId",
@@ -141,6 +142,13 @@ export interface CanvasMsg extends SyncMsgBase {
 	runtime: Record<string, unknown>;
 }
 
+/** Ephemeral per-node updates; never replace canvas structure or schedule a save. */
+export interface RuntimeMsg extends SyncMsgBase {
+	type: "runtime";
+	canvasKey: string;
+	runtime: Record<string, unknown | null>;
+}
+
 /** 项目媒体库（libraryStore.assets）镜像 */
 export interface LibraryMsg extends SyncMsgBase { type: "library"; assets: Record<string, unknown> }
 
@@ -156,9 +164,9 @@ export interface FullMsg extends SyncMsgBase {
 }
 
 /** 非写者窗口的手动保存请求：转给写者落盘 */
-export interface SaveRequestMsg extends SyncMsgBase { type: "save-request" }
+export interface SaveRequestMsg extends SyncMsgBase { type: "save-request"; createHistory?: boolean }
 
-export type SyncMsg = HelloMsg | FieldsMsg | CanvasMsg | LibraryMsg | FullMsg | SaveRequestMsg;
+export type SyncMsg = HelloMsg | FieldsMsg | CanvasMsg | RuntimeMsg | LibraryMsg | FullMsg | SaveRequestMsg;
 
 /** 消息是否与本窗口的当前项目相关（projectPath 空=项目未落盘，不参与跨窗口同步） */
 export function msgMatchesProject(msg: SyncMsgBase, myProjectPath: string | null): boolean {

@@ -10,6 +10,8 @@ type ProgressCallback = (
 ) => void;
 
 export interface NyxenAccelerationDeps {
+	prepareAsset?: (asset: AssetRef, kind: NyxenMaterialKind) => Promise<string>;
+	cachedAsset?: (asset: AssetRef, kind: NyxenMaterialKind) => string | undefined;
 	resolveAssetUrl: (assetId: string) => Promise<string>;
 	upload: (sourceUrl: string, kind: NyxenMaterialKind) => Promise<string>;
 	onProgress?: ProgressCallback;
@@ -36,8 +38,9 @@ const KIND_LABEL: Record<NyxenMaterialKind, string> = {
 
 const isHttpUrl = (value: string): boolean => /^https?:\/\//i.test(value);
 
-/** 生产数据里稳定模式的 id 可调整；客户端以 catalog 下发的显示名为准。 */
+/** 当前目录按线路首模型声明协议；无协议字段的旧服务端保留历史模式兼容。 */
 export function shouldUseNyxenAcceleration(model: CatalogModel, catalog: Catalog | null): boolean {
+	if (model.materialPolicy) return model.capability === "video" && model.materialPolicy.kind === "nyxen";
 	if (model.capability !== "video" || !model.modeId) return false;
 	return catalog?.modes?.find((mode) => mode.id === model.modeId)?.name.trim() === "稳定";
 }
@@ -117,6 +120,23 @@ export async function accelerateNyxenRequest(
 	const next = clonedRequest(req);
 	const candidates = candidatesOf(next);
 	if (!candidates.length) return next;
+	if (deps.prepareAsset) {
+		let completed = 0;
+		await Promise.all(candidates.map(async (candidate, index) => {
+			const asset = candidate.ref ?? { url: candidate.directUrl };
+			const cached = deps.cachedAsset?.(asset, candidate.kind);
+			if (cached) { candidate.setAccelerationUrl(cached); return; }
+			deps.onProgress?.(10, 'running', undefined, { stageText: '正在等待素材加速准备完成' });
+			try {
+				const url = await deps.prepareAsset!(asset, candidate.kind);
+				if (!isHttpUrl(url)) throw new Error('加速桶未返回有效地址');
+				candidate.setAccelerationUrl(url);
+				completed++;
+				deps.onProgress?.(10 + Math.floor(completed / candidates.length * 25), 'running', undefined, { stageText: `素材准备完成 ${completed}/${candidates.length}` });
+			} catch (error) { throw new Error(`第${index + 1}个素材加速失败：${error instanceof Error ? error.message : String(error)}`); }
+		}));
+		return next;
+	}
 
 	const sourceByCandidate: string[] = [];
 	for (const candidate of candidates) sourceByCandidate.push(await sourceUrlOf(candidate, deps));
@@ -196,4 +216,10 @@ export async function uploadToNyxenAccelerationBucket(
 	if (!isTauri) throw new Error("稳定素材加速仅支持 Qiji 桌面客户端");
 	const { invoke } = await import("@tauri-apps/api/core");
 	return invoke<string>("nyxen_accelerate_upload", { sourceUrl, kind });
+}
+
+/** Inspect cached links natively so browser CORS cannot make valid assets look unavailable. */
+export async function verifyNyxenAccelerationUrl(url: string): Promise<boolean> {
+	const { invoke } = await import('@tauri-apps/api/core');
+	return invoke<boolean>('nyxen_acceleration_valid', { url });
 }

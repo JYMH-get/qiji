@@ -2,6 +2,9 @@
 setlocal
 cd /d "%~dp0"
 
+rem Version policy: patch = +0.0.1. Change only when a major/minor release is requested.
+set "QIJI_VERSION_INCREMENT=patch"
+
 set "PWSH=%ProgramFiles%\PowerShell\7\pwsh.exe"
 if not exist "%PWSH%" (
   echo PowerShell 7 was not found:
@@ -11,7 +14,7 @@ if not exist "%PWSH%" (
   exit /b 1
 )
 
-"%PWSH%" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\package-client.ps1" %*
+"%PWSH%" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\package-client.ps1" -VersionIncrement "%QIJI_VERSION_INCREMENT%" %*
 set "EXIT_CODE=%ERRORLEVEL%"
 
 echo.

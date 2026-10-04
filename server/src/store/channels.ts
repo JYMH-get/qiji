@@ -10,6 +10,7 @@
  *  - 模型 channelId 指向渠道；模型自身 baseUrl/apiKey 若填写则覆盖渠道（精细控制）。
  */
 import { loadJson, saveJson, genId } from "./db.ts";
+import { notifyAvailabilityConfigChange } from '../availabilityConfigEvents.ts';
 
 export interface ChannelDef {
 	id: string;
@@ -47,7 +48,6 @@ export const CH_AIVIDE = "ch-aivide";
 export const CH_JIANMENGP = "ch-jianmengp";
 export const CH_MUSEM = "ch-musem";
 export const CH_JMZ = "ch-jmz";
-export const CH_JMH = "ch-jmh";
 export const CH_YUNWU = "ch-yunwu";
 export const CH_JMT = "ch-jmt";
 export const CH_JMF = "ch-jmf";
@@ -55,6 +55,11 @@ export const CH_OVERSEAS = "ch-overseas";
 export const CH_SUANLI = "ch-suanli";
 export const CH_SKYLEE = "ch-skylee";
 export const CH_CONGGE = "ch-congge";
+// 管理端已创建的 xiha888；复用生产身份，不另补一个同名渠道。
+export const CH_XIHA888 = "ch_mu7s96848";
+export const CH_ZONGHENG = "ch-zongheng";
+export const CH_XINGGUANG = "ch-xingguang";
+export const CH_LONGYOU = "ch-longyou-v2";
 export const CH_AUTODL = "ch-autodl";
 export const CH_QIJICLOUD = "ch-qijicloud";
 export const CH_BYS = "ch-bys";
@@ -66,6 +71,10 @@ export const CH_YALI_OPENAI = "ch-yali-openai";
 export const CH_YALI_GEMINI = "ch-yali-gemini";
 
 const DEFAULT_CHANNELS: ChannelDef[] = [
+  { id: CH_ZONGHENG, name: '纵横', baseUrl: 'https://cnd-coo-new.pages.dev/v1', apiKey: '', enabled: true,
+    note: 'Bearer 鉴权；留空走 ZONGHENG_API_KEY。公开视频模型使用 zongheng-video，图片 openai-image，文本 openai-chat；模型名和价格待授权清单确认。', createdAt: '', updatedAt: '' },
+  { id: CH_XINGGUANG, name: '星光', baseUrl: 'https://xingapi.top/v1', apiKey: '', enabled: true,
+    note: 'Bearer 鉴权；留空走 XINGGUANG_API_KEY。模型按当前 Key 的 /v1/models；上线前核实价格并配置线路。', createdAt: '', updatedAt: '' },
 	{
 		id: CH_GAISC, name: "G-AISC", baseUrl: "https://sub.g-aisc.com", apiKey: "",
 		enabled: true, note: "聚合网关；密钥用环境 GATEWAY_API_KEY（渠道留空即沿用）",
@@ -122,11 +131,6 @@ const DEFAULT_CHANNELS: ChannelDef[] = [
 		createdAt: "", updatedAt: "",
 	},
 	{
-		id: CH_JMH, name: "简梦H（ZhengAPI）", baseUrl: "https://zhengapi.top", apiKey: "",
-		enabled: true, note: "简梦H 模式（jmh 系 图片6+视频9 模型）渠道；密钥填 ZhengAPI 的 sk- Key（Bearer 鉴权，留空走环境 JMH_API_KEY）；Base URL 填根域不带 /v1（翻译器自拼 /v1/images/generations、/v1/chat/completions）",
-		createdAt: "", updatedAt: "",
-	},
-	{
 		id: CH_JMF, name: "简梦F（vosle）", baseUrl: "https://new.vosle.xyz", apiKey: "",
 		enabled: true, note: "简梦F 模式（jmf933-sd2.0·Seedance 2.0）视频渠道；密钥填服务方发放的 API Key（Bearer 鉴权，留空走环境 JMF_API_KEY）；⚠ Base URL 填根域不带 /v1（翻译器自拼 /v1/videos）；模型 ID 按 比例/时长 现拼；成片下载须带同一密钥且 24h 时效（完成即转存 OSS）",
 		createdAt: "", updatedAt: "",
@@ -165,6 +169,11 @@ const DEFAULT_CHANNELS: ChannelDef[] = [
 		id: CH_CONGGE, name: "congge（聪宸）", baseUrl: "https://congchen.top", apiKey: "",
 		enabled: true, note: "congge 模式（图片 3 款 + 视频 4 款·Seedance 2.0/2.5）渠道；图片与视频**同一把 Key**（默认分组即可调全部公开模型），密钥填站点 sk-（Bearer 鉴权，留空走环境 CONGGE_API_KEY）；⚠ Base URL 填根域不带 /v1（翻译器自拼 /v1/images/generations|edits、/v1/videos）；上游视频模型名带空格且大小写敏感，由 routes 按分辨率重定向，勿手改",
 		createdAt: "", updatedAt: "",
+	},
+	{
+		id: CH_LONGYOU, name: '龙幽', baseUrl: 'https://api.hjmie.cc.cd/v1', apiKey: '', enabled: true,
+		note: 'Bearer 鉴权；填控制台令牌（留空走 LONGYOU_API_KEY）。三个 videos 模型均按秒占位价、默认未开放；开放前核实价格、时长/分辨率与参考素材条件计费。音频未验证。Base URL 可带 /v1。',
+		createdAt: '', updatedAt: '',
 	},
 	{
 		id: CH_AUTODL, name: "autodl（autodl.art）", baseUrl: "https://autodl.art", apiKey: "",
@@ -257,6 +266,7 @@ export function createChannel(
 	if (idx >= 0) store.channels[idx] = c;
 	else store.channels.push(c);
 	persist();
+	notifyAvailabilityConfigChange({resetChannelId:c.id});
 	return c;
 }
 
@@ -269,6 +279,7 @@ export function updateChannel(
 	if (patch.baseUrl !== undefined) patch.baseUrl = strip(patch.baseUrl);
 	Object.assign(c, patch, { updatedAt: new Date().toISOString() });
 	persist();
+	notifyAvailabilityConfigChange();
 	return c;
 }
 
@@ -300,6 +311,7 @@ export function deleteChannel(id: string): boolean {
 			if (!store.deletedSeedIds.includes(id)) store.deletedSeedIds.push(id);
 		}
 		persist();
+		notifyAvailabilityConfigChange({resetChannelId:id});
 		return true;
 	}
 	return false;

@@ -1,3 +1,4 @@
+import { getDualModeFeature } from '@/store/connectionStore';
 /**
  * shotMatchActions —— 实时剪辑分镜工作台的「匹配资产」（=资产模式 Frame161195「提取资产」的属性化版）。
  *
@@ -141,6 +142,6 @@ export function matchShotAssets(
 	const after = liveShot(episodeId, shotId);
 	if (!after) return null;
 	const field: ShotPromptFieldKey = draftOv?.field
-		?? (useProjectStore.getState().mediaSettings?.imgVideoSameSource ? "unifiedPrompt" : "videoPrompt");
+		?? ((!getDualModeFeature() || useProjectStore.getState().mediaSettings?.imgVideoSameSource) ? "unifiedPrompt" : "videoPrompt");
 	return { prompt: after[field] || "", added: Math.max(0, after.materials.length - beforeCount) };
 }

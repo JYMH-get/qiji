@@ -1,14 +1,9 @@
 /**
  * 渠道商（Agent）存储（文件持久化）。
  *
- * P1 经济模型翻转（2026-08-09 商业化改造，方案见 docs/商业化改造方案.md）：
- *  - **统一定价**：所有用户按源站平台价扣费，渠道商不再有 售价/结算价/签发价 任何定价维度；
- *  - **预购积分池 + 分发实扣**：渠道商从源站买积分（管理端分发 credits），给名下用户发积分
- *    （兑换码/激活码面额）时按面额从池里真实划转；用户消耗只扣用户自己，不再链式结算；
- *  - **开码积分（codeCredits）整体退役**：签发免费，旧余额随迁移清零舍弃；
- *  - **多级渠道商链拍平**：parentAgentId 退役，所有渠道商平级、统一由源站管理。
- *  旧字段（modelPricing、costPricing、codePricing、codeSalePricing、defaultSub 两表、
- *  codeCredits、parentAgentId）由启动迁移剥离（先备份 agents.json 留档）。
+ * 渠道商分组定价（2026-09）：源站统一设置进货价与用户售价的相对偏移。
+ * 发兑换码不扣积分；生成前通过 settle 同步扣用户售价与渠道商成本，失败按实扣快照退款。
+ * 所有渠道商平级。旧 P1 字段仍按既有迁移剥离；新线路价格单独保存在 agent-line-prices.json。
  *
  * 与用户端 accessKey / 管理端 ADMIN_TOKEN 并列的第三套鉴权：账号+密码登录换取内存会话 token。
  */
@@ -16,7 +11,9 @@ import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { copyFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadJson, saveJson, genId, DATA_DIR } from "./db.ts";
-import { genInviteCode } from "./users.ts";
+import { genInviteCode, getUserByInviteCode } from "./users.ts";
+import { getSourceInviteCode } from './settings.ts';
+import { agentLineGates, removeAgentLineSettings } from './agentLinePrices.ts';
 
 /**
  * 「源站」虚拟受众 id：平台直属用户（User.agentId 为空）在 模板/模型 开放控制里作为
@@ -32,7 +29,7 @@ export const audienceOf = (agentId?: string): string => agentId || PLATFORM_AUDI
 // 分组 = 受众（渠道商 + 源站）的管理维度：模型「开放范围」按分组勾选（后期商多了好管理）。
 // **源站也是一个受众**，与渠道商一样归属某个分组（缺省=默认分组）。
 // 有且至少有「默认分组」（不可删除；删除其它分组时成员回落于此）。
-// P1 起分组不再承载定价（原分组默认结算价随统一定价退役）。
+// 分组两层价格偏移保存在 agent-group-prices.json；未设置时沿用源站基准价。
 
 export interface AgentGroup {
 	id: string;
@@ -152,6 +149,8 @@ export function setPlatformGroup(groupId: string | null): { ok: boolean; error?:
  */
 export interface AgentFeatures {
 	/** 表格视频区与视频生成入口；表格资产/故事板生图始终可用。 */
+	/** 双模推理：关闭后只能使用同源 */
+	dualMode?: boolean;
 	assetMode?: boolean;
 	canvasMode?: boolean;
 	editorMode?: boolean;
@@ -211,6 +210,12 @@ export interface Agent {
 	/** 渠道商邀请码（P2b，替代激活码获客）：`A` 前缀 7 位；用户注册时填它 → 归属本商名下。
 	 *  创建即生成；存量商由启动补齐。 */
 	inviteCode?: string;
+	email?: string;
+	emailVerifiedAt?: string;
+	redeemCodePrefix?: string;
+	balanceWarningEnabled?: boolean;
+	balanceWarningThreshold?: number;
+	registrationGiftCredits?: number;
 	/** 渠道节点密钥（P3 独立部署）：`ank-` 前缀；渠道商自部署的 relay 节点凭它走源站 /v1 协议，
 	 *  计费落本商积分池。按需生成（管理端/门户按钮），未部署节点的商没有。重置=旧密钥立即失效。 */
 	nodeKey?: string;
@@ -422,6 +427,7 @@ export function updateAgent(id: string, patch: {
 		const f = patch.features ?? {};
 		// 表格生图入口始终保留，视频/画布/实时剪辑可以各自独立关闭。
 		a.features = {
+			dualMode: f.dualMode !== false,
 			assetMode: f.assetMode !== false,
 			canvasMode: f.canvasMode !== false,
 			editorMode: f.editorMode !== false,
@@ -442,6 +448,7 @@ export function updateAgent(id: string, patch: {
 }
 
 export function deleteAgent(id: string): boolean {
+	removeAgentLineSettings(id);
 	const before = agents.length;
 	agents = agents.filter((a) => a.id !== id);
 	if (agents.length !== before) {
@@ -531,9 +538,9 @@ export function applyAgentFeatureGate(agentId: string | undefined, userFeatures?
 	const on = (v?: boolean) => v !== false; // 缺省=开
 	let features = userFeatures;
 	for (const agent of agentChain(agentId)) {
-		const af = agent.features;
-		if (!af) continue;
+		const af = { ...agent.features, modes: agentLineGates(agent.id, agent.features?.modes) };
 		const merged: AgentFeatures = {
+			dualMode: on(af.dualMode) && on(features?.dualMode),
 			assetMode: on(af.assetMode) && on(features?.assetMode),
 			canvasMode: on(af.canvasMode) && on(features?.canvasMode),
 			editorMode: on(af.editorMode) && on(features?.editorMode),
@@ -586,18 +593,18 @@ export function verifyAgentLogin(account: string, password: string): { ok: boole
 }
 
 // ── 门户会话（内存态，进程重启后需重新登录；发出的码/用户已持久化不受影响）──
-const sessions = new Map<string, string>(); // token → agentId
+const sessions = new Map<string, { agentId: string; readOnly: boolean }>();
 
-export function createAgentSession(agentId: string): string {
+export function createAgentSession(agentId: string, options: { readOnly?: boolean } = {}): string {
 	const token = "as-" + randomBytes(24).toString("hex");
-	sessions.set(token, agentId);
+	sessions.set(token, { agentId, readOnly: options.readOnly === true });
 	return token;
 }
 
 export function agentBySession(token: string): Agent | undefined {
-	const id = sessions.get(token);
-	if (!id) return undefined;
-	const a = getAgent(id);
+	const session = sessions.get(token);
+	if (!session) return undefined;
+	const a = getAgent(session.agentId);
 	if (!a || !a.enabled) return undefined;
 	a.lastSeenAt = new Date().toISOString();
 	return a;
@@ -605,4 +612,76 @@ export function agentBySession(token: string): Agent | undefined {
 
 export function dropAgentSession(token: string): void {
 	sessions.delete(token);
+}
+
+export function agentSessionReadOnly(token: string): boolean {
+	return sessions.get(token)?.readOnly === true;
+}
+
+/** Validate every field before updating the shared object. Account/password changes invalidate other sessions. */
+export function updateAgentPortalSettings(id: string, input: Record<string, unknown>): UpdateAgentResult {
+	const a = getAgent(id);
+	if (!a) return { ok: false, error: '渠道商不存在' };
+	const allowed = ['name', 'account', 'currentPassword', 'inviteCode', 'redeemCodePrefix', 'balanceWarningEnabled', 'balanceWarningThreshold', 'registrationGiftCredits'];
+	if (Object.keys(input).some(k => !allowed.includes(k))) return { ok: false, error: '不支持的设置字段' };
+	const patch: Partial<Agent> = {};
+	if (input.name !== undefined) {
+		if (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 80) return { ok: false, error: '名称需为 1–80 字符' };
+		patch.name = input.name.trim();
+	}
+	if (input.account !== undefined) {
+		if (typeof input.account !== 'string') return { ok: false, error: '账号无效' };
+		const account = normAccount(input.account);
+		if (!/^[a-z0-9_.-]{3,32}$/.test(account)) return { ok: false, error: '账号需 3–32 位字母、数字或 ._-' };
+		if (agents.some(x => x.id !== id && x.account === account)) return { ok: false, error: '该登录账号已被占用' };
+		if (account !== a.account && !verifyAgentLogin(a.account, String(input.currentPassword ?? '')).ok) return { ok: false, error: '当前密码不正确' };
+		patch.account = account;
+	}
+	if (input.inviteCode !== undefined) {
+		const code = typeof input.inviteCode === 'string' ? input.inviteCode.trim().toUpperCase() : '';
+		if (!/^[A-Z0-9_-]{4,32}$/.test(code)) return { ok: false, error: '邀请码需 4–32 位字母、数字、下划线或短横线' };
+		if (code === getSourceInviteCode().toUpperCase() || getUserByInviteCode(code) || agents.some(x => x.id !== id && x.inviteCode?.toUpperCase() === code)) return { ok: false, error: '邀请码已被占用' };
+		patch.inviteCode = code;
+	}
+	if (input.redeemCodePrefix !== undefined) {
+		const prefix = typeof input.redeemCodePrefix === 'string' ? input.redeemCodePrefix.trim().toUpperCase() : '';
+		if (!/^[A-Z0-9]{2,12}$/.test(prefix) || ['MC', 'SC', 'TC'].includes(prefix)) return { ok: false, error: '兑换码前缀需 2–12 位字母或数字，不能使用 MC、SC、TC' };
+		patch.redeemCodePrefix = prefix;
+	}
+	if (input.balanceWarningEnabled !== undefined) {
+		if (typeof input.balanceWarningEnabled !== 'boolean') return { ok: false, error: '预警开关无效' };
+		patch.balanceWarningEnabled = input.balanceWarningEnabled;
+	}
+	if (input.balanceWarningThreshold !== undefined) {
+		const value = input.balanceWarningThreshold;
+		if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1e12) return { ok: false, error: '余额预警阈值无效' };
+		patch.balanceWarningThreshold = value;
+	}
+	if (input.registrationGiftCredits !== undefined) {
+		const value = input.registrationGiftCredits;
+		if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > 1e9) return { ok: false, error: '注册赠积分需为 0–10亿的整数' };
+		patch.registrationGiftCredits = value;
+	}
+	Object.assign(a, patch, { updatedAt: new Date().toISOString() });
+	persist();
+	return { ok: true, agent: a };
+}
+
+export function bindAgentEmail(id: string, email: string): Agent | undefined {
+	const a = getAgent(id);
+	if (!a) return undefined;
+	a.email = email;
+	a.emailVerifiedAt = new Date().toISOString();
+	a.updatedAt = a.emailVerifiedAt;
+	persist();
+	return a;
+}
+
+export function changeAgentPassword(id: string, currentPassword: string, password: string, keepToken?: string): UpdateAgentResult {
+	const a = getAgent(id);
+	if (!a || !verifyAgentLogin(a.account, currentPassword).ok) return { ok: false, error: '当前密码不正确' };
+	if (password.trim().length < 6 || password.length > 200) return { ok: false, error: '密码需 6–200 位' };
+	const result = updateAgent(id, { password });
+	if (result.ok) for (const [token, session] of sessions) if (session.agentId === id && token !== keepToken) sessions.delete(token);
+	return result;
 }

@@ -1,0 +1,84 @@
+{
+  "splitKeyframe": {
+    "atAbs6sBefore": 0.6,
+    "atAbs6sAfter": 0.1
+  },
+  "trimKeyframe": {
+    "atAbs6sBefore": 0.6,
+    "atAbs6sAfter": 0.1
+  },
+  "boostedVolume": {
+    "ui": 1.8,
+    "preview": 1,
+    "exported": 1.8
+  },
+  "compoundSubtitle": {
+    "hostType": "text",
+    "videoBefore": 1,
+    "videoAfter": 0,
+    "textBefore": 1,
+    "textAfter": 0,
+    "exportTrackCount": 0,
+    "exportWarnings": [
+      "文本轨「字幕」第 1 段（复合片段1）无字幕内容，已跳过"
+    ]
+  },
+  "compoundExportLoss": {
+    "sourceTransform": {
+      "x": 0.25,
+      "y": 0,
+      "scaleX": 0.5,
+      "scaleY": 0.5,
+      "rotation": 30,
+      "opacity": 0.8
+    },
+    "exportTransform": {
+      "transform": {
+        "x": 0,
+        "y": 0
+      },
+      "flip": {}
+    },
+    "sourceKeyframes": {
+      "x": [
+        {
+          "t": 0,
+          "v": 0
+        },
+        {
+          "t": 10000000,
+          "v": 1
+        }
+      ]
+    },
+    "exportKeyframes": null,
+    "sourceTrackMuted": true,
+    "exportTrackAttribute": null,
+    "warnings": [
+      "复合片段「复合片段1」内片段的画面变换暂不随剪映导出（P0），已按默认画面导出"
+    ]
+  },
+  "compoundTransition": {
+    "before": [
+      {
+        "id": "tv"
+      },
+      {
+        "id": "tv#tr",
+        "ghost": true,
+        "fx": {
+          "alphaMul": 0.25
+        }
+      }
+    ],
+    "after": [
+      {
+        "id": "tc/track-mutmi7vo-4-cxfk0w"
+      }
+    ]
+  },
+  "lockBypass": {
+    "remainingAfterDelete": 0,
+    "speedAfterSet": 2
+  }
+}

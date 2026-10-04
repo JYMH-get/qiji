@@ -19,6 +19,9 @@ import { MiniMapCustom } from "./MiniMapCustom";
 import { MultiConnectionLine } from "./MultiConnectionLine";
 import { SnapGuideLines } from "./SnapGuideLines";
 import { NodeCountWarnToast } from "./NodeCountWarnToast";
+import { RunSelectionFeedback } from "./RunSelectionFeedback";
+import { runSelectedNodes } from "./runSelection";
+import { isRunnableNode } from "@/command/nodeRunEligibility";
 import { listPlugins } from "@/nodes/pluginRegistry";
 import { reactFlowNodeTypes } from "@/nodes/registry";
 import { GroupNode } from "@/nodes/GroupNode";
@@ -882,6 +885,7 @@ export function Canvas() {
       </AnimatePresence>
 
       <SelectionToolbar />
+      <RunSelectionFeedback />
 
       {/* 节点数量预警（350/450/500/550+每10）：仅提示不拦截，自订阅小组件（§9） */}
       <NodeCountWarnToast />
@@ -972,9 +976,7 @@ function SelectionToolbar() {
   }, [selectedNodeIds]);
 
   const onDeleteSelectedNodes = useCallback(() => {
-    selectedNodeIds.forEach((id) => {
-      dispatchCommand({ type: "deleteNode", id });
-    });
+    dispatchCommand({ type: "deleteElements", nodeIds: selectedNodeIds });
     useUiStore.getState().setSelection([]);
   }, [selectedNodeIds]);
 
@@ -993,9 +995,9 @@ function SelectionToolbar() {
     dispatchCommand({ type: "setGroupKind", groupId: selectedGroup.id, kind: selectedGroup.kind === "material" ? "default" : "material" });
   }, [selectedGroup]);
 
-  // 多选：全部启动（逐个运行选中节点）
+  // 中央命令决定实际启动/跳过；运行中与只读节点不会重复提交。
   const onRunSelected = useCallback(() => {
-    selectedNodeIds.forEach((id) => dispatchCommand({ type: "run", nodeId: id }));
+    runSelectedNodes(selectedNodeIds);
   }, [selectedNodeIds]);
 
   // 多选：匹配素材（为选中的「生成图片/生成视频」节点按上游文本匹配资产图，和资产模式一致；
@@ -1043,13 +1045,13 @@ function SelectionToolbar() {
     >
       {selectedNodes.length >= 2 && (
         <>
-          <button
+          {selectedNodes.some((n) => isRunnableNode(n, getPlugin(n.type))) && <button
             onClick={onRunSelected}
             className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 hover:bg-secondary cursor-pointer transition-colors font-medium text-[11px]"
           >
             <Play className="h-3.5 w-3.5 text-emerald-400" fill="currentColor" />
             <span>全部启动</span>
-          </button>
+          </button>}
           <button
             onClick={onMatchSelected}
             className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 hover:bg-secondary cursor-pointer transition-colors font-medium text-[11px]"

@@ -26,6 +26,45 @@ import { managedClient } from "./managedClient";
 import type { TaskExtra } from "./adapters/types";
 import { extractPromptText, buildLegend, withLegend } from "@/lib/shotMaterials";
 import { resolvePresets } from "@/lib/presetSchemes";
+import { rememberGenerationReceipt, readGenerationReceipt, forgetGenerationReceipt, type GenerationOwner } from "./generationReceipts";
+import { isProjectWriter } from "./windowSync";
+
+type QueueOwner = GenerationOwner & { active?: () => boolean };
+const attempts = new Map<string, symbol>();
+const currentProject = (owner: QueueOwner) => {
+	const state = useProjectStore.getState();
+	return state.projectInstanceId === owner.projectInstanceId && !state.isProjectLoading && owner.active?.() !== false;
+};
+const ownerOf = (state = useProjectStore.getState()): GenerationOwner => ({ projectInstanceId: state.projectInstanceId, savePath: state.savePath });
+const claimRun = (id: string, state = useProjectStore.getState()): QueueOwner => {
+	const key = JSON.stringify([state.savePath || state.projectInstanceId, id]), token = Symbol(id);
+	attempts.set(key, token);
+	return { ...ownerOf(state), active: () => attempts.get(key) === token };
+};
+type LiveRun = { owner: QueueOwner; pending: PendingGen; taskId?: string; adapterKey?: string };
+// Same-process reopen keeps purposeRunner's terminal callback so its Promise/activity can finish.
+// Only a restart (or an already finished/lost runner) needs a new taskCenter callback.
+const liveRuns = new Set<LiveRun>();
+function adoptLiveRun(run: LiveRun, pending: PendingGen, state = useProjectStore.getState()): boolean {
+	if (state.isProjectLoading || run.owner.active?.() === false || run.pending.id !== pending.id || run.pending.createdAt !== pending.createdAt) return false;
+	if (state.projectInstanceId !== run.owner.projectInstanceId && (!run.owner.savePath || state.savePath !== run.owner.savePath)) return false;
+	if (pending.taskId && pending.taskId !== run.taskId) return false;
+	run.owner.projectInstanceId = state.projectInstanceId;
+	run.owner.savePath = state.savePath;
+	state.updatePendingGen(pending.id, { status: "running", error: undefined, recoverable: false,
+		...(run.taskId && run.adapterKey ? { taskId: run.taskId, adapterKey: run.adapterKey } : {}) });
+	return true;
+}
+function resumeLiveRun(pending: PendingGen, state = useProjectStore.getState()): boolean {
+	for (const run of liveRuns) if (adoptLiveRun(run, pending, state)) return true;
+	return false;
+}
+async function saveGenerationCheckpoint(owner: QueueOwner, id: string): Promise<void> {
+	await useProjectStore.getState().save(true);
+	const state = useProjectStore.getState();
+	// save 会捕获磁盘错误；非写者仅转发保存且可能清 dirty，均不是落盘确认。
+	if (currentProject(owner) && isProjectWriter() && !state.isDirty && !state.pendingGens.some(x => x.id === id)) forgetGenerationReceipt(owner, id);
+}
 
 const isTauri = (): boolean =>
 	typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
@@ -171,17 +210,19 @@ function uploadPrefixOf(p: PendingGen): string {
 	return (p.cat && CAT_PREFIX[p.cat]) || "TP";
 }
 
-async function applyResult(id: string, status: "success" | "failed", resultUri?: string, error?: string, assetId?: string, opts?: { recoverable?: boolean; rawLink?: boolean }): Promise<void> {
+async function applyResult(owner: QueueOwner, id: string, status: "success" | "failed", resultUri?: string, error?: string, assetId?: string, opts?: { recoverable?: boolean; rawLink?: boolean; saveToOss?: boolean }): Promise<void> {
+	if (!currentProject(owner)) return;
 	clearJobProgress(id); // 已终态，进度/排队位次作废（重试/重连会重新登记）
 	const st = useProjectStore.getState();
 	const p = st.pendingGens.find((x) => x.id === id);
 	if (!p) return; // 已切换项目/已被清除 → 丢弃（原项目重开时会续跑）
+	const current = () => currentProject(owner) && useProjectStore.getState().pendingGens.some(x => x.id === id && x.taskId === p.taskId);
 	if (status === "success" && resultUri) {
 		// 文本推理结果（提示词）：直接写分镜，不下载、不当资产
 		if (p.shot && isPromptField(p)) {
 			applyShotResult(p.shot, resultUri);
 			useProjectStore.getState().removePendingGen(id);
-			void useProjectStore.getState().save(true);
+			await saveGenerationCheckpoint(owner, id);
 			return;
 		}
 		// 本地落盘 + 三元映射；失败/非 Tauri 退回直接用 url
@@ -192,23 +233,27 @@ async function applyResult(id: string, status: "success" | "failed", resultUri?:
 			const dl = opts?.rawLink
 				? ((p.purpose || "").startsWith("video.") ? { attempts: 2, timeoutSecs: 120 } : { attempts: 3, timeoutSecs: 30 })
 				: undefined;
-			let blob = await saveRemoteAsset(assetId || `local-${id}`, resultUri, dl);
+			let blob = await saveRemoteAsset(assetId || `local-${id}`, resultUri, { ...dl, keepRemoteUrl: opts?.saveToOss !== false, shouldContinue: current });
+			if (!current()) return;
 			// 下载成功 → 把本地字节经上传接口传回服务端落 OSS，三元映射换成永久直链（原始直链会过期）；
 			// 带 taskId=顺带改写服务端任务响应体（rehosted→true，断连找回不再重复接力转存）
-			if (blob && opts?.rawLink) blob = await uploadBlobToOss(blob, p.label, uploadPrefixOf(p), p.taskId);
+			if (blob && opts?.rawLink && opts?.saveToOss !== false) blob = await uploadBlobToOss(blob, p.label, uploadPrefixOf(p), p.taskId);
+			if (!current()) return;
 			// 兜底：直链未能落本地（如上游直链被 CORS/网络拦、服务端未转存 OSS）→
 			// 请管理端把该直链转存到 OSS，再从 OSS（同 S3、CORS 友好）下载到本地。
-			if (!blob && isTauri() && /^https?:\/\//i.test(resultUri)) {
+			if (opts?.saveToOss !== false && !blob && isTauri() && /^https?:\/\//i.test(resultUri)) {
 				const re = await managedClient.rehost(resultUri, undefined, p.label);
-				if (re?.url) blob = await saveRemoteAsset(re.id, re.url);
+				if (!current()) return;
+				if (re?.url) blob = await saveRemoteAsset(re.id, re.url, { shouldContinue: current });
 			}
+			if (!current()) return;
 			if (blob) {
 				st.registerAssetBlob(blob);
 				displayUri = blob.localUri || resultUri;
 			}
 		} catch { /* 落盘失败：用 url 兜底 */ }
 		// 重新取最新状态（落盘是异步，期间可能变化）
-		if (!useProjectStore.getState().pendingGens.find((x) => x.id === id)) return;
+		if (!current()) return;
 		if (p.derived) applyDerivedResult(p.derived, true, displayUri);
 		else if (p.shot) applyShotResult(p.shot, displayUri);
 		else {
@@ -226,13 +271,22 @@ async function applyResult(id: string, status: "success" | "failed", resultUri?:
 		// recoverable（服务端丢任务的 lost 态）：标失败但带可重连标记，保留 taskId 供「重连原任务」
 		st.updatePendingGen(id, { status: "failed", error: error || "生成失败", recoverable: opts?.recoverable || false });
 	}
-	void useProjectStore.getState().save(true);
+	// 成功写回前始终保留 pending / taskId；存盘后才能清独立受理凭据。
+	await saveGenerationCheckpoint(owner, id);
 }
 
 /** 按 pending 记录发起一次 runPurpose（start/retry/分镜共用），结果统一落 applyResult。 */
 function runFromPending(id: string): void {
+	const owner = claimRun(id);
 	const p = useProjectStore.getState().pendingGens.find((x) => x.id === id);
 	if (!p) return;
+	const live: LiveRun = { owner, pending: p };
+	liveRuns.add(live);
+	const finishLiveRun = () => {
+		liveRuns.delete(live);
+		const pending = useProjectStore.getState().pendingGens.find(x => x.id === id);
+		if (pending) adoptLiveRun(live, pending);
+	};
 	const visualStyle = useProjectStore.getState().visualStyle || "";
 	const common = {
 		params: p.params,
@@ -240,11 +294,20 @@ function runFromPending(id: string): void {
 		input: p.input,
 		templateId: p.templateId || undefined,
 		onTaskId: (taskId: string, adapterKey: string) => {
-			useProjectStore.getState().updatePendingGen(id, { taskId, adapterKey });
+			live.taskId = taskId;
+			live.adapterKey = adapterKey;
+			if (owner.active?.() === false) return;
+			if (currentProject(owner)) owner.savePath = useProjectStore.getState().savePath;
+			rememberGenerationReceipt(owner, p, taskId, adapterKey);
+			if (!currentProject(owner)) {
+				const pending = useProjectStore.getState().pendingGens.find(x => x.id === id);
+				if (!pending || !adoptLiveRun(live, pending)) return;
+			}
+			useProjectStore.getState().updatePendingGen(id, { taskId, adapterKey, status: "running", error: undefined });
 			void useProjectStore.getState().save(true);
 		},
 		// 进度/排队位次（第251轮）：只进会话态 Map，不落 PendingGen（瞬时信息勿随项目落盘）
-		onProgress: (progress: number, _status: string, _partial?: string, extra?: TaskExtra) => setJobProgress(id, progress, extra),
+		onProgress: (progress: number, _status: string, _partial?: string, extra?: TaskExtra) => { if (currentProject(owner)) setJobProgress(id, progress, extra); },
 	};
 	// 推理（带 variables）走存盘的变量；分镜出图走自由 prompt+视觉风格；资产走自由 prompt。
 	// 第174轮：提交前把提示词里的预设胶囊【预设:id】展开成正文（资产拆分自动挂的 画风前缀/类别前后缀、
@@ -256,12 +319,16 @@ function runFromPending(id: string): void {
 			: runPurpose(p.purpose as Purpose, { ...common, prompt: resolvePresets(p.prompt) });
 	run
 		.then((r) => {
-			if (r.status === "success") void applyResult(id, "success", r.resultUri, undefined, r.assetId, { rawLink: r.rawLink });
-			else if (r.status === "no_model") void applyResult(id, "failed", undefined, "无可用模型：请检查「设置 → 管理端」连接与目录拉取后重试。");
+			finishLiveRun();
+			if (r.status === "success") void applyResult(owner, id, "success", r.resultUri, undefined, r.assetId, { rawLink: r.rawLink, saveToOss: r.saveToOss });
+			else if (r.status === "no_model") void applyResult(owner, id, "failed", undefined, "无可用模型：请检查「设置 → 管理端」连接与目录拉取后重试。");
 			// 服务端丢任务（lost）→ 可重连找回（前提是已拿到 taskId）
-			else void applyResult(id, "failed", undefined, r.error, undefined, { recoverable: !!r.lost });
+			else void applyResult(owner, id, "failed", undefined, r.error, undefined, { recoverable: !!r.lost });
 		})
-		.catch((err) => void applyResult(id, "failed", undefined, err instanceof Error ? err.message : "生成失败"));
+		.catch((err) => {
+			finishLiveRun();
+			void applyResult(owner, id, "failed", undefined, err instanceof Error ? err.message : "生成失败");
+		});
 }
 
 /** 提交一次资产出图（异步，不阻塞调用方）；UI 由 pendingGens 持久占位驱动。 */
@@ -351,6 +418,7 @@ export function retryGeneration(id: string): void {
 	const st = useProjectStore.getState();
 	const p = st.pendingGens.find((x) => x.id === id);
 	if (!p) return;
+	forgetGenerationReceipt(ownerOf(st), id);
 	st.updatePendingGen(id, { status: "running", error: undefined, recoverable: false, taskId: undefined, adapterKey: undefined });
 	void st.save(true);
 	runFromPending(id);
@@ -365,18 +433,21 @@ export function recallPendingGeneration(id: string): void {
 	const st = useProjectStore.getState();
 	const p = st.pendingGens.find((x) => x.id === id);
 	if (!p) return;
+	if (resumeLiveRun(p, st)) { void st.save(true); return; }
 	if (!p.taskId || !p.adapterKey) { retryGeneration(id); return; }
+	const owner = claimRun(id, st);
 	st.updatePendingGen(id, { status: "running", error: undefined, recoverable: false });
 	void st.save(true);
 	trackTask({
 		taskId: p.taskId,
 		adapterKey: p.adapterKey,
 		onUpdate: (progress, status, resultUri, error, assetId, _partial, rawLink, extra) => {
+			if (!currentProject(owner)) return;
 			// 重连找回同样喂进度/排队位次（重连回来的单可能仍在服务端队列里）
 			if (status === "queued" || status === "running") setJobProgress(p.id, progress, extra);
-			if (status === "success") void applyResult(p.id, "success", resultUri, undefined, assetId, { rawLink });
-			else if (status === "failed") void applyResult(p.id, "failed", undefined, error);
-			else if (status === "lost") void applyResult(p.id, "failed", undefined, error || "服务端异常：仍未找到原任务", undefined, { recoverable: true });
+			if (status === "success") void applyResult(owner, p.id, "success", resultUri, undefined, assetId, { rawLink, saveToOss: extra?.saveToOss });
+			else if (status === "failed") void applyResult(owner, p.id, "failed", undefined, error);
+			else if (status === "lost") void applyResult(owner, p.id, "failed", undefined, error || "服务端异常：仍未找到原任务", undefined, { recoverable: true });
 		},
 	});
 }
@@ -384,20 +455,29 @@ export function recallPendingGeneration(id: string): void {
 /** App 启动调用：把上次未完成的在途任务接回来。 */
 export function resumePendingGenerations(): void {
 	const st = useProjectStore.getState();
-	for (const p of st.pendingGens) {
+	for (let p of st.pendingGens) {
+		if (resumeLiveRun(p, st)) continue;
+		const owner = ownerOf(st) as QueueOwner;
+		const receipt = readGenerationReceipt(owner, p);
+		if (receipt && !p.taskId) {
+			st.updatePendingGen(p.id, { taskId: receipt.taskId, adapterKey: receipt.adapterKey, status: "running", error: undefined });
+			p = { ...p, taskId: receipt.taskId, adapterKey: receipt.adapterKey, status: "running" };
+		}
 		if (p.status !== "running") continue;
 		if (p.taskId && p.adapterKey) {
+			Object.assign(owner, claimRun(p.id, st));
 			// 服务端 task 仍在（管理端常驻）→ 重新挂轮询，结果照常落地
 			trackTask({
 				taskId: p.taskId,
 				adapterKey: p.adapterKey,
 				onUpdate: (progress, status, resultUri, error, assetId, _partial, rawLink, extra) => {
+					if (!currentProject(owner)) return;
 					// 重挂轮询的在途单同样喂进度/排队位次（重启后接回的单可能仍在服务端队列里）
 					if (status === "queued" || status === "running") setJobProgress(p.id, progress, extra);
-					if (status === "success") void applyResult(p.id, "success", resultUri, undefined, assetId, { rawLink });
-					else if (status === "failed") void applyResult(p.id, "failed", undefined, error);
+					if (status === "success") void applyResult(owner, p.id, "success", resultUri, undefined, assetId, { rawLink, saveToOss: extra?.saveToOss });
+					else if (status === "failed") void applyResult(owner, p.id, "failed", undefined, error);
 					// 服务端重启丢任务 → 标可重连，UI 提示「服务端异常」+「重连原任务」
-					else if (status === "lost") void applyResult(p.id, "failed", undefined, error || "服务端异常：未找到原任务", undefined, { recoverable: true });
+					else if (status === "lost") void applyResult(owner, p.id, "failed", undefined, error || "服务端异常：未找到原任务", undefined, { recoverable: true });
 				},
 			});
 		} else {

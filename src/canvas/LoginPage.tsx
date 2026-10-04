@@ -3,14 +3,15 @@ import { useConnectionStore, DEFAULT_SERVER_URL } from "@/store/connectionStore"
 import { managedClient } from "@/services/managedClient";
 import { Loader2, LogIn, UserPlus, KeyRound, RefreshCw } from "lucide-react";
 import logoFull from "@/assets/brand/logo-full.png";
+import { registrationChannels, verificationTargetError, type RegistrationOptions } from '@/lib/registrationOptions';
 
 type Mode = "account" | "register" | "forgot";
 
 /**
  * 登录页（P2 商业化改造：注册体系上线，激活码/机器码整体退役）：
  *  - 登录：账号（邮箱/手机号）+ 密码 → 解析出真凭证 accessKey 存本地；
- *  - 注册：邮箱/手机号 + 图形验证码 + 短信/邮件验证码 + 密码 + 可选邀请码
- *    （渠道商邀请码=归属该服务商；好友个人邀请码=记录邀请关系）；
+ *  - 注册：邮箱/手机号 + 图形验证码 + 短信/邮件验证码 + 密码 + 必填邀请码
+ *    （渠道商邀请码=归属该服务商；好友个人邀请码=继承邀请人的归属）；
  *  - 找回密码：验证码重置后回登录页。
  * 设备标识=随机 UUID（x-device-id 头，第218轮起无硬件语义）——服务端做「同时在线设备数」限制。
  */
@@ -46,6 +47,19 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
 	}, []);
 
 	const needsCaptcha = mode === "register" || mode === "forgot";
+	const [optionsResponse, setOptionsResponse] = useState<{ server: string; data: RegistrationOptions } | null>(null);
+	const [optionsError, setOptionsError] = useState('');
+	const [optionsReload, setOptionsReload] = useState(0);
+	const options = optionsResponse?.server === serverUrl ? optionsResponse.data : null;
+	const channels = registrationChannels(options);
+	const verificationAvailable = channels.available && (mode !== 'register' || !!options?.enabled);
+	useEffect(() => {
+		if (!needsCaptcha) return;
+		let active = true; setOptionsResponse(null); setOptionsError('');
+		managedClient.registrationOptions().then(data => { if (active) setOptionsResponse({ server: serverUrl, data }); })
+			.catch(e => { if (active) setOptionsError(e.message || '验证方式加载失败'); });
+		return () => { active = false; };
+	}, [serverUrl, needsCaptcha, optionsReload]);
 
 	const refreshCaptcha = useCallback(async () => {
 		if (!serverUrl.trim()) return;
@@ -94,7 +108,9 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
 
 	const sendCode = async () => {
 		if (!serverUrl.trim()) { setErr("请填写服务器地址"); return; }
-		if (!account.trim()) { setErr("请填写邮箱或手机号"); return; }
+		if (!verificationAvailable) { setErr('验证通道暂未开放，请联系管理员'); return; }
+		const targetError = verificationTargetError(account, options);
+		if (targetError) { setErr(targetError); return; }
 		if (!captcha || !captchaAnswer.trim()) { setErr("请填写图形验证码"); return; }
 		setErr(null);
 		const purpose = mode === "forgot" ? "reset" : "register";
@@ -122,7 +138,10 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
 			return;
 		}
 
+		const targetError = verificationTargetError(account, options);
+		if (!verificationAvailable || targetError) { setErr(targetError || '验证通道暂未开放，请联系管理员'); return; }
 		if (mode === "register") {
+			if (!inviteCode.trim()) { setErr("请填写邀请码"); return; }
 			if (!account.trim()) { setErr("请填写邮箱或手机号"); return; }
 			if (!code.trim()) { setErr("请填写验证码"); return; }
 			if (password.length < 6) { setErr("密码至少 6 位"); return; }
@@ -164,8 +183,8 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
 		"w-full mb-3 bg-secondary/60 border border-border/40 rounded-lg px-3 py-2 text-[12px] font-mono text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary";
 
 	const subtitle =
-		mode === "register" ? "邮箱/手机号验证码注册，注册即登录。"
-		: mode === "forgot" ? "验证邮箱/手机号后重置密码。"
+		mode === "register" ? `${channels.label}验证码注册，注册即登录。`
+		: mode === "forgot" ? `验证${channels.label}后重置密码。`
 		: "连接服务器，用账号 + 密码登录。";
 
 	const isVerifyMode = mode === "register" || mode === "forgot";
@@ -218,18 +237,19 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
 				)}
 
 				<label className="block text-[11px] text-muted-foreground mb-1">
-					{mode === "account" ? "账号（邮箱 / 手机号）" : "邮箱 / 手机号"}
+					{mode === "account" ? "账号（邮箱 / 手机号）" : channels.label}
 				</label>
 				<input
 					value={account}
 					onChange={(e) => setAccountInput(e.target.value)}
-					placeholder="you@example.com 或 13800000000"
+					placeholder={mode === 'account' ? '邮箱或手机号' : channels.placeholder}
 					autoComplete="username"
 					className={inputCls}
 				/>
 
 				{isVerifyMode && (
 					<>
+						{optionsError ? <p role="alert" className="text-xs text-destructive mb-3">{optionsError} <button type="button" onClick={() => setOptionsReload(n => n + 1)}>重试</button></p> : !options ? <p role="status" className="text-xs mb-3">正在读取验证方式…</p> : !verificationAvailable ? <p role="status" className="text-xs mb-3">{mode === 'register' && !options.enabled ? '注册暂未开放' : '验证通道暂未开放，请联系管理员'}</p> : null}
 						<label className="block text-[11px] text-muted-foreground mb-1">图形验证码</label>
 						<div className="flex gap-2 mb-3 items-center">
 							<input
@@ -267,7 +287,7 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
 							/>
 							<button
 								onClick={() => void sendCode()}
-								disabled={cooldown > 0}
+								disabled={cooldown > 0 || !verificationAvailable}
 								className="shrink-0 px-3 text-[11px] rounded-lg border border-border/40 text-foreground hover:border-primary disabled:opacity-50 cursor-pointer"
 							>
 								{cooldown > 0 ? `${cooldown}s 后重发` : "获取验证码"}
@@ -289,12 +309,13 @@ export function LoginPage({ onLoggedIn }: { onLoggedIn: () => void }) {
 
 				{mode === "register" && (
 					<>
-						<label className="block text-[11px] text-muted-foreground mb-1">邀请码（可选）</label>
+						<label className="block text-[11px] text-muted-foreground mb-1">邀请码（必填）</label>
 						<input
 							value={inviteCode}
+							required
 							onChange={(e) => setInviteCode(e.target.value)}
 							onKeyDown={(e) => e.key === "Enter" && submit()}
-							placeholder="服务商或好友的邀请码，可留空"
+							placeholder="填写源站、服务商或好友的邀请码"
 							className={inputCls}
 						/>
 					</>

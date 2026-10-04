@@ -72,7 +72,10 @@ describe("表格视频区显隐", () => {
         render(false);
         const html = render(true);
         expect(html).toContain("视频区");
-        expect(html).toContain("https://example.test/video.mp4");
+        // SSR has no visible viewport: keep the player, defer its media request.
+        expect(html).toContain("<video");
+        expect(html).not.toContain('src="https://example.test/video.mp4"');
+        expect(useProjectStore.getState().episodes[0].shots[0].videoUri).toBe("https://example.test/video.mp4");
         expect(html).toContain("一键视频");
         expect(html).toContain("导出所有视频");
         expect(html).toContain("模型家族（模型种类，仅本分镜）");

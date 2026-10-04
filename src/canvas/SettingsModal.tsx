@@ -10,6 +10,8 @@ import {
 } from "lucide-react";
 import { listPresetSchemes, type PresetTarget } from "@/lib/presetSchemes";
 import { versionLabel } from "@/lib/appVersion";
+import { canExportClientDiagnostics, exportClientDiagnostics } from "@/services/clientDiagnostics";
+import { AccessibilitySetting } from "@/components/AccessibilitySetting";
 import {
   KEYMAP_ACTIONS, FIXED_KEYS, RESERVED_COMBOS,
   comboFromEvent, comboLabel, effectiveBinding,
@@ -23,7 +25,7 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "connection", label: "管理端" },
   { key: "presets", label: "图片预设" },
   { key: "videoPresets", label: "视频预设" },
-  { key: "preferences", label: "生成偏好" },
+  { key: "preferences", label: "偏好设置" },
   { key: "keymap", label: "快捷键" },
   { key: "webdav", label: "WebDAV" },
 ];
@@ -31,6 +33,18 @@ const TABS: { key: TabKey; label: string }[] = [
 export function SettingsModal() {
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen);
   const [activeTab, setActiveTab] = useState<TabKey>("connection");
+  const [diagnosticStatus, setDiagnosticStatus] = useState<"idle" | "exporting" | "success" | "error">("idle");
+
+  const handleExportDiagnostics = async () => {
+    if (diagnosticStatus === "exporting") return;
+    setDiagnosticStatus("exporting");
+    try {
+      const path = await exportClientDiagnostics();
+      setDiagnosticStatus(path ? "success" : "idle");
+    } catch {
+      setDiagnosticStatus("error");
+    }
+  };
 
   // 「无可用模型」入口经 openModelSettings 打开时定位到指定页签（消费后清空，手动打开不受影响）
   const settingsTab = useUiStore((s) => s.settingsTab);
@@ -166,9 +180,26 @@ export function SettingsModal() {
 
         {/* Footer：左=客户端版本标识（排查构建用），右=完成 */}
         <div className="flex items-center justify-between gap-2 px-6 py-4 border-t border-border/40">
-          <span className="text-[10px] text-muted-foreground/70 select-text" title="客户端版本 · 构建时间（区分新旧构建）">
-            {versionLabel()}
-          </span>
+          <div className="min-w-0 flex flex-col gap-1">
+            <span className="text-[10px] text-muted-foreground/70 select-text" title="客户端版本 · 构建时间（区分新旧构建）">
+              {versionLabel()}
+            </span>
+            {canExportClientDiagnostics() && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleExportDiagnostics}
+                  disabled={diagnosticStatus === "exporting"}
+                  className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground cursor-pointer disabled:opacity-50 disabled:cursor-wait"
+                >
+                  {diagnosticStatus === "exporting" && <Loader2 className="h-3 w-3 animate-spin" />}
+                  {diagnosticStatus === "exporting" ? "正在导出…" : "导出诊断包"}
+                </button>
+                <span role="status" className={`text-[10px] ${diagnosticStatus === "error" ? "text-destructive" : "text-green-400"}`}>
+                  {diagnosticStatus === "success" ? "诊断包已导出" : diagnosticStatus === "error" ? "导出失败，请重试" : ""}
+                </span>
+              </div>
+            )}
+          </div>
           <button
             onClick={() => setSettingsOpen(false)}
             className="px-5 py-2 rounded-lg bg-secondary text-foreground hover:bg-secondary/80 font-semibold cursor-pointer transition-colors text-xs"
@@ -427,7 +458,7 @@ function PresetsTab({ target }: { target: PresetTarget }) {
 }
 
 // ═══════════════════════════════════════════
-// Tab 3: 生成偏好
+// Tab 3: 偏好设置
 // ═══════════════════════════════════════════
 
 function PreferencesTab({
@@ -451,6 +482,7 @@ function PreferencesTab({
 
   return (
     <div className="flex flex-col gap-5">
+      <AccessibilitySetting />
       {/* 本地推理 GPU 加速（转深度；第202轮：模型已完全内置客户端，零网络零服务端依赖） */}
       <div className="flex flex-col gap-2">
         <label className="text-xs font-semibold text-foreground">本地推理（转深度）</label>
@@ -582,10 +614,10 @@ function WebdavTab({
       <div>
         <div className="flex items-center gap-2 mb-1">
           <Cloud className="h-3.5 w-3.5 text-blue-400" />
-          <span className="text-xs font-semibold text-foreground">WebDAV 云端同步</span>
+          <span className="text-xs font-semibold text-foreground">WebDAV 项目文件云备份</span>
         </div>
         <p className="text-[10px] text-muted-foreground">
-          将项目文件备份到 WebDAV 服务器，支持坚果云等主流服务。保存后自动增量同步。
+          本地保存后自动备份项目文件；不含本机素材文件。
         </p>
       </div>
 
@@ -598,7 +630,7 @@ function WebdavTab({
           className="h-3.5 w-3.5 rounded accent-[var(--primary)]"
         />
         <label htmlFor="enableCloudSync" className="text-foreground text-[11px] cursor-pointer">
-          启用云端同步
+          启用项目文件云备份
         </label>
       </div>
 

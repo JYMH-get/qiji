@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';import fs from 'node:fs';
+if(!process.cwd().includes('qiji-local-generation-'))throw Error('Sandbox only');
+globalThis.fetch=async()=>{throw Error('No external requests')};
+const state=JSON.parse(fs.readFileSync('data/local-test.json','utf8'));
+const {getLog}=await import('../src/store/logs.ts');
+const {getUser}=await import('../src/store/users.ts');
+const {default:Fastify}=await import('fastify'),app=Fastify();await app.register((await import('../src/routes.ts')).registerRoutes);
+const log=getLog(state.id),user=getUser(state.user);assert.equal(log.localExecution,true);assert.equal(log.localRefundOnFailure,true);assert.equal(log.status,'running');
+await (await import('../src/reconcile.ts')).reconcileOnStartup();assert.equal(getLog(state.id).status,'running');assert.equal(user.credits,state.credits);
+const r=await app.inject({method:'PUT',url:'/v1/local-generation-reports/'+log.id,headers:{authorization:'Bearer '+user.accessKey,'x-device-id':'local-fixture'},payload:{status:'failed',error:'after restart'}});
+assert.equal(r.statusCode,200);assert.equal(user.credits,state.credits+3);
+const freeUser=getUser(state.freeUser);
+assert.equal(getLog(state.freeId).cost,0);
+const freeResult=await app.inject({method:'PUT',url:'/v1/local-generation-reports/'+state.freeId,headers:{authorization:'Bearer '+freeUser.accessKey,'x-device-id':'local-fixture'},payload:{status:'success'}});
+assert.equal(freeResult.statusCode,200);assert.equal(getLog(state.freeId).status,'success');assert.equal(freeUser.credits,0);
+await app.close();console.log('Restart: persisted local identity, billing snapshot and refund passed');process.exit(0);

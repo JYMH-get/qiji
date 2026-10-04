@@ -1,3 +1,5 @@
+import { useDualModeFeature } from '@/store/connectionStore';
+import { supportsOfficialMaterials } from "@/services/materialPolicy";
 /**
  * RtcShotAiWorkbench —— 中栏「AI 工作台」页正文（中栏双页签改版：工作台/预览，见 rtcCenterTabCore）。
  * 绑定 useWorkbenchTarget（选中优先，无选中回退播放头下主轨片段——补充3；⚠ 第251轮需求⑦：
@@ -178,7 +180,8 @@ function WorkbenchBody({ episodeId, shotId, segId, imageSlot, isMedia }: { episo
 	const shot = useProjectStore((s) => s.episodes.find((e) => e.id === episodeId)?.shots.find((x) => x.id === shotId));
 	const epTitle = useProjectStore((s) => s.episodes.find((e) => e.id === episodeId)?.title) || "";
 	const ms = useProjectStore((s) => s.mediaSettings);
-	const sameSource = !!ms?.imgVideoSameSource;
+	const dualModeEnabled = useDualModeFeature();
+	const sameSource = !dualModeEnabled || (!!ms?.imgVideoSameSource);
 	const inferring = useShotInferring(shotId);
 	const sbRunning = useShotJobs(shotId, "storyboard").some((p) => p.status === "running");
 	const vidRunning = useShotJobs(shotId, "video").some((p) => p.status === "running");
@@ -264,7 +267,7 @@ function WorkbenchBody({ episodeId, shotId, segId, imageSlot, isMedia }: { episo
 							匹配资产
 						</button>
 					</div>
-					<RtcMaterialStrip episodeId={episodeId} shotId={shotId} identityEnabled={!!curCatModel?.officialAssets} />
+					<RtcMaterialStrip episodeId={episodeId} shotId={shotId} identityEnabled={supportsOfficialMaterials(curCatModel)} />
 				</div>
 
 				{/* 提示词大编辑区（ShotPromptField：@/#/预设/放大弹窗全套；两行头经 renderHeader 照表格模式排布） */}

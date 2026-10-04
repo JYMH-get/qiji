@@ -1,4 +1,5 @@
 import { finishChannelObservation } from './channelObservations.ts';
+import { extractUsageProduct, productKind, type UsageProduct } from '../usageProducts.ts';
 /**
  * 请求记录（按天分文件的轻量索引 + 分条详情）。
  *
@@ -25,6 +26,7 @@ import { readJsonl, genId, truncateBase64, DATA_DIR } from "./db.ts";
 import { db } from "./sqlite.ts";
 import type { GenerateRequest } from "../contract.ts";
 import { observeUpstream, finishRouteObservation } from '../routeObservations.ts';
+import type { UsageReportScope } from '../usageReportTypes.ts';
 
 const LEGACY_FILE = "logs.jsonl"; // 旧的单文件索引（第129轮前）；首启迁移后改名 .migrated
 const INDEX_DIR_NAME = "logs-index"; // 按天分文件的索引目录（相对 DATA_DIR）
@@ -92,6 +94,11 @@ function maskHeaders(h: unknown): Record<string, unknown> | undefined {
 
 /** 索引元信息：常驻内存 + 落盘 logs.jsonl（很小，列表/统计/导出/筛选全走它） */
 export interface LogMeta {
+  /** Company/team snapshot for daily usage, captured before submission; never client supplied. */
+  usageReportScope?: UsageReportScope;
+  usageProduct?: UsageProduct;
+  localExecution?: boolean;
+  localRefundOnFailure?: boolean;
 	id: string;
 	clientTaskId?: string;
 	taskId?: string;
@@ -117,6 +124,10 @@ export interface LogMeta {
 	/** 实际扣款人（第183轮）：团队共享积分模式下=团长。缺省=userId 本人。
 	 *  ⚠ 启动对账（reconcile.ts）退孤儿日志的款时按它退——不记就会退给从没付过款的团员。 */
 	payerId?: string;
+	userWallet?: import('./credits.ts').UserWalletRef;
+	creditSource?: 'personal' | 'team-shared' | 'team-allocation';
+	pricingAgentId?: string;
+	teamId?: string;
 	status: "running" | "success" | "failed";
 	startedAt: string;
 	finishedAt?: string;
@@ -221,6 +232,13 @@ function resultLinkFrom(resp: unknown): string {
 // 区别是从「重写这些条所在的整天文件」变成「UPSERT 这几条」——同样是批量，但代价与**改动条数**
 // 成正比，而不是与**当天总条数**成正比。这正是「越用越卡」的根因所在。
 const dirty = new Set<LogMeta>();
+let usageReportObserver: ((logs: readonly LogMeta[]) => void) | undefined;
+let usageReportCapture: ((log: LogMeta) => UsageReportScope | undefined) | undefined;
+/** Injected after stores load to avoid logs/users/teams circular dependencies. */
+export function setUsageReportObserver(observer: typeof usageReportObserver, capture: typeof usageReportCapture): void {
+  usageReportObserver = observer;
+  usageReportCapture = capture;
+}
 const markDirty = (m: LogMeta): void => void dirty.add(m);
 /** 落盘：一个事务批量 UPSERT（同步，但单条是微秒级索引写，不是几 MB 的 stringify） */
 function flushIndex(): void {
@@ -231,6 +249,8 @@ function flushIndex(): void {
 		db.exec("BEGIN");
 		for (const m of batch) stmtLogUpsert.run(m.id, dayOf(m.startedAt), m.startedAt, m.ownerId ?? "", JSON.stringify(m));
 		db.exec("COMMIT");
+		// Reporting failure must not change generation or credit settlement.
+		try { usageReportObserver?.(batch); } catch (e) { console.warn('[usage-report] queue failed', (e as Error).message); }
 	} catch {
 		try { db.exec("ROLLBACK"); } catch { /* 已回滚 */ }
 		/* 落库失败不崩进程：内存索引仍为准，下次该条再变更时会重试 */
@@ -247,6 +267,10 @@ function deleteDayFile(day: string): void {
 
 function toMeta(r: Record<string, unknown>): LogMeta {
 	return {
+		usageReportScope: r.usageReportScope as UsageReportScope | undefined,
+		usageProduct: r.usageProduct as UsageProduct | undefined,
+    localExecution: r.localExecution === true || undefined,
+    localRefundOnFailure: typeof r.localRefundOnFailure === 'boolean' ? r.localRefundOnFailure : undefined,
 		id: String(r.id),
 		clientTaskId: r.clientTaskId as string | undefined,
 		taskId: r.taskId as string | undefined,
@@ -257,6 +281,10 @@ function toMeta(r: Record<string, unknown>): LogMeta {
 		ownerId: r.ownerId as string | undefined,
 		agentCosts: Array.isArray(r.agentCosts) ? (r.agentCosts as { id: string; cost: number }[]) : undefined,
 		payerId: r.payerId as string | undefined,
+		userWallet: r.userWallet as LogMeta['userWallet'],
+		creditSource: r.creditSource as LogMeta['creditSource'],
+		pricingAgentId: r.pricingAgentId as string | undefined,
+		teamId: r.teamId as string | undefined,
 		purpose: r.purpose as string | undefined,
 		model: r.model as string | undefined,
 		cost: r.cost as number | undefined,
@@ -370,6 +398,8 @@ function loadIndex(): LogMeta[] {
 }
 
 let index: LogMeta[] = loadIndex();
+const logById = new Map(index.map(m => [m.id, m]));
+const runningLogIds = new Set(index.filter(m => m.status === 'running').map(m => m.id));
 
 // 第168轮：存量请求记录「失败原因」一次性补擦渠道识别信息（新记录已在 applyFinishMeta 收口；
 // ③④上游报文段不动——仅源站管理端可见，留全量供排障。flag 文件防每次启动全量重扫）
@@ -402,6 +432,7 @@ function trimAndPrune(): void {
 	for (const m of index) if (dayOf(m.startedAt) < metaCutoffDay) dropDays.add(dayOf(m.startedAt));
 	if (dropDays.size) {
 		for (const m of index) if (dropDays.has(dayOf(m.startedAt))) deleteDetail(m.id);
+		for (const m of index) if (dropDays.has(dayOf(m.startedAt))) { logById.delete(m.id); runningLogIds.delete(m.id); }
 		index = index.filter((m) => !dropDays.has(dayOf(m.startedAt)));
 		for (const d of dropDays) deleteDayFile(d);
 	}
@@ -482,6 +513,8 @@ export function backfillLogOwners(agentOfUser: (userId: string) => string | unde
 }
 
 export function startLog(input: {
+  localExecution?: boolean;
+  localRefundOnFailure?: boolean;
 	req: GenerateRequest;
 	userId?: string;
 	userName?: string;
@@ -490,12 +523,18 @@ export function startLog(input: {
 	agentCosts?: { id: string; cost: number }[];
 	/** 实际扣款人（团队共享=团长）；与 userId 相同时传 undefined */
 	payerId?: string;
+	userWallet?: LogMeta['userWallet'];
+	creditSource?: LogMeta['creditSource'];
+	pricingAgentId?: string;
+	teamId?: string;
 	/** 归属渠道商（用户的直属商 id；平台直属不传）——第198轮落笔固化，商属视图按它过滤 */
 	ownerId?: string;
 	headers?: unknown;
 }): LogMeta {
 	const meta: LogMeta = {
 		id: genId("log"),
+    localExecution: input.localExecution,
+    localRefundOnFailure: input.localRefundOnFailure,
 		clientTaskId: input.req.clientTaskId,
 		userId: input.userId,
 		userName: input.userName,
@@ -505,10 +544,17 @@ export function startLog(input: {
 		cost: input.cost,
 		agentCosts: input.agentCosts?.length ? input.agentCosts : undefined,
 		payerId: input.payerId,
+		userWallet: input.userWallet,
+		creditSource: input.creditSource,
+		pricingAgentId: input.pricingAgentId,
+		teamId: input.teamId,
 		status: "running",
 		startedAt: new Date().toISOString(),
 	};
+	try { meta.usageReportScope = usageReportCapture?.(meta); } catch (e) { console.warn('[usage-report] capture failed', (e as Error).message); }
 	index.push(meta);
+	logById.set(meta.id, meta);
+	runningLogIds.add(meta.id);
 	writeDetail(meta.id, { requestHeaders: maskHeaders(input.headers), request: truncateBase64(input.req) });
 	markDirty(meta);
 	flushIndex();
@@ -526,6 +572,7 @@ export interface FinishPatch {
 
 function applyFinishMeta(m: LogMeta, patch: FinishPatch): void {
 	m.status = patch.status;
+  runningLogIds.delete(m.id);
 	m.finishedAt = new Date().toISOString();
 	// ⚠ durationMs 仍是整段墙钟（含排队）——口径不变，显示端按 queuedMs 拆成「实际（排队）」
 	m.durationMs = new Date(m.finishedAt).getTime() - new Date(m.startedAt).getTime();
@@ -534,12 +581,24 @@ function applyFinishMeta(m: LogMeta, patch: FinishPatch): void {
 	if (patch.error) m.error = scrubChannelInfo(patch.error, !m.model?.startsWith('route:'));
 	if (patch.taskId) m.taskId = patch.taskId;
 	if (patch.response !== undefined) m.resultLink = resultLinkFrom(patch.response) || undefined;
+  if (patch.status === 'success') m.usageProduct = extractUsageProduct(m.purpose, { ...readDetail(m.id), ...(patch.response !== undefined ? { response: patch.response } : {}) }, m.usageProduct, m.localExecution);
+}
+
+/** Upgrade retained successes and reclassify old processing records, even after detail pruning. */
+export function backfillUsageProducts(since: string): void {
+  for (const m of index) {
+    if (m.startedAt < since || m.status !== 'success') continue;
+    if (m.usageProduct && m.usageProduct.kind === productKind(m.purpose)) continue;
+    m.usageProduct = extractUsageProduct(m.purpose, readDetail(m.id) ?? {}, undefined, m.localExecution);
+    if (m.usageProduct) markDirty(m);
+  }
+  flushIndex();
 }
 
 /** 完成一条日志：更新索引元信息（防抖落盘）+ 把 ②响应 写入详情文件 */
 export function finishLog(id: string, patch: FinishPatch): void {
   if (patch.status === 'success' || patch.status === 'failed') { finishRouteObservation(id, patch.status === 'success', patch.error); finishChannelObservation(id, patch.status === 'success', patch.error); }
-	const m = index.find((x) => x.id === id);
+	const m = logById.get(id);
 	if (!m) return;
 	applyFinishMeta(m, patch);
 	if (patch.response !== undefined) patchDetail(id, { response: truncateBase64(patch.response) });
@@ -553,7 +612,7 @@ export function finishLog(id: string, patch: FinishPatch): void {
  * 只动 响应段+resultLink，不动 status/finishedAt/耗时（统计口径不受改写影响）。
  */
 export function rewriteLogResult(id: string, response: unknown): void {
-	const m = index.find((x) => x.id === id);
+	const m = logById.get(id);
 	if (!m || m.status !== "success") return;
 	m.resultLink = resultLinkFrom(response) || m.resultLink;
 	patchDetail(id, { response: truncateBase64(response) });
@@ -566,7 +625,7 @@ export function finishLogsBulk(patches: ({ id: string } & FinishPatch)[]): void 
 	if (!patches.length) return;
 	for (const p of patches) {
 		if (p.status === 'success' || p.status === 'failed') finishRouteObservation(p.id, p.status === 'success', p.error);
-		const m = index.find((x) => x.id === p.id);
+		const m = logById.get(p.id);
 		if (!m) continue;
 		applyFinishMeta(m, p);
 		if (p.response !== undefined) patchDetail(p.id, { response: truncateBase64(p.response) });
@@ -606,13 +665,19 @@ export function logCodeIssue(input: {
 		durationMs: 0,
 	};
 	index.push(meta);
+	logById.set(meta.id, meta);
 	if (input.summary !== undefined) writeDetail(meta.id, { request: truncateBase64(input.summary) });
 	markDirty(meta);
 	flushIndex();
 	return meta;
 }
 
-/** 仍为 running 的日志（启动对账用）：合并详情（对账要读 ④段救回视频） */
+/** Freeze startup IDs without loading heavy request/response bodies. */
+export function getRunningLogIds(): string[] {
+	return [...runningLogIds].filter(id => !logById.get(id)?.localExecution);
+}
+
+/** 仍为 running 的日志：合并详情（对账要读 ④段救回视频） */
 export function getRunningLogs(): LogEntry[] {
 	return index.filter((l) => l.status === "running").map((m) => ({ ...m, ...(readDetail(m.id) ?? {}) }));
 }
@@ -620,7 +685,7 @@ export function getRunningLogs(): LogEntry[] {
 /** 记录上游(管理端↔网关/第三方)的请求体与原始响应；只写详情文件、不动索引。 */
 export function attachUpstream(id: string, rec: { request?: unknown; response?: unknown }): void {
   observeUpstream(id, rec);
-	if (!index.some((x) => x.id === id)) return;
+	if (!logById.has(id)) return;
 	const patch: LogDetail = {};
 	if (rec.request !== undefined) patch.upstreamRequest = truncateBase64(rec.request);
 	if (rec.response !== undefined) patch.upstreamResponse = truncateBase64(rec.response);
@@ -631,6 +696,8 @@ export function attachRouting(id: string, routing: NonNullable<LogDetail['routin
 }
 
 export interface LogFilter {
+  /** 管理端家族/实际承接模型筛选，列表、统计和导出共用。 */
+  matchesModel?: (log: LogMeta) => boolean;
 	from?: number; // startedAt ≥ from（epoch ms）
 	to?: number; // startedAt < to（epoch ms）
 	/** 归属范围（第198轮按渠道商分类）：仅这些归属的记录——渠道商 id；PLATFORM_OWNER=平台直属（ownerId 为空）。
@@ -669,6 +736,7 @@ export function logCostFor(l: LogMeta, view?: LogCostView): number | undefined {
 	if (view.kind === "agent") {
 		// 带链信息＝本商积分池的变动（发码/节点池扣/旧链式）；无链信息＝名下用户实扣（第220轮）
 		if (l.agentCosts) return l.agentCosts.find((a) => a.id === view.agentId)?.cost ?? 0;
+		if (l.creditSource) return 0;
 		return l.cost;
 	}
 	// platform：带链=根级实扣；无链=用户实扣（统一定价，源站实收=用户扣费——第220轮补充）
@@ -702,6 +770,7 @@ export function filterLogs(opts?: LogFilter): LogMeta[] {
 	if (opts?.userName) arr = arr.filter((l) => has(l.userName || "", opts.userName));
 	if (opts?.purpose) arr = arr.filter((l) => has((l.purpose || "") + " " + purposeLabel(l.purpose), opts.purpose));
 	if (opts?.model) arr = arr.filter((l) => has(l.model || "", opts.model));
+  if (opts?.matchesModel) arr = arr.filter(opts.matchesModel);
 	if (opts?.status) arr = arr.filter((l) => l.status === opts.status);
 	return arr;
 }
@@ -727,7 +796,7 @@ export interface LogExportRow {
 }
 
 /** 导出用：按筛选取全部匹配（不分页，旧→新）映射成表格行；view=消耗视角（缺省=用户侧） */
-export function exportLogs(opts?: LogFilter, view?: LogCostView): LogExportRow[] {
+export function exportLogs(opts?: LogFilter, view?: LogCostView, display?: (log: LogMeta) => Record<string, unknown>): LogExportRow[] {
 	return filterLogs(opts).map((l) => {
 		const c = logCostFor(l, view);
 		return {
@@ -736,7 +805,9 @@ export function exportLogs(opts?: LogFilter, view?: LogCostView): LogExportRow[]
 			finishedAt: l.finishedAt || "",
 			purpose: purposeLabel(l.purpose) || l.purpose || "",
 			model: l.model || "",
+            ...display?.(l),
 			cost: c != null ? c : "",
+			...(view?.kind === 'agent' ? { userCost: l.cost ?? '' } : {}),
 			status: l.status,
 			resultLink: l.status === "success" ? (l.resultLink || "") : "",
 			error: l.status === "failed" ? (l.error || "") : "",
@@ -769,7 +840,7 @@ export function userModelStats(userId: string, opts?: { from?: number; to?: numb
 		if (l.status === "success") { r.success++; totalSuccess++; }
 		else if (l.status === "failed") { r.failed++; totalFailed++; }
 		else { r.running++; totalRunning++; }
-		if (l.status !== "failed" && l.cost) { r.credits += l.cost; totalCredits += l.cost; }
+		if ((l.status !== "failed" || l.localExecution && l.localRefundOnFailure === false) && l.cost) { r.credits += l.cost; totalCredits += l.cost; }
 		rows.set(key, r);
 	}
 	const byModel = [...rows.entries()]
@@ -800,7 +871,7 @@ export function logSummary(opts?: LogFilter, view?: LogCostView): {
 	const bp = new Map<string, { count: number; success: number; credits: number }>();
 	const bu = new Map<string, { count: number; credits: number }>();
 	for (const l of arr) {
-		const c = l.status !== "failed" ? (logCostFor(l, view) || 0) : 0;
+		const c = l.status !== "failed" || l.localExecution && l.localRefundOnFailure === false ? (logCostFor(l, view) || 0) : 0;
 		credits += c;
 		if (l.status === "success") success++;
 		else if (l.status === "failed") failed++;
@@ -844,9 +915,15 @@ export function logFacets(scope?: LogFilter): { users: string[]; purposes: strin
 
 /** 详情视图/对账：合并元信息 + 该条重报文（按需从详情文件读取） */
 export function getLog(id: string): LogEntry | undefined {
-	const m = index.find((x) => x.id === id);
+	const m = logById.get(id);
 	if (!m) return undefined;
 	return { ...m, ...(readDetail(id) ?? {}) };
+}
+
+/** Metadata-only access for expiry checks; never loads upstream bodies. */
+export function getLogMeta(id: string): LogMeta | undefined {
+  const meta = logById.get(id);
+  return meta ? { ...meta } : undefined;
 }
 
 /** 最近 n 天的 UTC 日期串（YYYY-MM-DD），升序，末位为今天。 */
@@ -879,7 +956,7 @@ export function requestStats(days = 14): {
 			reqByDay[i].total++;
 			if (l.status === "failed") reqByDay[i].failed++;
 			else if (l.status === "success") reqByDay[i].success++;
-			if (l.status !== "failed" && l.cost) creditByDay[i].credits += l.cost;
+			if ((l.status !== "failed" || l.localExecution && l.localRefundOnFailure === false) && l.cost) creditByDay[i].credits += l.cost;
 		}
 		if (l.purpose) byPurpose.set(l.purpose, (byPurpose.get(l.purpose) || 0) + 1);
 		if (l.model) byModel.set(l.model, (byModel.get(l.model) || 0) + 1);
@@ -895,9 +972,10 @@ export function requestStats(days = 14): {
 	};
 }
 
-export function updateTextBillingLog(id: string, billing: import('../contract.ts').TextBill, usage?: import('../contract.ts').TextTokenUsage): void {
-  const m = index.find(x => x.id === id); if (!m) return;
-  if (m.agentCosts?.length) m.agentCosts = m.agentCosts.map(a => ({...a, cost: billing.cost}));
+export function updateTextBillingLog(id: string, billing: import('../contract.ts').TextBill, usage?: import('../contract.ts').TextTokenUsage, amounts?: { userAmount: number; agents: { id: string; cost: number }[] }): void {
+  const m = logById.get(id); if (!m) return;
+  if (amounts) { m.cost = amounts.userAmount; m.agentCosts = amounts.agents; }
+  else if (m.agentCosts?.length) m.agentCosts = m.agentCosts.map(a => ({...a, cost: billing.cost}));
   else m.cost = billing.cost;
   m.textBilling = billing; m.usage = usage; markDirty(m); flushIndex();
 }

@@ -13,6 +13,8 @@ export type Command =
   | { type: "resizeNode"; id: string; w: number; h: number }
   | { type: "updateNodeParams"; id: string; params: Record<string, unknown> }
   | { type: "deleteNode"; id: string }
+  /** One user deletion, including any independently selected edges, is one undo step. */
+  | { type: "deleteElements"; nodeIds?: string[]; edgeIds?: string[] }
   | { type: "connect"; edge: CanvasEdge }
   | { type: "disconnect"; edgeId: string }
   | {
@@ -74,6 +76,7 @@ export const STRUCTURAL_COMMANDS: ReadonlySet<CommandType> =
     "updateNodePosition",
     "resizeNode",
     "deleteNode",
+    "deleteElements",
     "connect",
     "disconnect",
     "pasteNodes",

@@ -1,3 +1,4 @@
+import { resolveImageNamed } from './openai.ts';
 /**
  * 星辰（AIStartLab OpenAPI）视频渠道翻译器（第132轮接入，异步 submit+poll）。
  *
@@ -288,14 +289,11 @@ export async function submitAistarsImage(req: GenerateRequest, up: Upstream, onU
 	const cap = IMG_LINES[`${channel}|${model}`];
 
 	// 素材：图片线仅收参考图（视频/音频明确报错，绝不静默丢——防 @tag 图例错位）
-	const imgs = resolveNamed(req.inputs?.images);
+	const imgs = await resolveImageNamed(req,up.imageMaterialMode);
 	const vids = resolveNamed(req.inputs?.videos);
 	const auds = resolveNamed(req.inputs?.audios);
 	if (vids.length || auds.length) {
 		return { ok: false, error: "星辰图片线路只接受图片参考素材，请移除视频/音频素材后重试" };
-	}
-	if (cap && imgs.length > cap.img) {
-		return { ok: false, error: `该线路参考图上限 ${cap.img} 张（当前 ${imgs.length} 张），请精简图片素材后重试` };
 	}
 
 	// prompt 注入 @Image 图例（该家无引用语法，图例作普通说明文字——与视频同款）；上游硬限 5000 字符同视频

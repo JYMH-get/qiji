@@ -1,6 +1,19 @@
-import { channelAvailability } from '../channelAvailability.ts';
+import { effectiveImageMaterialMode } from '../translators/upstream.ts';
+import { registerUsageReportRoutes } from './usageReports.ts';
+import { registerLocalGenerationSettings } from './localGenerationReports.ts';
+import { registerCodeCleanupRoutes } from './codeCleanup.ts';
+import { logCreditDisplay } from '../logCreditDisplay.ts';
+import { materialPolicyForModel, validateMaterialPolicy, validateModelMaterialPolicy } from '../materialPolicy.ts';
+import { agentLinesView, saveAgentBusinessLine } from '../agentLines.ts';
+import { groupPricesView, updateGroupLinePrice } from '../groupPricing.ts';
+import { clientUpdateProfile, registerClientUpdateAdmin } from "./clientUpdate.ts";
+import { createLogModelSearch } from '../logModelSearch.ts';
+import { validateImageSizeMap } from '../imageSizes.ts';
+import { channelAvailability, modelHistoryScope, refreshChannelAvailability, parseAvailabilityRange, resetModelRateHistory } from '../channelAvailability.ts';
+import { lineHistoryScope, resetLineRateHistory } from '../lineAvailability.ts';
+import { adjustmentView, editHistory, HistoryEditError } from '../availabilityAdjustments.ts';
 import { validateTextPricing } from '../textPricing.ts';
-import { routingConfig, saveRoutingConfig, initialRoutingConfig, routingHealth, resetRouteHealth, accessModes, seedanceFamilyOf, lineModel, highestLinePrices, routingAvailability, routingChannelName, withImageRouting, withSeedanceVariantRouting, routingFamilyOptions } from "../autoRouting.ts";
+import { routingConfig, saveRoutingConfig, initialRoutingConfig, routingHealth, resetRouteHealth, accessModes, seedanceFamilyOf, lineModel, highestLinePrices, routingAvailability, routingChannelName, withImageRouting, withSeedanceVariantRouting, withDefaultRouting, routingFamilyOptions } from "../autoRouting.ts";
 import { routingHourlyStats } from '../routeObservations.ts';
 import { routeLogLabel } from '../routeLogDisplay.ts';
 /**
@@ -14,6 +27,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { requireAdmin } from "../auth.ts";
+import { sourceInviteConflict } from "../tenantIdentity.ts";
+import { listPublishedMessages, publishMessage } from "../store/messages.ts";
 import {
 	listUsers, getUser, createUser, updateUser, deleteUser, genAccessKey, dailySpentToday, userStats, usersByAgent,
 	setUserPassword, activeMembershipOf, applyMembershipGrant, revokeMembership, grantCredits,
@@ -56,9 +71,9 @@ import {
 	listPresets, getPresetDef, createPreset, updatePreset, deletePreset,
 	type PresetDef,
 } from "../store/presets.ts";
-import { listLogs, getLog, logFacets, requestStats, exportLogs, userModelStats, logSummary, logCostFor, logCodeIssue, PLATFORM_OWNER, type LogCostView } from "../store/logs.ts";
+import { listLogs, filterLogs, getLog, logFacets, requestStats, exportLogs, userModelStats, logSummary, logCostFor, logCodeIssue, PLATFORM_OWNER, type LogCostView } from "../store/logs.ts";
 import { buildDownloadManifest, downloadManifestSummary, parseDownloadQuery } from "../store/assetExport.ts";
-import { listCodes, createCodes, deleteCode, codesByAgent, platformCodes, pruneInvalidCodes } from "../store/redeemCodes.ts";
+import { listCodes, getCode, createCodes, deleteCode, codesByAgent, platformCodes, pruneInvalidCodes } from "../store/redeemCodes.ts";
 import {
 	listAllLibraries, createLibrary as createSharedLibrary, updateLibrary as updateSharedLibrary,
 	deleteLibrary as deleteSharedLibrary, libraryCounts, getLibrary as getSharedLibrary,
@@ -74,16 +89,17 @@ import {
 import {
 	getOssConfig, setOssConfig,
 	getTeamMemberLimit, setTeamMemberLimit,
-	getFavQuotaBytes, setFavQuotaBytes, getTeamLibQuotaBytes, setTeamLibQuotaBytes, getStorageCodeSpec, setStorageCodeSpec,
-	getRegisterSettings, setRegisterSettings, getDeviceLimit, setDeviceLimit,
+	getFavQuotaBytes, setFavQuotaBytes, getTeamLibQuotaBytes, setTeamLibQuotaBytes,
+	getRegisterSettings, getDeviceLimit,
+	getSourceInviteCode, getSourceRedeemCodePrefix, validateSourceSettingsUpdate, applySourceSettingsUpdate,
 } from "../store/settings.ts";
 import { isSmtpConfigured, sendMail } from "../services/mailer.ts";
 import { isSmsConfigured } from "../services/smsAliyun.ts";
-import { transferUsers } from "../services/userTransfer.ts";
+import { previewUserTransfer, transferUsers, listUserTransfers } from "../services/userTransfer.ts";
 import { isOssConfigured, ossSelfTest, ossPut, ossPresignPut, ossPublicUrl } from "../store/oss.ts";
 import { getSiteConfig, updateSiteConfig, setSiteImage, SITE_IMAGE_SLOTS } from "../store/site.ts";
 import { favoriteOwnersOverview, favoritedAssetCount, grantedBytes, addFavorite, removeFavorite } from "../store/favorites.ts";
-import { listStorageCodes, createStorageCodes, deleteStorageCode } from "../store/storageCodes.ts";
+import { listStorageCodes, deleteStorageCode } from "../store/storageCodes.ts";
 import { sweepPreview, setRetentionDays } from "../store/retention.ts";
 import { cleanupOverview, setCleanupConfig, runCleanupOnce } from "../store/cleanup.ts";
 import { listCreditOps } from "../store/credits.ts";
@@ -101,12 +117,55 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 	app.get("/admin", async (_req, reply) => {
 		const html = readFileSync(ADMIN_HTML, "utf8")
 			.replace("</body>", `<script>${readFileSync(new URL("../admin/prompt-library.js", import.meta.url), "utf8")}</script><script>${readFileSync(new URL("../admin/user-prompt-backups.js", import.meta.url), "utf8")}</script><script>${readFileSync(new URL("../admin/channels.js", import.meta.url), "utf8")}</script><script>${readFileSync(new URL("../admin/auto-routing.js", import.meta.url), "utf8")}</script></body>`)
+			.replace("</body>", `<script>${readFileSync(new URL("../admin/client-update.js", import.meta.url), "utf8")}</script><script>${readFileSync(new URL("../admin/agent-lines.js", import.meta.url), "utf8")}</script></body>`)
+			.replace("</body>", `<script>${readFileSync(new URL("../admin/source-settings.js", import.meta.url), "utf8")}</script><script>${readFileSync(new URL("../admin/user-transfer.js", import.meta.url), "utf8")}</script></body>`)
+			.replace("</body>", `<script>${readFileSync(new URL("../admin/usage-reports.js", import.meta.url), "utf8")}</script></body>`)
+			.replace("</body>", `<script>${readFileSync(new URL("../admin/group-pricing.js", import.meta.url), "utf8")}</script></body>`)
 			.replace("</title>", `</title>\n<script>window.__NODE_ROLE__=${JSON.stringify(config.role)};</script>`);
 		return reply.header("Cache-Control", "no-store").header("Content-Type", "text/html; charset=utf-8").send(html);
 	});
 
 	await app.register(async (api) => {
 		api.addHook("preHandler", requireAdmin);
+		registerUsageReportRoutes(api, false);
+		registerLocalGenerationSettings(api);
+		registerCodeCleanupRoutes(api, false);
+		api.addHook("preHandler", async (req, reply) => {
+			if (isRelay() || req.method === "GET" || req.method === "HEAD") return;
+			const path = req.url.split("?")[0];
+			const body = (req.body && typeof req.body === "object" ? req.body : {}) as Record<string, unknown>;
+			const userMatch = /^\/admin-api\/users\/([^/]+)/.exec(path);
+			if (userMatch && getUser(decodeURIComponent(userMatch[1]))?.agentId) {
+				return reply.code(403).send({ error: { message: "渠道商用户由所属渠道商管理，源站仅可查看" } });
+			}
+			if (path === "/admin-api/users" && body.agentId) return reply.code(403).send({ error: { message: "请在渠道商后台创建其名下用户" } });
+			if (path === "/admin-api/users/batch-op" && Array.isArray(body.ids) && body.ids.some(id => typeof id === "string" && getUser(id)?.agentId)) {
+				return reply.code(403).send({ error: { message: "所选用户包含渠道商用户，本次未执行任何修改" } });
+			}
+			if (/^\/admin-api\/agents\/[^/]+$/.test(path) && req.method === "PUT" && Object.hasOwn(body, "password")) {
+				return reply.code(403).send({ error: { message: "渠道商密码由渠道商在设置中修改" } });
+			}
+		});
+		function sourceUserView(user: User) {
+			const { passwordHash, passwordSalt, transferHistory, ...view } = user;
+			return { ...view, accessKey: user.agentId ? undefined : user.accessKey, devices: user.agentId ? undefined : user.devices,
+				readOnly: !!user.agentId, dailySpent: dailySpentToday(user), totalSpent: user.totalSpent || 0, hasAccount: !!user.account };
+		}
+		api.get("/admin-api/messages", async (_req, reply) => {
+			if (isRelay()) return reply.code(403).send({ error: { message: "消息发布仅供源站管理" } });
+			return { items: listPublishedMessages("source") };
+		});
+		api.post("/admin-api/messages", async (req, reply) => {
+			if (isRelay()) return reply.code(403).send({ error: { message: "消息发布仅供源站管理" } });
+			const b = (req.body ?? {}) as Record<string, unknown>;
+			if (Object.keys(b).some(key => !["kind", "audience", "audienceId", "title", "body"].includes(key))) return reply.code(400).send({ error: { message: "消息字段无效" } });
+			if (!["notice", "announcement"].includes(String(b.kind)) || !["all", "source", "agent"].includes(String(b.audience))) return reply.code(400).send({ error: { message: "消息类型或接收范围无效" } });
+			if (b.audience === "agent" && (typeof b.audienceId !== "string" || !getAgent(b.audienceId))) return reply.code(400).send({ error: { message: "请选择有效渠道商" } });
+			if (typeof b.title !== "string" || typeof b.body !== "string") return reply.code(400).send({ error: { message: "请填写标题和正文" } });
+			try {
+				return { item: publishMessage({ issuer: "source", kind: b.kind as "notice" | "announcement", audience: b.audience as "all" | "source" | "agent", audienceId: b.audience === "agent" ? b.audienceId as string : undefined, title: b.title, body: b.body }) };
+			} catch (error) { return reply.code(400).send({ error: { message: (error as Error).message } }); }
+		});
 
 		api.get('/admin-api/user-prompt-backups', async (req, reply) => {
 			if (isRelay()) return reply.code(403).send({ error: { message: '用户预设备份仅供源站管理员查看' } });
@@ -144,12 +203,22 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 					: listUsers().filter((u) => !u.agentId);
 			// 脱敏：绝不外泄 passwordHash/passwordSalt（附派生 hasAccount 供前端展示注册态）
 			return {
-				items: list.map(({ passwordHash, passwordSalt, ...u }) => ({
-					...u, dailySpent: dailySpentToday(u), totalSpent: u.totalSpent || 0, hasAccount: !!u.account,
-				})),
+				items: list.map(sourceUserView),
 			};
 		});
 		api.post("/admin-api/users", async (req) => createUser((req.body ?? {}) as any));
+		api.post("/admin-api/users/transfer/preview", async (req, reply) => {
+			if (isRelay()) return reply.code(403).send({ error: { message: "用户归属迁移仅限源站管理员操作" } });
+			const result = previewUserTransfer(req.body);
+			if (!result.ok) return reply.code(result.status).send({ error: result.error });
+			return result;
+		});
+		api.get("/admin-api/users/transfer-history", async (req, reply) => {
+			if (isRelay()) return reply.code(403).send({ error: { message: "用户归属迁移仅限源站管理员查看" } });
+			const { userId } = req.query as { userId?: string };
+			if (userId !== undefined && (!userId.trim() || !getUser(userId))) return reply.code(404).send({ error: { message: "用户不存在" } });
+			return listUserTransfers(userId);
+		});
 		api.post("/admin-api/users/transfer", async (req, reply) => {
 			if (isRelay()) return reply.code(403).send({ error: { message: "用户归属迁移仅限源站管理员操作" } });
 			const result = transferUsers(req.body);
@@ -174,7 +243,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 					case "delete": if (deleteUser(id)) affected++; break;
 					case "setFeature": { // 批量开关固定模式（assetMode/canvasMode/editorMode/libtv/dreamina/comfyui）
 						if (!b.feature) break;
-						const f: Record<string, unknown> = { assetMode: true, canvasMode: true, editorMode: true, libtv: true, dreamina: true, comfyui: true, ...(u.features ?? {}) };
+						const f: Record<string, unknown> = { dualMode: true, assetMode: true, canvasMode: true, editorMode: true, libtv: true, dreamina: true, comfyui: true, ...(u.features ?? {}) };
 						f[b.feature] = b.value !== false;
 						if (updateUser(id, { features: f as User["features"] })) affected++;
 						break;
@@ -192,7 +261,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 		});
 		api.put("/admin-api/users/:id", async (req, reply) => {
 			const { id } = req.params as { id: string };
-			if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "agentId")) {
+			if (["id", "createdAt", "agentId", "transferHistory", "teamWallets"].some(key => Object.prototype.hasOwnProperty.call(req.body ?? {}, key))) {
 				return reply.code(400).send({ error: { message: "请通过用户迁移功能变更归属" } });
 			}
 			const u = updateUser(id, (req.body ?? {}) as any);
@@ -313,9 +382,12 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 				return reply.code(400).send({ error: { message: "缺少 id/label/capability/protocol" } });
 			}
 			try {
+        if ('materialPolicy' in b) validateMaterialPolicy(b.materialPolicy);
+        if ('saveToOss' in b && typeof b.saveToOss !== 'boolean') throw new Error('是否保存 OSS 必须为布尔值');
         if ('tokenPricing' in b) validateTextPricing(b.tokenPricing);
         if (b.tokenPricing && (b.capability !== 'text' || b.hidden)) throw new Error('仅文本生成模型支持 token 计费');
       } catch(e) { return reply.code(400).send({error:{message:(e as Error).message}}); }
+      try { if ('imageSizeMap' in b) validateImageSizeMap(b.imageSizeMap); } catch(e) { return reply.code(400).send({error:{message:(e as Error).message}}); }
       return maskModel(createModel(b as any));
 		});
 		api.put("/admin-api/models/:id", async (req, reply) => {
@@ -326,8 +398,14 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			const existing = getModelDef(id);
       if (!existing) return reply.code(404).send({error:{message:'模型不存在'}});
       try {
+        if ('enabled' in body && body.enabled !== existing.enabled && routingConfig().enabled) throw new Error('自动路由已开启，请在自动路由中设置渠道启用状态');
+        if ('enabled' in body && typeof body.enabled !== 'boolean') throw new Error('模型启用状态必须为布尔值');
+        if ('materialPolicy' in body) validateMaterialPolicy(body.materialPolicy);
+        if ('saveToOss' in body && typeof body.saveToOss !== 'boolean') throw new Error('是否保存 OSS 必须为布尔值');
+        if ('imageSizeMap' in body) validateImageSizeMap(body.imageSizeMap);
         if ('tokenPricing' in body) validateTextPricing(body.tokenPricing);
         const next = {...existing,...body} as ModelDef;
+        validateModelMaterialPolicy(next);
         if (next.tokenPricing && (next.capability !== 'text' || next.hidden)) throw new Error('仅文本生成模型支持 token 计费');
       } catch(e) { return reply.code(400).send({error:{message:(e as Error).message}}); }
       const m = updateModel(id, body as any);
@@ -342,12 +420,61 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 
     // ── 模式（第130轮）：动态视频模式注册表。新建模型选模式、用户/渠道商按模式开关；删除模式清空引用它的模型 modeId ──
 		api.get("/admin-api/modes", async () => ({ items: accessModes() }));
-		api.get('/admin-api/channel-availability', async () => channelAvailability());
-		api.get("/admin-api/auto-routing", async () => ({
-			families: routingFamilyOptions(withImageRouting(withSeedanceVariantRouting(routingConfig().lines.length ? routingConfig() : initialRoutingConfig()))), config: routingConfig(), initial: withImageRouting(withSeedanceVariantRouting(routingConfig().lines.length ? routingConfig() : initialRoutingConfig())), health: routingHealth(), availability: routingAvailability(),
-			previews: routingConfig().lines.map(l => ({ id: l.id, model: lineModel(l) })),
-			models: listModels().filter(m => ['video','image'].includes(m.capability)).map(m => ({ id: m.id, label: m.label, familyId: seedanceFamilyOf(m), channelId: m.channelId, channelName: routingChannelName(m.channelId ?? ""), enabled: m.enabled, params: m.params }))
-		}));
+		api.get('/admin-api/channel-availability', async (req,reply) => {
+			const now=Date.now();let range;
+			try{range=parseAvailabilityRange(req.query as Record<string,unknown>,now);}catch(e){return reply.code(400).send({error:{message:(e as Error).message}});}
+			return channelAvailability(now,range);
+		});
+		const historyTarget=(id:string,selected?:string)=>{
+			const model=getModelDef(id);if(!model)throw new HistoryEditError('模型不存在',404);
+			const targets=[...routingConfig().lines.filter(l=>l.members.some(m=>m.modelId===id)).map(l=>({key:'line:'+l.id,label:'线路 · '+l.name})),{key:'model',label:'仅此底层模型（管理端）'}];
+			const key=selected??targets[0].key;
+			if(!targets.some(t=>t.key===key))throw new HistoryEditError('该模型不属于所选线路');
+			return {targets,key,target:key==='model'?modelHistoryScope(id):lineHistoryScope(key.slice(5))};
+		};
+		api.get('/admin-api/models/:id/rate-history',async(req,reply)=>{
+			try{const {id}=req.params as {id:string};const {target:selected}=req.query as {target?:string};const {target,...selection}=historyTarget(id,selected);return {...selection,...adjustmentView(target,Date.now())};}
+			catch(e){if(e instanceof HistoryEditError)return reply.code(e.status).send({error:{message:e.message}});throw e;}
+		});
+		api.put('/admin-api/models/:id/rate-history',async(req,reply)=>{
+			try{const {id}=req.params as {id:string};const body=(req.body??{}) as {target?:string;epoch?:string;edits?:unknown};const {target,...selection}=historyTarget(id,body.target);if(body.epoch!==target.epoch)throw new HistoryEditError('统计对象已重置或变化，请重新读取后再保存',409);const result=editHistory(target,body.edits);refreshChannelAvailability();return {...selection,...result};}
+			catch(e){if(e instanceof HistoryEditError)return reply.code(e.status).send({error:{message:e.message}});throw e;}
+		});
+		api.post('/admin-api/models/:id/rate-history/reset',async(req,reply)=>{
+			try{
+				const {id}=req.params as {id:string};const body=(req.body??{}) as {target?:string;epoch?:string};
+				const {target,key,...selection}=historyTarget(id,body.target??'model');
+				if(body.epoch!==target.epoch)throw new HistoryEditError('快照状态已变化，请重新读取后再重置',409);
+				if(key==='model')resetModelRateHistory(id);else resetLineRateHistory(key.slice(5));
+				refreshChannelAvailability();const fresh=historyTarget(id,key);
+				return {...selection,key,...adjustmentView(fresh.target,Date.now())};
+			}catch(e){if(e instanceof HistoryEditError)return reply.code(e.status).send({error:{message:e.message}});throw e;}
+		});
+		api.delete('/admin-api/auto-routing/families/:id', async (req, reply) => {
+			const { id } = req.params as { id: string };
+			const current = routingConfig();
+			if ((req.body as { version?: number } | undefined)?.version !== current.version) return reply.code(409).send({ error: { message: '配置已更新，请刷新后重试' } });
+			const families = routingFamilyOptions(withImageRouting(withSeedanceVariantRouting(current)));
+			if (!families.some(f => f.id === id)) return reply.code(404).send({ error: { message: '家族不存在' } });
+			const models = listModels().map(m => ({ model: m, effective: seedanceFamilyOf(m) }));
+			const affected = models.filter(m => m.effective === id);
+			const ids = new Set(affected.map(m => m.model.id));
+			const config = saveRoutingConfig({ ...current, deletedFamilyIds: [...(current.deletedFamilyIds ?? []), id], lines: current.lines.filter(l => l.familyId !== id).map(l => ({ ...l, members: l.members.filter(m => !ids.has(m.modelId)) })) });
+			// 旧家族编号可能被多个实际型号共用：保留其他实际家族的归属。
+			for (const { model, effective } of models) {
+				if (effective === id) updateModel(model.id, { enabled: false, familyId: '' });
+				else if (model.familyId === id && effective) updateModel(model.id, { familyId: effective });
+			}
+			deleteFamily(id);
+			return { ok: true, config, disabledModelIds: [...ids] };
+		});
+        api.get("/admin-api/auto-routing", async () => {
+            const config=routingConfig();
+            const initial=withDefaultRouting(withImageRouting(withSeedanceVariantRouting(config.version || config.lines.length ? config : {...initialRoutingConfig(),enabled:config.enabled})));
+            return {families:routingFamilyOptions(initial),config,initial,health:routingHealth(),availability:routingAvailability(),
+                previews:config.lines.map(l=>({id:l.id,model:lineModel(l)})),
+                models:listModels().filter(m=>!m.hidden&&!['echo','stub'].includes(m.protocol)).map(m=>({id:m.id,label:m.label,familyId:seedanceFamilyOf(m),channelId:m.channelId,channelName:routingChannelName(m.channelId??''),capability:m.capability,materialPolicy:materialPolicyForModel(m),imageMaterialMode:effectiveImageMaterialMode(m),upstreamModel:m.upstreamModel,officialAssets:m.officialAssets,params:m.params,tokenPricing:m.tokenPricing}))};
+        });
 		api.get('/admin-api/auto-routing/availability', async (req, reply) => {
 			const hours = Number((req.query as { hours?: string }).hours ?? 24);
 			if (!Number.isInteger(hours) || hours < 1 || hours > 720) return reply.code(400).send({ error: { message: '统计范围应为 1–720 小时' } });
@@ -434,6 +561,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			if (!b.id || !b.name || !b.capability) {
 				return reply.code(400).send({ error: { message: "缺少 id/name/capability" } });
 			}
+			if (getTemplateDef(b.id.trim())?.agentId) return reply.code(403).send({ error: { message: "渠道商模板由所属渠道商管理" } });
 			const { agentId, ...rest } = b; // 管理端只建平台模板，忽略 agentId
 			return createTemplate(rest as any);
 		});
@@ -459,15 +587,22 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 		api.post("/admin-api/presets", async (req, reply) => {
 			const b = (req.body ?? {}) as Partial<PresetDef>;
 			if (!b.id || !b.name) return reply.code(400).send({ error: { message: "缺少 id/name" } });
+			if (Object.hasOwn(b, "agentId")) return reply.code(403).send({ error: { message: "渠道商预设由所属渠道商管理" } });
+			const existing = getPresetDef(b.id.trim());
+			if (existing && "agentId" in existing && existing.agentId) return reply.code(404).send({ error: { message: "预设不存在" } });
 			return createPreset(b as any);
 		});
 		api.put("/admin-api/presets/:id", async (req, reply) => {
 			const { id } = req.params as { id: string };
-			if (!getPresetDef(id)) return reply.code(404).send({ error: { message: "预设不存在" } });
+			const existing = getPresetDef(id);
+			if (!existing || ("agentId" in existing && existing.agentId)) return reply.code(404).send({ error: { message: "预设不存在" } });
+			if (Object.hasOwn((req.body ?? {}) as object, "agentId")) return reply.code(403).send({ error: { message: "预设归属不可修改" } });
 			return updatePreset(id, (req.body ?? {}) as any)!;
 		});
 		api.delete("/admin-api/presets/:id", async (req, reply) => {
 			const { id } = req.params as { id: string };
+			const existing = getPresetDef(id);
+			if (!existing || ("agentId" in existing && existing.agentId)) return reply.code(404).send({ error: { message: "预设不存在" } });
 			if (!deletePreset(id)) return reply.code(404).send({ error: { message: "预设不存在" } });
 			return { ok: true };
 		});
@@ -515,7 +650,13 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			return undefined;
 		}
 		// 筛选下拉选项（用户/步骤/模型去重，按范围）。须在 /:id 之前注册以免被参数路由吞掉。
-		api.get("/admin-api/logs/facets", async (req) => logFacets(logScope(req.query as Record<string, string | undefined>)));
+		api.get("/admin-api/logs/facets", async (req) => {
+      const scope = logScope(req.query as Record<string, string | undefined>);
+      const facets = logFacets(scope), search = createLogModelSearch();
+      const models = new Set<string>(), families = new Set<string>();
+      for (const log of filterLogs(scope)) { const value=search.identity(log); if(value.modelId)models.add(value.modelId); if(value.modelName)models.add(value.modelName); if(value.familyName)families.add(value.familyName); }
+      return {...facets, models:[...models].sort(), families:[...families].sort()};
+    });
 		// 按筛选聚合统计（统计页 + 请求记录简单统计条）。须在 /:id 之前注册。
 		api.get("/admin-api/logs/summary", async (req) => {
 			const q = req.query as Record<string, string | undefined>;
@@ -524,7 +665,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			return logSummary({
 				...logScope(q),
 				from: num(q.from), to: num(q.to),
-				userName: q.user || undefined, purpose: q.purpose || undefined, model: q.model || undefined, status,
+				userName: q.user || undefined, purpose: q.purpose || undefined, matchesModel: (q.model || q.family || q.capability) ? createLogModelSearch().filter(q.model, q.family, q.capability) : undefined, status,
 			}, logCostViewFor(q));
 		});
 		// 导出（按当前筛选取全部匹配，映射成表格行供 CSV）。同样须在 /:id 之前注册。
@@ -539,9 +680,9 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 					to: num(q.to),
 					userName: q.user || undefined,
 					purpose: q.purpose || undefined,
-					model: q.model || undefined,
+					matchesModel: (q.model || q.family || q.capability) ? createLogModelSearch().filter(q.model, q.family, q.capability) : undefined,
 					status,
-				}, logCostViewFor(q)),
+				}, logCostViewFor(q), l => ({ creditUserName: logCreditDisplay(l).creditUserName, creditSourceLabel: logCreditDisplay(l).creditSourceLabel, model: routeLogLabel(l, 'admin') || l.model || '' })),
 			};
 		});
 			// 批量下载清单（第232轮）：把请求记录里的成功产物摊平成可供下载器消费的条目。
@@ -566,13 +707,13 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 				to: num(q.to),
 				userName: q.user || undefined,
 				purpose: q.purpose || undefined,
-				model: q.model || undefined,
+				matchesModel: (q.model || q.family || q.capability) ? createLogModelSearch().filter(q.model, q.family, q.capability) : undefined,
 				status,
 			});
 			// 商属范围：每条附「源站实收」（platformCost：带链=根级实扣、无链=用户实扣（统一定价））——
 			// 消耗列显示源站自己的口径，用户扣的售价数仅作参考（cost 保留）
 			const view = logCostViewFor(q);
-			return { total:r.total, items:r.items.map(l => ({ ...l, modelLabel:routeLogLabel(l, 'admin'), ...(view ? {platformCost:logCostFor(l, view)} : {}) })) };
+			return { total:r.total, items:r.items.map(l => ({ ...l, ...logCreditDisplay(l), modelLabel:routeLogLabel(l, 'admin'), ...(view ? {platformCost:logCostFor(l, view)} : {}) })) };
 		});
 		api.get("/admin-api/logs/:id", async (req, reply) => {
 			const { id } = req.params as { id: string };
@@ -582,13 +723,14 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			return {
 				...log,
 				modelLabel: routeLogLabel(log, 'admin'),
+                ...logCreditDisplay(log),
 				agentCosts: log.agentCosts?.map((a) => ({ ...a, name: getAgent(a.id)?.name || `（已删渠道商 ${a.id}）` })),
 			};
 		});
 
 		// ── 积分兑换码（批量生成一次性码 + 可选有效期）──
 		// 范围（第175轮，与请求记录页同款）：缺省=源站平台直发的码；?agentId=<id>=该商签发；?agentId=__all=全部。
-		// 归属决定可兑换范围：平台直发全体可用、渠道商签发仅其名下用户可用（见 redeemCodes.codeUsableBy）。
+		// 归属决定可兑换范围：源站码仅源站用户可用，渠道商码仅其名下用户可用（见 redeemCodes.codeUsableBy）。
 		api.get("/admin-api/redeem-codes", async (req) => {
 			const scope = audScope(req.query as Record<string, string | undefined>);
 			const items = scope.all ? listCodes() : scope.platform ? platformCodes() : codesByAgent(scope.agentId!);
@@ -600,11 +742,13 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 		api.post("/admin-api/redeem-codes", async (req, reply) => {
 			const b = (req.body ?? {}) as { count?: number; credits?: number; expiresAt?: string; note?: string };
 			if (!b.credits || Number(b.credits) <= 0) return reply.code(400).send({ error: { message: "缺少面额 credits（需 > 0）" } });
-			// 管理端发的一律是**平台码**（全体用户可兑换）——绝不接受 body 里的 agentId（渠道商码走其门户签发）
-			return { items: createCodes({ count: b.count, credits: Number(b.credits), expiresAt: b.expiresAt, note: b.note }) };
+			if (Object.hasOwn(req.body as object, "agentId")) return reply.code(403).send({ error: { message: "渠道商兑换码仅由所属渠道商签发" } });
+			// 源站签发的积分码仅源站用户可兑换。
+			return { items: createCodes({ count: b.count, credits: Number(b.credits), expiresAt: b.expiresAt, note: b.note, prefix: getSourceRedeemCodePrefix() }) };
 		});
 		api.delete("/admin-api/redeem-codes/:code", async (req, reply) => {
 			const { code } = req.params as { code: string };
+			if (getCode(code)?.agentId) return reply.code(403).send({ error: { message: "渠道商兑换码由所属渠道商管理" } });
 			if (!deleteCode(code)) return reply.code(404).send({ error: { message: "兑换码不存在" } });
 			return { ok: true };
 		});
@@ -612,7 +756,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 		// ⚠ 已过期未使用的**渠道商码**面额退回其积分池（签发是真金划转、过期=永远兑不了——
 		//   与门户「作废退回」同语义，同一条 logCodeIssue 记账通道）；平台码是 mint 无需退；商已删=无处可退仅清码。
 		api.post("/admin-api/redeem-codes/prune", async () => {
-			const r = pruneInvalidCodes();
+			const r = pruneInvalidCodes(Date.now(), {});
 			let refunded = 0;
 			for (const f of r.agentRefunds) {
 				const a = getAgent(f.agentId);
@@ -794,6 +938,14 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			platformGroupId: audienceGroupId(PLATFORM_AUDIENCE),
 			defaultGroupId: DEFAULT_GROUP_ID,
 		}));
+		api.get('/admin-api/agent-groups/:id/prices',async(req,reply)=>{
+			reply.header('Cache-Control','no-store');
+			try{return groupPricesView((req.params as {id:string}).id);}catch(e){return reply.code((e as {statusCode?:number}).statusCode??400).send({error:{message:(e as Error).message}});}
+		});
+		api.put('/admin-api/agent-groups/:id/prices/:lineId',async(req,reply)=>{
+			const {id,lineId}=req.params as {id:string;lineId:string};
+			try{return updateGroupLinePrice(id,lineId,req.body);}catch(e){return reply.code((e as {statusCode?:number}).statusCode??400).send({error:{message:(e as Error).message}});}
+		});
 		api.post("/admin-api/agent-groups", async (req, reply) => {
 			const { name } = (req.body ?? {}) as { name?: string };
 			const r = createAgentGroup(name || "");
@@ -841,6 +993,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			const a = getAgent(id);
 			if (!a) return reply.code(404).send({ error: { message: "渠道商不存在" } });
 			if (!a.enabled) return reply.code(400).send({ error: { message: "该渠道商已停用，无法打开其门户" } });
+			// Opening the portal switches to this merchant's normal session; source user views remain read-only.
 			const token = createAgentSession(id);
 			return { token, url: `/agent?imp=${encodeURIComponent(token)}` };
 		});
@@ -849,9 +1002,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			const { id } = req.params as { id: string };
 			if (!getAgent(id)) return reply.code(404).send({ error: { message: "渠道商不存在" } });
 			return {
-				items: usersByAgent(id).map(({ passwordHash, passwordSalt, ...u }) => ({
-					...u, dailySpent: dailySpentToday(u), totalSpent: u.totalSpent || 0, hasAccount: !!u.account,
-				})),
+				items: usersByAgent(id).map(sourceUserView),
 			};
 		});
 		// 该渠道商的模型视图（P1 统一定价：**只读**平台价 + 开放/禁用标记——定价编辑整体退役，
@@ -878,6 +1029,15 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 					costRules: (m.routes ?? []).map((r) => ({ when: r.when, cost: r.cost, costPerUnit: r.costPerUnit })),
 				})),
 			};
+		});
+		api.get('/admin-api/agents/:id/lines', async (req, reply) => {
+			reply.header('Cache-Control', 'no-store');
+			return agentLinesView((req.params as { id: string }).id, 'purchase');
+		});
+		api.put('/admin-api/agents/:id/lines/:lineId', async (req, reply) => {
+			const { id, lineId } = req.params as { id: string; lineId: string };
+			try { return saveAgentBusinessLine(id, lineId, 'purchase', req.body); }
+			catch (e) { return reply.code((e as { statusCode?: number }).statusCode ?? 400).send({ error: { message: (e as Error).message } }); }
 		});
 		// （P1 移除：给渠道商设结算价端点——统一定价）
 
@@ -978,6 +1138,8 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 		api.get("/admin-api/settings/register", async () => {
 			const r = getRegisterSettings();
 			return {
+				sourceInviteCode: getSourceInviteCode(),
+				sourceRedeemCodePrefix: getSourceRedeemCodePrefix(),
 				enabled: r.enabled,
 				giftCredits: r.giftCredits,
 				ipRegPerDay: r.ipRegPerDay,
@@ -992,15 +1154,13 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 				deviceLimit: getDeviceLimit(),
 			};
 		});
-		api.put("/admin-api/settings/register", async (req) => {
-			const b = (req.body ?? {}) as Record<string, unknown>;
-			const patch: Record<string, unknown> = {};
-			for (const k of ["enabled", "giftCredits", "ipRegPerDay", "ipSendPerHour", "ipSendPerDay", "emailDomainBlacklist", "smtp", "sms"]) {
-				if (b[k] !== undefined) patch[k] = b[k];
-			}
-			setRegisterSettings(patch as Parameters<typeof setRegisterSettings>[0]);
-			if (b.deviceLimit !== undefined) setDeviceLimit(b.deviceLimit);
-			return { ok: true, smtpConfigured: isSmtpConfigured(), smsConfigured: isSmsConfigured(), deviceLimit: getDeviceLimit() };
+		api.put("/admin-api/settings/register", async (req, reply) => {
+			let patch;
+			try { patch=validateSourceSettingsUpdate(req.body); }
+			catch(error){ return reply.code(400).send({error:{message:(error as Error).message}}); }
+			if(patch.sourceInviteCode!==undefined && sourceInviteConflict(patch.sourceInviteCode)) return reply.code(409).send({error:{message:"邀请码已被其他账号使用"}});
+			applySourceSettingsUpdate(patch);
+			return { ok: true, sourceInviteCode:getSourceInviteCode(), sourceRedeemCodePrefix:getSourceRedeemCodePrefix(), smtpConfigured: isSmtpConfigured(), smsConfigured: isSmsConfigured(), deviceLimit: getDeviceLimit() };
 		});
 		// SMTP 自检：发一封测试邮件（配置错误在此现形，不必等真用户注册）
 		api.post("/admin-api/settings/register/test-mail", async (req, reply) => {
@@ -1015,6 +1175,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 		});
 
 		// ── 网页管理（第244轮：官网主站 GET / 的内容管理）──
+		if (!isRelay()) registerClientUpdateAdmin(api);
 		api.get("/admin-api/site", async () => ({
 			config: getSiteConfig(),
 			ossConfigured: isOssConfigured(),
@@ -1051,7 +1212,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 		// 安装包直传签发：几百 MB 的安装包由管理端页面凭预签名 URL **直传 OSS**（绕开服务器 50MB multipart 上限
 		// 与跨境中转）；传完页面再 PUT /admin-api/site 回填 downloadUrl。预签 2 小时：慢上行传大包也够。
 		api.post("/admin-api/site/installer/presign", async (req, reply) => {
-			const b = (req.body ?? {}) as { filename?: string };
+			const b = (req.body ?? {}) as { filename?: string; clientUpdate?: boolean };
 			const raw = String(b.filename || "");
 			if (!/\.(exe|msi|zip|7z|dmg)$/i.test(raw)) return reply.code(400).send({ error: { message: "文件名须以 .exe/.msi/.zip/.7z/.dmg 结尾" } });
 			if (!isOssConfigured()) return reply.code(400).send({ error: { message: "未配置 OSS——请先到「存储」页配置对象存储" } });
@@ -1059,8 +1220,9 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			const safe = raw.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-.]+/, "") || "installer.exe";
 			const key = `site/pkg/${Date.now()}-${safe}`;
 			const contentType = "application/octet-stream";
-			const putUrl = await ossPresignPut(key, contentType, 7200);
-			return { ok: true, putUrl, publicUrl: ossPublicUrl(key), key, contentType };
+			const profile = b.clientUpdate ? clientUpdateProfile() : undefined;
+			const putUrl = await ossPresignPut(key, contentType, 7200, profile);
+			return { ok: true, putUrl, publicUrl: ossPublicUrl(key, profile), key, contentType };
 		});
 
 		// ── 积分流水（第183轮结算闸门附带产物）──
@@ -1093,18 +1255,16 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			return {
 				owners: rows,
 				defaults: { favQuotaBytes: getFavQuotaBytes(), teamLibQuotaBytes: getTeamLibQuotaBytes() },
-				storageCode: { user: getStorageCodeSpec("user"), team: getStorageCodeSpec("team") },
 				pinnedAssets: favoritedAssetCount(),
 				codes: listStorageCodes().slice(0, 300).map((c) => ({ ...c, agentName: c.agentId ? getAgent(c.agentId)?.name : undefined })),
 			};
 		});
-		api.put("/admin-api/quota/defaults", async (req) => {
+		api.put("/admin-api/quota/defaults", async (req, reply) => {
 			const b = (req.body ?? {}) as Record<string, unknown>;
+			if (Object.hasOwn(b, "storageCodeUser") || Object.hasOwn(b, "storageCodeTeam")) return reply.code(410).send({ error: { message: "扩容卡功能已取消" } });
 			if (b.favQuotaBytes !== undefined) setFavQuotaBytes(b.favQuotaBytes);
 			if (b.teamLibQuotaBytes !== undefined) setTeamLibQuotaBytes(b.teamLibQuotaBytes);
-			if (b.storageCodeUser) setStorageCodeSpec("user", b.storageCodeUser as never);
-			if (b.storageCodeTeam) setStorageCodeSpec("team", b.storageCodeTeam as never);
-			return { ok: true, defaults: { favQuotaBytes: getFavQuotaBytes(), teamLibQuotaBytes: getTeamLibQuotaBytes() }, storageCode: { user: getStorageCodeSpec("user"), team: getStorageCodeSpec("team") } };
+			return { ok: true, defaults: { favQuotaBytes: getFavQuotaBytes(), teamLibQuotaBytes: getTeamLibQuotaBytes() } };
 		});
 		// 平台收藏：管理端二次收藏（审核后钉住），不占任何人的配额、优先级最高
 		api.post("/admin-api/quota/pin", async (req, reply) => {
@@ -1119,12 +1279,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			return removeFavorite(assetId, "platform", "");
 		});
 		// 源站签发扩容卡（不扣任何积分——与源站发激活码同语义）
-		api.post("/admin-api/storage-codes", async (req) => {
-			const b = (req.body ?? {}) as { count?: number; note?: string; target?: string };
-			const target: "user" | "team" = b.target === "team" ? "team" : "user";
-			const spec = getStorageCodeSpec(target);
-			return { items: createStorageCodes(Number(b.count) || 1, target, { bytes: spec.bytes, days: spec.days }, { note: b.note }) };
-		});
+		api.post("/admin-api/storage-codes", async (_req, reply) => reply.code(410).send({ error: { message: "扩容卡功能已取消" } }));
 		api.delete("/admin-api/storage-codes/:code", async (req, reply) => {
 			const r = deleteStorageCode((req.params as { code: string }).code);
 			if (!r.ok) return reply.code(400).send({ error: { message: r.error } });
@@ -1133,7 +1288,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 
 		// ── 会员（第246轮）：单档方案管理 + 会员卡签发（仅源站，免费——与发激活码/扩容卡同语义）──
 		api.get("/admin-api/membership", async () => {
-			const users = listUsers();
+			const users = listUsers().filter(user => !user.agentId);
 			const members = users
 				.map((u) => ({ u, m: activeMembershipOf(u) }))
 				.filter((x) => x.m)
@@ -1168,6 +1323,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			const { userId } = (req.body ?? {}) as { userId?: string };
 			const u = userId ? getUser(userId) : undefined;
 			if (!u) return reply.code(404).send({ error: { message: "用户不存在" } });
+			if (u.agentId) return reply.code(403).send({ error: { message: "渠道商会员由所属渠道商管理" } });
 			const p = getMembershipPlan();
 			const m = applyMembershipGrant(u.id, { planName: p.name, days: p.days, discountPercent: p.discountPercent });
 			if (p.credits > 0) grantCredits(u.id, p.credits);
@@ -1175,6 +1331,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 		});
 		// 取消会员（已到账算力不回收）
 		api.delete("/admin-api/membership/members/:userId", async (req, reply) => {
+			if (getUser((req.params as { userId: string }).userId)?.agentId) return reply.code(403).send({ error: { message: "渠道商会员由所属渠道商管理" } });
 			const ok = revokeMembership((req.params as { userId: string }).userId);
 			if (!ok) return reply.code(404).send({ error: { message: "用户不存在或非会员" } });
 			return { ok: true };

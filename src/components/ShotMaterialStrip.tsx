@@ -1,3 +1,5 @@
+import { AccelerationMaterialStatus } from '@/components/AccelerationMaterialStatus';
+import { supportsOfficialMaterials } from "@/services/materialPolicy";
 /**
  * ShotMaterialStrip —— 资产模式分镜「素材缩略条」，供提示词放大弹窗使用。
  * 支持：＋上传本地素材 · 双击放大查看 · 右键/✕ 删除。
@@ -28,7 +30,7 @@ export function ShotMaterialStrip({
 	const materials = shot?.materials ?? [];
 	const projectVideoModel = useEffectiveModelKey("video");
 	const activeVideoModel = shot?.overrides?.videoModelKey || projectVideoModel;
-	const supportsIdentity = useCatalogStore((s) => !!s.catalog?.models.find((m) => m.id === activeVideoModel)?.officialAssets);
+	const supportsIdentity = useCatalogStore((s) => supportsOfficialMaterials(s.catalog?.models.find((m) => m.id === activeVideoModel)));
 	const showIdentity = identityEnabled ?? supportsIdentity;
 	const fileRef = useRef<HTMLInputElement>(null);
 	const tags = materialTags(materials);
@@ -67,8 +69,9 @@ export function ShotMaterialStrip({
 							className="hidden group-hover:flex"
 							style={{ position: "absolute", top: 0, right: 0, width: 15, height: 15, alignItems: "center", justifyContent: "center", fontSize: 10, color: "#fff", background: "rgba(0,0,0,0.6)", borderBottomLeftRadius: 4, border: "none", cursor: "pointer", lineHeight: 1 }}
 						>✕</button>
-						{showIdentity && md === "image" && (
-							<IdentityAssetToggle active={identity} onToggle={() => setShotMaterialIdentity(episodeId, shotId, m.id, !identity)} />
+						<AccelerationMaterialStatus modelId={activeVideoModel} kind={md} material={{ id: useProjectStore.getState().blobByUri(m.uri)?.id, url: m.uri, name: m.name }} />
+						{showIdentity && (
+							<IdentityAssetToggle kind={md} modelId={activeVideoModel} material={{ id: useProjectStore.getState().blobByUri(m.uri)?.id, url: m.uri, name: m.name }} active={identity} onToggle={() => setShotMaterialIdentity(episodeId, shotId, m.id, !identity)} />
 						)}
 					</div>
 				);

@@ -4,37 +4,15 @@ import { motion } from "motion/react";
 import { Send, ChevronDown, ImagePlus, Loader2, X, RefreshCw, Lock } from "lucide-react";
 import { useCanvasStore } from "@/store/canvasStore";
 import { useCatalogStore } from "@/store/catalogStore";
+import { useProjectStore } from "@/store/projectStore";
+import { captureChatContext, chatContextKey, readChatDraft, updateChatDraft, uploadChatImages, useChatUploadStore } from "@/services/chatNodeState";
 import { getChannelModelsForNodeType, resolveActiveModelKey } from "@/services/adapters/channelAdapter";
 import { dispatchCommand } from "@/command/dispatch";
 import { managedClient } from "@/services/managedClient";
 import { PromptExpandButton } from "@/components/PromptExpandButton";
+import { AssetDisplayImage } from "@/components/AssetDisplayImage";
 
 const panelTransition = { duration: 0.18 };
-
-/** 本地降采样缩略图（CSP 安全的 data: URL，用于展示上传图片） */
-function fileToThumb(file: File, max = 512): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const img = new Image();
-		const url = URL.createObjectURL(file);
-		img.onload = () => {
-			const scale = Math.min(1, max / Math.max(img.width, img.height));
-			const w = Math.max(1, Math.round(img.width * scale));
-			const h = Math.max(1, Math.round(img.height * scale));
-			const canvas = document.createElement("canvas");
-			canvas.width = w;
-			canvas.height = h;
-			const ctx = canvas.getContext("2d");
-			if (!ctx) { URL.revokeObjectURL(url); reject(new Error("no ctx")); return; }
-			ctx.drawImage(img, 0, 0, w, h);
-			URL.revokeObjectURL(url);
-			resolve(canvas.toDataURL("image/webp", 0.82));
-		};
-		img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("load fail")); };
-		img.src = url;
-	});
-}
-
-type PendingImg = { id?: string; url: string; previewUrl?: string; name?: string };
 
 /**
  * AI对话节点的整合面板（单轮问答）：
@@ -50,21 +28,21 @@ export function ChatPanel({ nodeId }: { nodeId: string }) {
 	const catalogVersion = useCatalogStore((s) => s.catalog?.version);
 
 	const params = node?.data.params ?? {};
-	const locked = !!params.questionLocked;
+	const locked = !!params.questionLocked || !!node?.data.task;
 	const savedQuestion = String(params.question ?? params.prompt ?? "");
 
-	const [input, setInput] = useState(savedQuestion);
-	const [pending, setPending] = useState<PendingImg[]>([]);
-	const [uploading, setUploading] = useState(false);
+	useProjectStore((s) => s.projectInstanceId);
+	useProjectStore((s) => s.canvasEpisodeId);
+	const context = captureChatContext(nodeId);
+	const draft = readChatDraft(params);
+	const input = draft.text;
+	const pending = draft.images;
+	const upload = useChatUploadStore((s) => s.entries[chatContextKey(context)]);
+	const uploading = upload?.busy ?? false;
+	const setInput = (text: string) => { updateChatDraft(context, (d) => ({ ...d, text })); };
 	const [modelOpen, setModelOpen] = useState(false);
 	const composingRef = useRef(false);
 
-	// 切换到不同节点 / 锁定状态变化时，同步输入框为该节点已存提问
-	useEffect(() => {
-		setInput(savedQuestion);
-		setPending([]);
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [nodeId, locked]);
 
 	useEffect(() => {
 		const onDoc = () => setModelOpen(false);
@@ -89,20 +67,8 @@ export function ChatPanel({ nodeId }: { nodeId: string }) {
 		fi.multiple = true;
 		fi.onchange = async (e) => {
 			const files = (e.target as HTMLInputElement).files;
-			if (!files || !files.length) return;
-			setUploading(true);
-			try {
-				for (const f of Array.from(files)) {
-					if (!f.type.startsWith("image/")) continue;
-					const previewUrl = await fileToThumb(f).catch(() => undefined);
-					const res = await managedClient.uploadAsset(f, f.name || "chat.png", "TP");
-					setPending((prev) => [...prev, { id: res.id, url: res.url, previewUrl, name: f.name }]);
-				}
-			} catch (err) {
-				console.error("chat 图片上传失败", err);
-			} finally {
-				setUploading(false);
-			}
+			if (!files?.length) return;
+			await uploadChatImages(context, Array.from(files), (f) => managedClient.uploadAsset(f, f.name || "chat.png", "TP"));
 		};
 		fi.click();
 	};
@@ -112,7 +78,6 @@ export function ChatPanel({ nodeId }: { nodeId: string }) {
 		const text = input.trim();
 		if ((!text && pending.length === 0) || busy || uploading) return;
 		setParam({ question: text, images: pending.length ? pending : [], questionLocked: false });
-		setPending([]);
 		dispatchCommand({ type: "run", nodeId });
 	};
 
@@ -177,9 +142,11 @@ export function ChatPanel({ nodeId }: { nodeId: string }) {
 							<div className="flex flex-wrap gap-2">
 								{pending.map((p, i) => (
 									<div key={i} className="relative w-12 h-12 rounded-lg overflow-hidden border border-white/10">
-										{p.previewUrl ? <img src={p.previewUrl} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-[8px] text-muted-foreground">{p.name}</div>}
+										<AssetDisplayImage uri={p.url} alt={p.name || "附加图片"} className="w-full h-full object-cover" />
 										<button
-											onClick={() => setPending((prev) => prev.filter((_, j) => j !== i))}
+											onClick={() => updateChatDraft(context, (d) => ({ ...d, images: d.images.filter((_, j) => j !== i) }))}
+											aria-label="移除图片"
+											disabled={busy}
 											className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-black/70 flex items-center justify-center text-white"
 										>
 											<X className="w-2.5 h-2.5" />
@@ -191,6 +158,7 @@ export function ChatPanel({ nodeId }: { nodeId: string }) {
 						<div className="relative">
 							<textarea
 								value={input}
+								disabled={busy}
 								onChange={(e) => setInput(e.target.value)}
 								onCompositionStart={() => (composingRef.current = true)}
 								onCompositionEnd={() => (composingRef.current = false)}
@@ -208,6 +176,8 @@ export function ChatPanel({ nodeId }: { nodeId: string }) {
 						</div>
 					</>
 				)}
+
+				{upload?.error && <div role="alert" className="text-xs text-red-400">{upload.error}</div>}
 
 				{/* 底部：模型 + 图片 / 跳过开关 + 发送/重新回答 */}
 				<div className="flex items-center justify-between gap-2">
@@ -243,7 +213,7 @@ export function ChatPanel({ nodeId }: { nodeId: string }) {
 						{!locked && (
 							<button
 								onClick={onPickImages}
-								disabled={uploading}
+								disabled={uploading || busy}
 								title="附加图片"
 								className="h-8 w-8 rounded-full flex items-center justify-center bg-white/5 border border-white/5 hover:bg-white/8 text-muted-foreground hover:text-foreground cursor-pointer disabled:opacity-50"
 							>
@@ -265,7 +235,7 @@ export function ChatPanel({ nodeId }: { nodeId: string }) {
 							className="h-8 px-4 rounded-full flex items-center gap-1.5 cursor-pointer bg-white/8 border border-white/10 text-foreground text-xs font-semibold hover:bg-white/12 disabled:opacity-50"
 						>
 							{busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-							重新回答
+							{node.data.task ? "重连原任务" : "重新回答"}
 						</button>
 					) : (
 						<button

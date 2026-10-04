@@ -51,15 +51,14 @@ function promptReadForm(kind,id){
   const val=(id)=>$(id)?.value;
   if(kind==='presets') return {
     name:val('#pe_name')?.trim()||id,category:val('#pe_cat')?.trim()||'',position:val('#pe_pos'),group:val('#pe_group')?.trim()||null,
-    order:Number(val('#pe_order'))||0,enabled:$('#pe_enabled').checked,body:val('#pe_body'),
+    enabled:$('#pe_enabled').checked,body:val('#pe_body'),publicNote:val('#pe_public_note')||'',
     autoAttach:Array.from(document.querySelectorAll('#pre_editor [data-attach]')).filter(c=>c.checked).map(c=>c.dataset.attach),
   };
   return {
     name:val('#te_name')?.trim()||id,category:val('#te_cat')?.trim()||'',capability:val('#te_cap'),purpose:val('#te_purpose')||null,
-    schemaId:val('#te_schema')?.trim()||null,nodeTypes:parseList(val('#te_nodes')),variables:parseList(val('#te_vars')),
-    chainNextId:val('#te_chain')?.trim()||null,chainPipeVar:val('#te_pipe')?.trim()||null,order:Number(val('#te_order'))||0,
+    variables:JSON.parse($('#prompt_variables')?.dataset.values||'[]'),
     isDefault:$('#te_default').checked,enabled:$('#te_enabled').checked,
-    body:val('#te_body'),...(tplSharePatch()||{}),
+    body:val('#te_body'),publicNote:val('#te_public_note')||'',...(tplSharePatch()||{}),
   };
 }
 function bindPromptAutosave(kind,id){
@@ -73,17 +72,25 @@ function bindPromptAutosave(kind,id){
   if(old){old.removeAttribute('onclick');old.dataset.promptSave=key;old.textContent=promptSaveStatus(key);old.onclick=()=>flushPrompt(key);}
   const capture=e=>{
     if(e?.isComposing || e?.target?.type==='file') return;
-    promptRecord(kind,id,promptReadForm(kind,id));
+    promptRecord(kind,id,{...promptDrafts.get(key)?.patch,...promptReadForm(kind,id)});
   };
   host.oninput=capture;host.onchange=capture;host.oncompositionend=capture;
   // 开放范围使用按钮，需要等它更新分组集合之后再抓取。
   host.onclick=e=>{if(e.target.closest('[onclick*="TplGroup"]')) queueMicrotask(capture);};
   renderPromptStatus();
 }
+function addPublicPromptNote(kind,item){
+  const prefix=kind==='templates'?'te':'pe';
+  const body=$('#'+prefix+'_body');if(!body)return;
+  const field=document.createElement('div');field.className='fld';field.style.marginBottom='14px';
+  field.innerHTML=`<label for="${prefix}_public_note">可见注释（渠道商及用户可见）</label><textarea id="${prefix}_public_note" aria-label="可见注释" maxlength="10000" rows="5" placeholder="填写适用场景、预期效果或输出实例">${esc(item.publicNote||'')}</textarea>`;
+  body.parentElement.before(field);
+}
 renderTplEditor=function(){
   const t=TPLS.find(t=>t.id===tplSel);const draft=promptDrafts.get('templates:'+tplSel);
   if(t && draft && draft.saved!==draft.rev) Object.assign(t,draft.patch);
   originalTplEditor();
+  if(t)addPublicPromptNote('templates',t);
   if(!t || !$('#te_body')) return;
   if(isCreative(t)){
     $('#te_body').value=t.body??'';
@@ -95,11 +102,12 @@ renderTplEditor=function(){
     $('#te_body').previousElementSibling.textContent='输出格式正文';
   }
   bindPromptAutosave('templates',t.id);
+  compactPromptEditor('templates',t);
 };
 renderPresetEditor=function(){
   const p=PRESETS.find(p=>p.id===preSel);const draft=promptDrafts.get('presets:'+preSel);
   if(p && draft && draft.saved!==draft.rev) Object.assign(p,draft.patch);
-  originalPresetEditor();if(p) bindPromptAutosave('presets',p.id);
+  originalPresetEditor();if(p){addPublicPromptNote('presets',p);bindPromptAutosave('presets',p.id);compactPromptEditor('presets',p);}
 };
 tplGroups=function(){
   const groups=originalTplGroups().map(g=>({...g,items:g.items.filter(t=>promptCategory(t)===promptPage)})).filter(g=>g.items.length);
@@ -111,7 +119,7 @@ tplGroups=function(){
     ].filter(g=>g.items.length);
   }
   if(promptPage!=='推理提示词') return groups;
-  return [{key:'inference',label:'推理方案',items:groups.flatMap(g=>g.items)}];
+  return [{key:'inference',label:'推理方案',items:groups.flatMap(g=>g.items).sort(promptOrderCompare)}];
 };
 presetGroupsList=function(){ return originalPresetGroups().map(g=>({...g,items:g.items.filter(t=>promptCategory(t,true)===promptPage)})).filter(g=>g.items.length); };
 function setPromptPage(page){
@@ -121,12 +129,13 @@ function setPromptPage(page){
 }
 function renderPromptLibrary(){
   const host=$('#tab-templates');
+  document.body.classList.add('prompt-workspace');
   if(promptPage==='用户预设'){renderUserPromptBackups();return;}
   const preset=promptIsPresetPage();
   if(preset && !promptItems(true).some(t=>t.id===preSel)) preSel=promptItems(true)[0]?.id||'';
   if(!preset && !promptItems().some(t=>t.id===tplSel)) tplSel=promptItems()[0]?.id||'';
   host.innerHTML=`
-    <div class="toolbar" style="gap:8px;flex-wrap:wrap;margin-bottom:14px">${PROMPT_PAGES.map(p=>`<button class="${p===promptPage?'pri':''}" onclick="setPromptPage('${p}')">${p}${p==='用户预设'?'':` <span class="faint">${TPLS.filter(t=>promptCategory(t)===p).length+PRESETS.filter(t=>promptCategory(t,true)===p).length}</span>`}</button>`).join('')}</div>
+    ${promptTabsMarkup()}
     <div class="toolbar" style="margin-bottom:12px">
       ${preset?'<span class="mut">内置预设</span>':scopeSelect('tpl_scope',tplScope,'setTplViewScope','开放范围')}
       <span id="prompt_pending" class="mut" style="font-size:12px"></span><span class="sp"></span>
@@ -151,11 +160,125 @@ loadTemplates=async function(){
 };
 loadPresets=()=>loadTemplates();
 const originalPromptSwitchTab=switchTab;
-switchTab=function(tab){if(tab==='presets'){promptPage='图片预设';tab='templates';}return originalPromptSwitchTab(tab);};
-saveTpl=id=>{promptRecord('templates',id,promptReadForm('templates',id));return flushPrompt('templates:'+id);};
-savePreset=id=>{promptRecord('presets',id,promptReadForm('presets',id));return flushPrompt('presets:'+id);};
+switchTab=function(tab){if(tab==='presets'){promptPage='图片预设';tab='templates';}document.body.classList.toggle('prompt-workspace',tab==='templates');return originalPromptSwitchTab(tab);};
+saveTpl=id=>{promptRecord('templates',id,{...promptDrafts.get('templates:'+id)?.patch,...promptReadForm('templates',id)});return flushPrompt('templates:'+id);};
+savePreset=id=>{promptRecord('presets',id,{...promptDrafts.get('presets:'+id)?.patch,...promptReadForm('presets',id)});return flushPrompt('presets:'+id);};
 const originalNewPreset=openNewPresetDlg;
 openNewPresetDlg=function(){originalNewPreset();$('#np_cat').value=promptPage==='视频预设'?'视频预设方案':promptPage==='画风提示词'?'画风':'预设方案';};
 const originalNewTpl=openNewTplDlg;
 openNewTplDlg=function(){originalNewTpl();$('#nt_cat').value=promptPage;$('#nt_purpose').value=promptPage==='推理提示词'?'storyboard.toVideoPrompt':promptPage==='拆分提示词'?'script.analyze':'';$('#nt_cap').value='text';};
 window.addEventListener('beforeunload',e=>{if([...promptDrafts.values()].some(d=>d.saved!==d.rev)){e.preventDefault();e.returnValue='';}});
+
+function promptOrderCompare(a,b){return (a.order||0)-(b.order||0)||String(a.name).localeCompare(String(b.name));}
+function promptMoveGroup(kind,id){
+  // 排序按完整分组计算，搜索只筛选显示，不改变相邻关系。
+  const previous=kind==='templates'?tplSearch:preSearch;
+  if(kind==='templates')tplSearch='';else preSearch='';
+  try{return (kind==='templates'?tplGroups():presetGroupsList()).find(g=>g.items.some(t=>t.id===id))?.items||[];}
+  finally{if(kind==='templates')tplSearch=previous;else preSearch=previous;}
+}
+function movePrompt(kind,id,direction){
+  const items=promptMoveGroup(kind,id).slice(),index=items.findIndex(t=>t.id===id),target=index+direction;
+  if(index<0||target<0||target>=items.length)return;
+  const key=kind+':'+id;
+  promptRecord(kind,id,{...promptDrafts.get(key)?.patch,...promptReadForm(kind,id)});
+  [items[index],items[target]]=[items[target],items[index]];
+  items.forEach((item,order)=>{
+    item.order=order;
+    promptRecord(kind,item.id,{...promptDrafts.get(kind+':'+item.id)?.patch,order});
+  });
+  if(kind==='templates'){renderTplList();renderTplEditor();}else{renderPresetList();renderPresetEditor();}
+}
+function compactPromptEditor(kind,item){
+  const prefix=kind==='templates'?'te':'pe',host=$('#'+(kind==='templates'?'tpl_editor':'pre_editor'));
+  const readonly=kind==='templates'&&(isAgentScope(tplScope)||!!item.agentId);
+  ['schema','nodes','vars','chain','pipe','order'].forEach(s=>$('#'+prefix+'_'+s)?.closest('.fld')?.remove());
+  const purpose=$('#te_purpose');if(purpose)purpose.previousElementSibling.textContent='用途';
+  if(kind==='templates')$('#te_enabled')?.closest('.fld')?.classList.add('prompt-switches');
+  if(kind==='presets')for(const [id,label] of [['pe_cat','分组'],['pe_group','互斥组']]){const heading=$('#'+id)?.previousElementSibling;if(heading){heading.title=heading.textContent;heading.textContent=label;}}
+  const header=host.querySelector('.hd');
+  const group=promptMoveGroup(kind,item.id),index=group.findIndex(t=>t.id===item.id);
+  for(const [direction,label] of [[-1,'↑ 上移'],[1,'↓ 下移']]){
+    const button=document.createElement('button');button.className='sm';button.textContent=label;
+    button.disabled=readonly||index+direction<0||index+direction>=group.length;
+    button.onclick=()=>movePrompt(kind,item.id,direction);header.append(button);
+  }
+  const share=$('#te_share_groups');
+  if(share){const field=share.parentElement;field.classList.add('prompt-share');field.removeAttribute('style');field.firstElementChild.textContent='开放范围';field.title=tplShareHint();$('#te_share_hint')?.remove();share.removeAttribute('style');}
+  host.querySelector('.varchips')?.closest('.fld')?.remove();
+  const body=$('#'+prefix+'_body'),note=$('#'+prefix+'_public_note');
+  body.previousElementSibling.textContent=kind==='presets'?'预设正文':isCreative(item)?'推理提示词原文':promptCategory(item)==='输出提示词'?'输出格式正文':'提示词原文';
+  const columns=document.createElement('div');columns.className='prompt-columns';
+  body.parentElement.before(columns);
+  columns.append(body.parentElement,note.parentElement);
+  body.setAttribute('aria-label','提示词原文');
+  body.parentElement.removeAttribute('style');note.parentElement.removeAttribute('style');
+  if(kind==='templates'){
+    const vars=document.createElement('div');vars.id='prompt_variables';vars.className='prompt-variables';vars.dataset.values=JSON.stringify(item.variables||[]);columns.before(vars);
+    renderPromptVariables(vars,readonly);
+  }
+  const file=$('#'+prefix+'_file');
+  if(file){const field=file.parentElement;field.classList.add('prompt-images');field.firstElementChild.textContent='参考图';}
+  if(kind==='presets'){
+    const attach=host.querySelector('[data-attach]')?.closest('.fld');
+    if(attach){attach.classList.add('prompt-share');attach.removeAttribute('style');attach.firstElementChild.title=attach.firstElementChild.textContent;attach.firstElementChild.textContent='自动附加';}
+  }
+}
+function renderPromptVariables(host,readonly){
+  host.replaceChildren();
+  const label=document.createElement('span');label.textContent='变量';host.append(label);
+  const values=JSON.parse(host.dataset.values||'[]');
+  values.forEach((value,index)=>{
+    const chip=document.createElement('span');chip.className='prompt-variable';
+    const copy=document.createElement('button');copy.type='button';copy.textContent='{{'+value+'}}';copy.title='复制占位符';copy.onclick=()=>copyText('{{'+value+'}}','变量已复制');chip.append(copy);
+    if(!readonly){const remove=document.createElement('button');remove.type='button';remove.className='prompt-variable-remove';remove.textContent='×';remove.setAttribute('aria-label','删除变量 '+value);remove.title='移除变量声明，正文保持不变';remove.onclick=()=>{values.splice(index,1);host.dataset.values=JSON.stringify(values);renderPromptVariables(host,false);host.dispatchEvent(new Event('input',{bubbles:true}));};chip.append(remove);}
+    host.append(chip);
+  });
+  if(readonly)return;
+  const add=document.createElement('button');add.type='button';add.className='sm';add.textContent='＋';add.setAttribute('aria-label','添加变量');
+  add.onclick=()=>{
+    const input=document.createElement('input');input.placeholder='变量名';input.setAttribute('aria-label','新变量名称');input.className='prompt-variable-input';
+    const finish=()=>{const name=input.value.trim().replace(/^\{\{|\}\}$/g,'');if(!name)return;if(/[{},，\r\n]/.test(name)){toast('变量名不能包含括号、逗号或换行','bad');return;}if(!values.includes(name))values.push(name);host.dataset.values=JSON.stringify(values);renderPromptVariables(host,false);host.dispatchEvent(new Event('input',{bubbles:true}));};
+    const confirm=document.createElement('button');confirm.type='button';confirm.textContent='添加';confirm.className='sm';confirm.onclick=finish;
+    input.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();finish();}if(e.key==='Escape')renderPromptVariables(host,false);};
+    add.replaceWith(input,confirm);input.focus();
+  };host.append(add);
+}
+const promptStyle=document.createElement('style');
+promptStyle.textContent=`
+body.prompt-workspace{height:100dvh;overflow:hidden}
+.prompt-workspace #app{height:100%;min-height:0}
+.prompt-workspace .main{height:100%;min-height:0}
+.prompt-workspace .views{flex:1;min-height:0;padding:14px 20px 16px;overflow:hidden}
+.prompt-workspace #tab-templates{height:100%;display:flex;flex-direction:column;min-height:0}
+.prompt-workspace #tab-templates>.page-sticky{position:static;overflow:visible;max-height:none;flex:none;padding:0}
+.prompt-workspace #tab-templates>.tpl{flex:1;min-height:0;height:0;grid-template-columns:240px minmax(0,1fr);gap:12px}
+.prompt-workspace .tpled{overflow:hidden;display:flex;flex-direction:column}
+.prompt-workspace .tpled>.hd{position:static;flex:none;display:flex;align-items:center;gap:6px;padding:10px 12px;flex-wrap:wrap}
+.prompt-workspace .tpled>.hd h3{margin:0;font-size:14px}
+.prompt-workspace .tpled>.bd{display:flex;flex-direction:column;flex:1;min-height:0;padding:10px 12px;gap:10px}
+.prompt-workspace .tpled .fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;margin:0!important;flex:none}
+.prompt-workspace .tpled .fld{min-width:0}
+.prompt-workspace .tpled .prompt-switches{grid-column:span 2}.prompt-workspace .prompt-switches label{white-space:nowrap}
+.prompt-workspace .tpled .fld>span,.prompt-workspace .tpled .fld>label{font-size:12px}
+.prompt-workspace .prompt-share{display:flex;flex-direction:row;align-items:center;gap:10px;flex:none}
+.prompt-workspace .prompt-share>span{white-space:nowrap}
+.prompt-workspace #te_share_groups{display:flex;flex-wrap:wrap;gap:6px}
+.prompt-workspace .prompt-columns{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;flex:1;min-height:0}
+.prompt-workspace .prompt-columns>.fld{display:flex;flex-direction:column;min-height:0;gap:6px}
+.prompt-workspace .prompt-columns textarea{flex:1;min-height:0;height:0;width:100%;resize:none;overflow:auto;font-family:var(--mono);font-size:12.5px;line-height:1.7}
+.prompt-workspace .prompt-variables{display:flex;align-items:center;flex-wrap:wrap;gap:7px;flex:none;font-size:12px}
+.prompt-variable{position:relative;display:inline-flex}.prompt-variable>button{padding:3px 8px;font-size:11px}
+.prompt-variable .prompt-variable-remove{position:absolute;right:-5px;top:-7px;border-radius:50%;padding:0;width:16px;height:16px;justify-content:center;opacity:0;background:var(--danger,#b84050);color:white}
+.prompt-variable:hover .prompt-variable-remove,.prompt-variable:focus-within .prompt-variable-remove{opacity:1}
+.prompt-variable-input{width:140px}
+.prompt-workspace .prompt-images{display:flex;flex-direction:row;align-items:center;gap:8px;flex:none}
+.prompt-workspace .prompt-images>span{white-space:nowrap}.prompt-workspace .prompt-images input{max-width:220px;font-size:11px}
+.prompt-workspace .prompt-images .imggrid{margin:0!important;flex-wrap:nowrap;min-width:0;overflow-x:auto;scrollbar-width:none}
+.prompt-workspace .prompt-images img{width:32px;height:32px}.prompt-workspace .prompt-images .im button{padding:0;right:0;top:0}
+.prompt-workspace .tpllist .lbody{scrollbar-width:none}.prompt-workspace .tpllist .lbody::-webkit-scrollbar{display:none}
+.prompt-workspace .nav{scrollbar-width:none}.prompt-workspace .nav::-webkit-scrollbar{display:none}
+@media(max-width:1100px){.prompt-workspace #tab-templates>.tpl{grid-template-columns:180px minmax(0,1fr)}.prompt-workspace .side{width:170px}.prompt-workspace .views{padding:10px}}
+`;
+document.head.append(promptStyle);
+function promptTabsMarkup(){return `<div class="toolbar" style="gap:8px;flex-wrap:wrap;margin-bottom:14px">${PROMPT_PAGES.map(p=>`<button class="${p===promptPage?'pri':''}" onclick="setPromptPage('${p}')">${p}${p==='用户预设'?'':` <span class="faint">${TPLS.filter(t=>promptCategory(t)===p).length+PRESETS.filter(t=>promptCategory(t,true)===p).length}</span>`}</button>`).join('')}</div>`;}

@@ -1,3 +1,5 @@
+import { useDualModeFeature } from '@/store/connectionStore';
+import { InferenceModeSelect } from '@/components/InferenceModeSelect';
 import { InferenceStrategyPicker } from '@/components/InferenceStrategyPicker';
 import { canvasInference, inferencePurpose, isSplitTemplateReference, normalInferenceStrategy, type InferenceStrategy } from '@/lib/inferenceStrategy';
 import { useState, useMemo, useEffect, useRef } from "react";
@@ -7,6 +9,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Play, Sparkles, ChevronDown, FileText } from "lucide-react";
 import { useCanvasStore } from "@/store/canvasStore";
 import { ParamControl } from "./ParamControls";
+import { TextReasoningSettings } from '@/components/TextReasoningSettings';
 import { NodePromptEditor, type NodePromptEditorHandle } from "./NodePromptEditor";
 import { NodePresetPicker } from "./NodePresetPicker";
 import { NodeMaterialBay } from "@/nodes/NodeMaterialBay";
@@ -19,11 +22,11 @@ import { useUiStore } from "@/store/uiStore";
 import { getPlugin } from "@/nodes/pluginRegistry";
 import { dispatchCommand } from "@/command/dispatch";
 import { getChannelModelsForNodeType, resolveActiveModelKey, catalogFamilyOrder } from "@/services/adapters/channelAdapter";
-import { modelFamilies, familyOf, modelForFamily, modelForSource, channelOf, type FamilyGroup } from "@/services/adapters/localChannels";
+import { familyFirstSelection, modelForLine, modelFamilies, familyOf, modelForFamily, channelOf, type FamilyGroup } from "@/services/adapters/localChannels";
 import { useCatalogStore } from "@/store/catalogStore";
 import { useSettingsStore } from "@/store/settingsStore";
 import { ProcessInfoPanel, isProcessResultNode } from "./ProcessInfoPanel";
-import { imageResolutionOptions, clampImageResolution } from "@/lib/genParams";
+import { imageResolutionOptions, clampImageResolution, nativeImageSchema } from "@/lib/genParams";
 import { adaptParamsToSchema, schemaForNodeModel, type ParamFieldLike } from "@/lib/modelParamAdapt";
 import { listPresetOptions, listPresetSchemes } from "@/lib/presetSchemes";
 import { modelNoteText } from "@/lib/modelNote";
@@ -38,12 +41,14 @@ const panelTransition = { duration: 0.18 };
  * - 参数精简化折叠，通过中间胶囊汇总按钮向下展开二级面板。
  */
 export function OperationPanel({ nodeId }: { nodeId: string }) {
+	const dualModeEnabled = useDualModeFeature();
 	const node = useCanvasStore((s) => s.nodes[nodeId]);
 	const runtime = useCanvasStore((s) => s.runtime[nodeId]);
 
 
 	const [activePopoverKey, setActivePopoverKey] = useState<string | null>(null);
 	const promptRef = useRef<NodePromptEditorHandle>(null);
+	const expandRef = useRef<HTMLButtonElement>(null);
 	const [paramPanelExpanded, setParamPanelExpanded] = useState(false);
 	const wrapRef = useRef<HTMLDivElement>(null);
 	const { setViewport: rfSetViewport, getViewport: rfGetViewport } = useReactFlow();
@@ -148,7 +153,7 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 	// 生图分辨率档由服务端按模型下发（catalog params.resolution 枚举，管理端可改）——覆盖 spec 静态档位
 	const catalogImgModel = useCatalogStore((s) => (view?.def.capability === "image" ? s.model(view.modelKey) : undefined));
 	const paramSchemaForSummary = view?.def.capability === "image"
-		? paramSchemaRaw.map((f) => {
+		? nativeImageSchema(catalogImgModel?.params) ? catalogImgModel!.params : paramSchemaRaw.map((f) => {
 			if (f.key !== "resolution" || f.type !== "enum") return f;
 			const opts = imageResolutionOptions(catalogImgModel);
 			return { ...f, options: opts.map((r) => r.v), default: clampImageResolution(f.default, opts) };
@@ -178,18 +183,20 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 
 	if (!node || !view) return null;
 	const { def, params, adapter, mode, cost } = view;
-	// 自动路由图像节点选择家族与线路，具体上游模型由服务端决定。
-	// 文本/音频不折叠（模型平铺，行为不变）。视频节点走独立 VideoOperationPanel。
-	const srcFamilies = def.capability === "image"
+	// 生成节点先选线路，再选该线路支持的家族。
+	// 视频节点走独立 VideoOperationPanel，同样采用线路优先选择。
+	const allFamilies = ["image","text","audio"].includes(def.capability??"")
 		? modelFamilies(
 			channelModelOptions.map((o) => ({ id: o.id, label: o.modelName, modeId: o.modeId, modeName: o.modeName, familyId: o.familyId, familyName: o.familyName })),
 			catalogFamilyOrder(),
 		)
 		: null;
+	const selection=familyFirstSelection(allFamilies??[],adapter?.key);
+	const srcFamilies=allFamilies?selection.families:null;
 	const famGrp = srcFamilies ? familyOf(adapter?.key, srcFamilies) : null;
 	const famChannels = famGrp?.channels ?? [];
 	const srcCh = srcFamilies ? channelOf(adapter?.key, famChannels) : null;
-	// 下拉条目：图像=家族列表（选中即进该家族，款式由旁边两个 pill 细选）；文本/音频=扁平模型列表
+	// 家族选项只包含当前线路下的可用模型。
 	const modelDropdownOptions: { id: string; name: string; family?: FamilyGroup }[] = srcFamilies
 		? srcFamilies.map((f) => ({ id: modelForFamily(f.familyId, adapter?.key, srcFamilies), name: f.familyName, family: f }))
 		: channelModelOptions.map((opt) => ({ id: opt.id, name: opt.modelName }));
@@ -333,9 +340,7 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
                 {inferenceConfig.scope !== 'multi' && <option value="single">单卡</option>}
                 {inferenceConfig.scope !== 'single' && <><option value="multi">多卡</option><option value="split">仅拆分</option></>}
               </select>
-                <select aria-label="输出模式" className="qiji-field-select rounded-full px-3 py-1.5 text-xs" value={inferenceConfig.unified ? 'unified' : 'storyboard'} disabled={running} onChange={e => setParam({ inferenceMode: e.target.value, inferenceOutput: inferenceConfig.requestScope === 'split' ? 'storyboard.split' : inferencePurpose(inferenceConfig.single, e.target.value === 'unified') })}>
-                  <option value="storyboard">双模</option><option value="unified">同源</option>
-                </select>
+                <InferenceModeSelect enabled={dualModeEnabled} unified={inferenceConfig.unified} disabled={running} onChange={unified => setParam({ inferenceMode: unified ? 'unified' : 'storyboard', inferenceOutput: inferenceConfig.requestScope === 'split' ? 'storyboard.split' : inferencePurpose(inferenceConfig.single, unified) })} />
                 <select aria-label="时长范围" className="qiji-field-select rounded-full px-3 py-1.5 text-xs" value={inferenceConfig.durationPreset} disabled={running} onChange={e => setParam({ inferenceDurationPreset: e.target.value })}>
                   <option value="4-15">4-15秒</option><option value="4-30">4-30秒</option><option value="custom">自定义</option>
                 </select>
@@ -349,12 +354,12 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
             <PromptExpandButton title="编辑提示词" getValue={() => mapUpstreamText(prompt, upstreamTextSources(nodeId).map(source => source.text))} onSave={onPromptEdit} placeholder="输入提示词…" />
           </div> : <NodeMaterialBay
 						nodeId={nodeId}
-						rightAction={<PromptExpandButton title="编辑提示词" getValue={() => mapUpstreamText(prompt, upstreamTextSources(nodeId).map((source) => source.text))} onSave={onPromptEdit} placeholder="输入提示词…" getExtra={() => <NodeMaterialBay nodeId={nodeId} />} getMentions={() => getNodeMaterialItems(nodeId)} onImport={(cand) => importAssetToNode(nodeId, cand)} getPresets={def.capability === "image" ? () => listPresetOptions() : undefined} onMatchAssets={def.displayKind === "image" || def.displayKind === "video" ? (draft) => matchNodeDraftAssets(nodeId, draft) : undefined} />}
+						rightAction={<PromptExpandButton buttonRef={expandRef} nodeId={nodeId} title="编辑提示词" getValue={() => mapUpstreamText(prompt, upstreamTextSources(nodeId).map((source) => source.text))} onSave={onPromptEdit} placeholder="输入提示词…" getExtra={(api) => <NodeMaterialBay promptApi={api} nodeId={nodeId} />} getMentions={() => getNodeMaterialItems(nodeId)} onImport={(cand) => importAssetToNode(nodeId, cand)} getPresets={def.capability === "image" ? () => listPresetOptions() : undefined} onMatchAssets={def.displayKind === "image" || def.displayKind === "video" ? (draft) => matchNodeDraftAssets(nodeId, draft) : undefined} />}
 					/>}
 
 					{/* 提示词输入区（自适应高度，超出内部滚动，不撑高面板）*/}
 					<div className="min-w-0 relative mt-1">
-						<NodePromptEditor ref={promptRef} nodeId={nodeId} prompt={prompt} onChange={onPromptEdit} placeholder={mode?.inputHint ?? "输入提示词..."} />
+						<NodePromptEditor ref={promptRef} onExpand={() => expandRef.current?.click()} nodeId={nodeId} prompt={prompt} onChange={onPromptEdit} placeholder={mode?.inputHint ?? "输入提示词..."} />
 						
 					</div>
 				</div>
@@ -429,8 +434,8 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 							</AnimatePresence>
 						</div>)}
 
-						{/* 「渠道/线路」二级选择（图像节点，家族 pill 旁）：家族内的源（模式名等） */}
-						{!isScript && famGrp && famChannels.length > 0 && (
+						{/* 线路二级选择：仅显示当前家族线路 */}
+						{!isScript && selection.channels.length > 0 && (
 							<div className="relative shrink-0">
 								<button
 									title="线路"
@@ -466,13 +471,13 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 											className="rounded-xl overflow-visible min-w-[180px] py-1"
 											onClick={(e) => e.stopPropagation()}
 										>
-											{famChannels.map((ch) => {
+											{selection.channels.map((ch) => {
 												const selected = srcCh?.channel === ch.channel;
 												return (
 													<button
 														key={ch.channel}
 														onClick={() => {
-															switchModel(modelForSource(`src:${ch.channel}`, adapter?.key, famChannels));
+															switchModel(modelForLine(`src:${ch.channel}`, adapter?.key, allFamilies??[]));
 														}}
 														className={`flex items-center justify-between w-full px-3.5 py-2.5 text-xs transition-colors cursor-pointer text-left ${selected
 															? "bg-white/10 text-white font-medium"
@@ -619,6 +624,7 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 						)}
 
 						{/* 参数汇总胶囊（二级面板对齐其下方展开） */}
+						{def.capability === 'text' && <TextReasoningSettings modelKey={view.modelKey} disabled={running} />}
 						{paramSchema.length > 0 && (
 							<div className="relative shrink-0">
 								<button

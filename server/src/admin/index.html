@@ -56,6 +56,8 @@
   .top .health .dot { width: 7px; height: 7px; border-radius: 99px; background: var(--faint); }
   .top .health .dot.ok { background: var(--ok); } .top .health .dot.bad { background: var(--bad); }
   .views { padding: 20px 24px 60px; }
+  .page-sticky { position: sticky; top: var(--admin-top-height,54px); z-index: 15; background: var(--bg); padding-top: 10px; padding-bottom: 1px; box-shadow: 0 1px 0 var(--line); }
+  .page-sticky { max-height: calc(100dvh - var(--admin-top-height,54px) - 100px); overflow-y: auto; }
 
   /* ═══ 通用组件 ═══ */
   button, .btn { font: inherit; font-size: 13px; color: var(--text); cursor: pointer; background: var(--panel2); border: 1px solid var(--line2); border-radius: var(--r-md); padding: 6px 13px; transition: background .12s, border-color .12s; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
@@ -71,7 +73,7 @@
   button svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   button:disabled { opacity: .45; cursor: default; }
 
-  input[type=text], input[type=number], input[type=password], input[type=date], select, textarea {
+  input[type=text], input[type=search], input[type=number], input[type=password], input[type=date], select, textarea {
     font: inherit; font-size: 13px; color: var(--text); background: var(--bg);
     border: 1px solid var(--line2); border-radius: var(--r-md); padding: 6px 10px;
   }
@@ -315,11 +317,30 @@
   #login .lg { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; margin-bottom: 6px; }
   #login .lg img.biglogo { height: 56px; display: block; }
   #login h2 { margin: 0; font-size: 17px; }
+  #tab-settings { max-width: 1500px; }
+  .source-settings-head { display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:24px; }
+  .source-settings-head h2 { font-size:22px;line-height:1.3;margin:0 0 5px; }
+  .source-settings-head .mut { font-size:12px; }
+  .source-settings-tabs { margin-bottom:20px; }
+  .source-settings-actions { display:flex;align-items:center;justify-content:flex-end;gap:16px;margin-top:22px; }
+  .source-settings-actions [role=status] { margin-right:auto; font-size:12px;overflow-wrap:anywhere; }
+  .source-settings-links { display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));gap:14px;margin-top:22px; }
+  .source-settings-links button { position:relative;display:flex;flex-direction:column;align-items:flex-start;gap:6px;padding:18px 40px 18px 18px;white-space:normal;text-align:left; }
+  .source-settings-links button span { font-size:12px; }
+  .source-settings-links [aria-hidden] { position:absolute;right:18px;top:24px;font-size:18px;color:var(--acc); }
+  .source-settings-channel-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:18px;align-items:start; }
+  .source-settings-mail-test { display:flex;align-items:end;flex-wrap:wrap;gap:10px;padding:14px 2px; }
+  .source-settings-mail-test label { display:grid;gap:6px;flex:1;min-width:150px;color:var(--mut);font-size:12px; }
+  .source-settings-mail-test input { min-width:0;width:100%;background:var(--input);border:1px solid var(--line2);border-radius:var(--r-sm);padding:8px;color:var(--text); }
+  .source-settings-mail-test [role=status] { flex-basis:100%;font-size:12px; }
+  #tab-settings .fld input,#tab-settings .fld select,#tab-settings .fld textarea { min-width:0;max-width:100%; }
+  @media(max-width:780px) { #tab-settings .fgrid { grid-template-columns:minmax(0,1fr); } }
 </style>
 </head>
 <body>
 
 <svg style="display:none" aria-hidden="true">
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16M8 4v6M16 14v6"/><circle cx="8" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></symbol>
   <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.4"/><path d="M3.5 20c.6-3.6 2.8-5.5 5.5-5.5s4.9 1.9 5.5 5.5"/><circle cx="17" cy="9.5" r="2.4"/><path d="M16.5 14.6c2.2.3 3.6 1.8 4 4.4"/></symbol>
   <symbol id="i-ticket" viewBox="0 0 24 24"><path d="M4 8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4z"/><path d="M13 6v2.4M13 11v2M13 15.6V18" stroke-dasharray="1 3"/></symbol>
   <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V9M10 20V4M16 20v-8M21 20H3"/></symbol>
@@ -362,13 +383,13 @@
       <a data-tab="teams" onclick="switchTab('teams')"><svg><use href="#i-users"/></svg><span class="n">团队</span><span class="cnt" id="cnt-teams"></span></a>
       <a data-tab="quota" onclick="switchTab('quota')"><svg><use href="#i-db"/></svg><span class="n">收藏与配额</span><span class="cnt" id="cnt-quota"></span></a>
       <a data-tab="stats" onclick="switchTab('stats')"><svg><use href="#i-chart"/></svg><span class="n">统计</span></a>
+      <a data-tab="messages" onclick="switchTab('messages')"><svg><use href="#i-file"/></svg><span class="n">消息通知</span></a>
       <a data-tab="sharedlibs" onclick="switchTab('sharedlibs')"><svg><use href="#i-db"/></svg><span class="n">共享素材</span><span class="cnt" id="cnt-sharedlibs"></span></a>
       <div class="grp">接 入</div>
       <a data-tab="channels" onclick="switchTab('channels')"><svg><use href="#i-route"/></svg><span class="n">渠道管理</span><span class="cnt" id="cnt-channels"></span></a>
       <a data-tab="qijicloud" onclick="switchTab('qijicloud')"><svg><use href="#i-box"/></svg><span class="n">云实例</span><span class="cnt" id="cnt-qijicloud"></span></a>
       <a data-tab="routing" onclick="switchTab('routing')"><svg><use href="#i-box"/></svg><span class="n">自动路由</span></a>
-      <a data-tab="availability" onclick="switchTab('availability')"><svg><use href="#i-box"/></svg><span class="n">渠道可用性</span></a>
-      <a data-tab="models" onclick="switchTab('models')"><svg><use href="#i-box"/></svg><span class="n">模型管理</span><span class="cnt" id="cnt-models"></span></a>
+      <a data-tab="availability" onclick="switchTab('availability')"><svg><use href="#i-box"/></svg><span class="n">模型管理</span><span class="cnt" id="cnt-models"></span></a>
       <a data-tab="templates" onclick="switchTab('templates')"><svg><use href="#i-file"/></svg><span class="n">提示词</span><span class="cnt" id="cnt-templates"></span></a>
       <span id="cnt-presets" hidden></span>
       <div class="grp">下 游</div>
@@ -377,8 +398,8 @@
       <a data-tab="logs" onclick="switchTab('logs')"><svg><use href="#i-list"/></svg><span class="n">请求记录</span></a>
       <a data-tab="downloads" onclick="switchTab('downloads')"><svg><use href="#i-dl"/></svg><span class="n">批量下载</span></a>
       <a data-tab="site" onclick="switchTab('site')"><svg><use href="#i-file"/></svg><span class="n">网页管理</span></a>
-      <a data-tab="register" onclick="switchTab('register')"><svg><use href="#i-users"/></svg><span class="n">注册与安全</span></a>
       <a data-tab="oss" onclick="switchTab('oss')"><svg><use href="#i-db"/></svg><span class="n">存储</span></a>
+      <a data-tab="settings" onclick="switchTab('settings')"><svg><use href="#i-settings"/></svg><span class="n">设置</span></a>
     </nav>
     <div class="me"><span class="dot"></span>管理员<button class="sm ghost" onclick="logout()">退出</button></div>
   </aside>
@@ -409,6 +430,8 @@
       <section id="tab-downloads" class="hide"></section>
       <section id="tab-site" class="hide"></section>
       <section id="tab-register" class="hide"></section>
+      <section id="tab-settings" class="hide"></section>
+      <section id="tab-messages" class="hide"></section>
       <section id="tab-oss" class="hide"></section>
     </div>
   </div>
@@ -427,6 +450,8 @@
 <div id="toasts"></div>
 
 <script>
+const adminTop = document.querySelector('.main > .top');
+if(adminTop)new ResizeObserver(()=>document.documentElement.style.setProperty('--admin-top-height',adminTop.getBoundingClientRect().height+'px')).observe(adminTop);
 const $ = (s, r=document) => r.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 /* 用户名展示：注册时可不填昵称；空则占位 */
@@ -438,7 +463,7 @@ async function api(path, opts={}) {
   const headers = { Authorization: "Bearer " + TOKEN, ...(opts.body!=null ? {"Content-Type":"application/json"} : {}), ...(opts.headers||{}) };
   const r = await fetch(path, { ...opts, headers });
   if (r.status === 401) { logout(); throw new Error("令牌无效"); }
-  if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e?.error?.message || ("HTTP " + r.status)); }
+  if (!r.ok) { const e = await r.json().catch(()=>({})); const error = new Error(e?.error?.message || ("HTTP " + r.status)); error.status = r.status; error.code = e?.error?.code; throw error; }
   return r.status === 204 ? null : r.json();
 }
 
@@ -466,12 +491,12 @@ function copyText(s, msg){ navigator.clipboard.writeText(s); toast(msg || "已�
 
 /* ── 登录 ── */
 function showLogin(){ $("#login").classList.remove("hide"); $("#app").classList.add("hide"); }
-function showApp(){ $("#login").classList.add("hide"); $("#app").classList.remove("hide"); checkHealth(); applyRelayMode(); switchTab(location.hash.startsWith("#routing/")?"routing":location.hash.startsWith("#channels/")?"channels":"users"); }
+function showApp(){ $("#login").classList.add("hide"); $("#app").classList.remove("hide"); checkHealth(); applyRelayMode(); switchTab(/^#(settings|register)(\/|$)/.test(location.hash)?"settings":location.hash.startsWith("#routing/")?"routing":location.hash.startsWith("#channels/")?"channels":"users"); }
 
 /* ── P3 渠道节点（relay）模式：隐藏源站专属页 + 顶部「源站连接」状态条 ──
    角色由服务端注入 window.__NODE_ROLE__；源站专属端点在服务端也已 403（这里只是观感收敛）。 */
 const IS_RELAY = window.__NODE_ROLE__ === "relay";
-const RELAY_HIDE_TABS = ["quota","channels","models","templates","presets","agents","oss","site","membership","qijicloud"];
+const RELAY_HIDE_TABS = ["messages","quota","channels","models","availability","routing","templates","presets","agents","oss","site","membership","qijicloud"];
 function applyRelayMode(){
   if (!IS_RELAY) return;
   RELAY_HIDE_TABS.forEach(t => { const a = document.querySelector(`.nav a[data-tab="${t}"]`); if (a) a.style.display = "none"; });
@@ -537,9 +562,11 @@ function scopeSelect(id, cur, onchange, title){
 function scopeName(cur){ return cur==="__all"?"全部（源站 + 各渠道商）":cur==="platform"?"源站（平台直属）":((SCOPE_AGENTS||[]).find(a=>a.id===cur)?.name||cur); }
 function isAgentScope(cur){ return cur!=="__all" && cur!=="platform"; }
 
-const TAB_TITLES = { availability:"渠道可用性", routing:"自动路由", users:"用户管理", redeem:"兑换码", membership:"会员", teams:"团队", quota:"收藏与配额", stats:"统计", sharedlibs:"共享素材", channels:"渠道管理", qijicloud:"云实例", models:"模型管理", templates:"提示词", presets:"预设管理", agents:"渠道商", logs:"请求记录", downloads:"批量下载", site:"网页管理", register:"注册与安全", oss:"存储" };
+const TAB_TITLES = { settings:"设置", messages:"消息通知", availability:"模型管理", routing:"自动路由", users:"用户管理", redeem:"兑换码", membership:"会员", teams:"团队", quota:"收藏与配额", stats:"统计", sharedlibs:"共享素材", channels:"渠道管理", qijicloud:"云实例", models:"模型管理", templates:"提示词", presets:"预设管理", agents:"渠道商", logs:"请求记录", downloads:"批量下载", site:"网页管理", register:"注册与安全", oss:"存储" };
 let CUR_TAB = "users";
 function switchTab(t){
+  if(t==='register')t='settings';
+  if(t==='models')t='availability';
   CUR_TAB = t;
   document.querySelectorAll(".nav a").forEach(b => b.classList.toggle("on", b.dataset.tab===t));
   Object.keys(TAB_TITLES).forEach(x => $("#tab-"+x).classList.toggle("hide", x!==t));
@@ -554,7 +581,7 @@ function switchTab(t){
   if (t==="qijicloud") loadQijicloud();
   if (t==="models") return loadModels();
   if (t==="routing") loadRouting();
-  if (t==="availability") loadAvailability();
+  if (t==="availability") openAvailability();
   if (t==="templates") loadTemplates();
   if (t==="presets") loadPresets();
   if (t==="agents") loadAgents();
@@ -563,9 +590,11 @@ function switchTab(t){
   if (t==="site") loadSite();
   if (t==="quota") loadQuota();
   if (t==="register") loadRegisterSettings();
+  if (t==="settings") loadSourceSettings();
+  if (t==="messages") loadMessages();
   if (t==="oss") loadOss();
 }
-function reloadTab(){ if (CUR_TAB==="logs") logFacetsCache=null; checkHealth(); switchTab(CUR_TAB); toast("已刷新"); }
+function reloadTab(){ if(CUR_TAB==="settings"){ checkHealth(); return loadSourceSettings(true); } if (CUR_TAB==="logs") logFacetsCache=null; checkHealth(); switchTab(CUR_TAB); toast("已刷新"); }
 
 /* ── 渠道缓存（模型/渠道页共用）── */
 let CHANNELS = [];
@@ -574,8 +603,7 @@ const channelName = (id) => id ? (CHANNELS.find(c=>c.id===id)?.name || id) : "�
 
 /* ════════════════ 用户管理 ════════════════ */
 let USERS = [], uSearch = "", uChip = "all";
-/* 查看范围（第171轮：与请求记录页同款渠道商下拉）：空=源站直属用户，否则=该渠道商名下用户
-   （复用 /admin-api/users?agentId=，源站权限高——抽屉/批量/开关照常可编辑） */
+/* 查看范围：渠道商用户保持只读；源站可通过专用迁移流程改变归属。 */
 let uAgentId = "platform";
 let uAgentsCache = null; // 渠道商清单（每次 loadUsers 现拉保持新鲜，失败沿用上次）
 function setUserAgent(v){ uAgentId = v; uSel = new Set(); loadUsers(); }
@@ -596,7 +624,7 @@ async function loadUsers(){
   el.innerHTML = `
     <div class="kpis" id="u_kpis"></div>
     <div class="toolbar">
-      ${scopeSelect("u_agent", uAgentId, "setUserAgent", "查看范围：源站直属用户 / 某渠道商名下用户 / 全部（源站权限高，均可直接查看编辑）")}
+      ${scopeSelect("u_agent", uAgentId, "setUserAgent", "查看源站或渠道商用户；渠道商用户只读，可由源站迁移")}
       <div class="search"><svg><use href="#i-search"/></svg><input id="u_q" type="text" placeholder="搜索用户名 / 账号 / accessKey / 备注" value="${esc(uSearch)}" oninput="uSearch=this.value;renderUsers()" /></div>
       <span class="chip ${uChip==='all'?'on':''}" onclick="uChip='all';renderUsers()">全部</span>
       <span class="chip ${uChip==='enabled'?'on':''}" onclick="uChip='enabled';renderUsers()">启用</span>
@@ -612,7 +640,7 @@ async function loadUsers(){
         <tbody id="u_body"></tbody>
       </table>
       <div class="tfoot"><span id="u_meta"></span><span class="sp"></span><span class="faint">${isAgentScope(uAgentId)
-        ? "当前范围=该渠道商名下用户（源站权限高，可直接编辑；该商在其门户自管，发码/定价走其门户，「渠道商 → 详情 → 查看信息」可免密直登）"
+        ? "渠道商用户只读 · 可勾选迁移至源站"
         : (uAgentId==="__all" ? "当前范围=全部用户（源站直属 + 各渠道商名下）" : "当前范围=源站平台直属用户 · 勾选批量操作 · 点行打开详情抽屉编辑")}</span></div>
     </div>`;
   try {
@@ -622,7 +650,7 @@ async function loadUsers(){
     renderUsers();
   } catch(e){ $("#u_body").innerHTML = `<tr><td colspan="9" class="bad-t">${esc(e.message)}</td></tr>`; }
 }
-function userFeat(u){ const f=u.features||{}; return { asset:f.assetMode!==false, canvas:f.canvasMode!==false, editor:f.editorMode!==false, libtv:f.libtv!==false, dreamina:f.dreamina!==false, comfy:f.comfyui!==false }; }
+function userFeat(u){ const f=u.features||{}; return { dual:f.dualMode!==false, asset:f.assetMode!==false, canvas:f.canvasMode!==false, editor:f.editorMode!==false, libtv:f.libtv!==false, dreamina:f.dreamina!==false, comfy:f.comfyui!==false }; }
 function renderUsers(){
   const kp = $("#u_kpis"); if(!kp) return;
   const enabled = USERS.filter(u=>u.enabled).length;
@@ -640,7 +668,7 @@ function renderUsers(){
   const COLS = [
     ["用户"], ["API 密钥"], ["状态"], ["可用模式"],
     ["积分","credits","right"], ["今日 / 总消耗","dailySpent","right"],
-    ["登录账号"], ["最近活跃","lastSeenAt"],
+    ["登录账号"], ["最近活跃","lastSeenAt"], ...(!IS_RELAY ? [["操作"]] : []),
   ];
   $("#u_head").innerHTML = `<th style="width:34px"><input type="checkbox" id="u_selall" title="全选当前列表" onclick="toggleSelAll(this.checked)"/></th>` + COLS.map(([lb,key,right])=>{
     const st = right ? ' style="text-align:right"' : "";
@@ -661,22 +689,23 @@ function renderUsers(){
     shown = shown.slice().sort((a,b)=>(val(b)-val(a))*uSort.dir);
   }
   $("#u_meta").textContent = `共 ${USERS.length} 个用户 · 显示 ${shown.length} 个`;
-  U_SHOWN = shown.map(u=>u.id);
+  U_SHOWN = shown.filter(u=>!u.readOnly || !IS_RELAY).map(u=>u.id);
   $("#u_body").innerHTML = shown.map((u,i)=>{
     const f = userFeat(u);
-    const mchip = (k,on,lb) => `<span class="mchip ${on?'on':'off'}" title="点击开关（心跳 ≤30s 生效）" onclick="event.stopPropagation();toggleFeat('${u.id}','${k}')">${lb}</span>`;
+    const mchip = (k,on,lb) => u.readOnly ? `<span class="mchip ${on?'on':'off'}">${lb}</span>` : `<span class="mchip ${on?'on':'off'}" title="点击开关（心跳 ≤30s 生效）" onclick="event.stopPropagation();toggleFeat('${u.id}','${k}')">${lb}</span>`;
     return `<tr class="clk" ${u.enabled?"":'style="opacity:.55"'} onclick="openUserDrawer('${u.id}')">
-      <td onclick="event.stopPropagation()"><input type="checkbox" ${uSel.has(u.id)?"checked":""} onclick="toggleSel('${u.id}',this.checked)"/></td>
+      <td onclick="event.stopPropagation()"><input type="checkbox" ${u.readOnly&&IS_RELAY?"disabled":""} aria-label="选择 ${esc(dispName(u))}" ${uSel.has(u.id)?"checked":""} onclick="toggleSel('${u.id}',this.checked)"/></td>
       <td><div class="ucell"><div class="avatar" style="${AVATAR_BG[i%4]}">${esc((u.name||"?").slice(0,1))}</div><div><div>${u.name&&u.name.trim()?esc(u.name):`<span class="faint">（未注册）</span>`}</div>${u.account?`<div class="sub mono">@${esc(u.account)}</div>`:u.note?`<div class="sub">${esc(u.note)}</div>`:""}</div></div></td>
-      <td><span class="mono">${esc(String(u.accessKey).slice(0,10))}…</span> <button class="sm ghost icon" title="复制完整 API 密钥（身份凭证：客户端登录与 API 对接共用）" onclick="event.stopPropagation();copyText('${esc(u.accessKey)}','API 密钥已复制')"><svg><use href="#i-copy"/></svg></button></td>
-      <td><label class="sw" onclick="event.stopPropagation()"><input type="checkbox" ${u.enabled?"checked":""} onchange="updUser('${u.id}','enabled',this.checked,true)"/><i></i></label></td>
-      <td><div class="modechips">${mchip("assetMode",f.asset,"表格视频")}${mchip("canvasMode",f.canvas,"画布")}${mchip("editorMode",f.editor,"实时剪辑")}${mchip("libtv",f.libtv,"LibTV")}${mchip("dreamina",f.dreamina,"即梦")}${mchip("comfyui",f.comfy,"ComfyUI")}</div></td>
+      <td>${u.readOnly?`<span class="faint">归属【${esc(userCompanyName(u.agentId))}】管理</span>`:`<span class="mono">${esc(String(u.accessKey).slice(0,10))}…</span> <button class="sm ghost icon" title="复制完整 API 密钥（身份凭证：客户端登录与 API 对接共用）" onclick="event.stopPropagation();copyText('${esc(u.accessKey)}','API 密钥已复制')"><svg><use href="#i-copy"/></svg></button>`}</td>
+      <td><label class="sw" onclick="event.stopPropagation()"><input type="checkbox" ${u.readOnly?"disabled":""} ${u.enabled?"checked":""} onchange="updUser('${u.id}','enabled',this.checked,true)"/><i></i></label></td>
+      <td><div class="modechips">${mchip("dualMode",f.dual,"双模")}${mchip("assetMode",f.asset,"表格视频")}${mchip("canvasMode",f.canvas,"画布")}${mchip("editorMode",f.editor,"实时剪辑")}${mchip("libtv",f.libtv,"LibTV")}${mchip("dreamina",f.dreamina,"即梦")}${mchip("comfyui",f.comfy,"ComfyUI")}</div></td>
       <td style="text-align:right">${(u.credits||0).toLocaleString()}</td>
       <td style="text-align:right"><span>${(u.dailySpent||0).toLocaleString()}</span><span class="faint"> / ${(u.totalSpent||0).toLocaleString()}</span></td>
       <td class="mono">${u.account ? esc(u.account) : `<span class="faint">未注册</span>`}</td>
       <td class="mut">${u.lastSeenAt ? relTime(u.lastSeenAt) : "—"}</td>
+      ${IS_RELAY ? "" : `<td onclick="event.stopPropagation()"><button class="sm" data-user-id="${esc(u.id)}" onclick="openUserTransfer([this.dataset.userId])">迁移</button></td>`}
     </tr>`;
-  }).join("") || `<tr><td colspan="9" class="faint" style="text-align:center;padding:26px">没有匹配的用户</td></tr>`;
+  }).join("") || `<tr><td colspan="${IS_RELAY?9:10}" class="faint" style="text-align:center;padding:26px">没有匹配的用户</td></tr>`;
   const sa = $("#u_selall"); if (sa) sa.checked = U_SHOWN.length>0 && U_SHOWN.every(id=>uSel.has(id));
   renderUserBatchbar();
 }
@@ -687,81 +716,31 @@ function renderUserBatchbar(){
   const bb = $("#u_batchbar"); if(!bb) return;
   if(uSel.size===0){ bb.style.display="none"; bb.innerHTML=""; return; }
   /* 第228轮：批量模式只留功能形式四项——渠道形式模式的管控走「自动路由」全局启停/渠道商整商硬闸 */
-  const modeOpts = `<option value="f:assetMode">表格视频</option><option value="f:canvasMode">画布</option><option value="f:editorMode">实时剪辑</option><option value="f:libtv">LibTV</option><option value="f:dreamina">即梦</option><option value="f:comfyui">ComfyUI</option>`;
+  const modeOpts = `<option value="f:dualMode">双模</option><option value="f:assetMode">表格视频</option><option value="f:canvasMode">画布</option><option value="f:editorMode">实时剪辑</option><option value="f:libtv">LibTV</option><option value="f:dreamina">即梦</option><option value="f:comfyui">ComfyUI</option>`;
+  const editable = [...uSel].every(id=>USERS.some(u=>u.id===id&&!u.readOnly));
   bb.style.display="flex";
   bb.innerHTML = `<b>已选 ${uSel.size} 个</b>
+    ${IS_RELAY ? "" : `<button class="sm pri" onclick="openUserTransfer([...uSel])">迁移用户</button>`}
+    ${editable ? `
     <button class="sm" onclick="batchAccount(true)">启用账号</button>
     <button class="sm" onclick="batchAccount(false)">停用账号</button>
-    ${IS_RELAY ? "" : `<button class="sm" onclick="openUserTransferDlg([...uSel])">迁移用户</button>`}
     <button class="sm danger" onclick="batchDelete()">删除</button>
     <span style="width:12px"></span><span class="faint">模式：</span>
     <select id="u_batchmode">${modeOpts}</select>
     <button class="sm" onclick="batchSetMode(true)">开启</button>
     <button class="sm" onclick="batchSetMode(false)">关闭</button>
+    ` : `<span class="faint">渠道商用户仅可查看或迁移</span>`}
     <span class="sp" style="flex:1"></span>
     <button class="sm ghost" onclick="uSel=new Set();renderUsers()">取消选择</button>`;
 }
 async function batchOp(body, okTpl){
+  if([...uSel].some(id=>!USERS.some(u=>u.id===id&&!u.readOnly))){ toast("渠道商用户仅可通过迁移流程变更归属", "bad"); return; }
   try{ const r = await api("/admin-api/users/batch-op",{method:"POST",body:JSON.stringify({ids:[...uSel],...body})}); toast(okTpl.replace("{n}", r.affected)); await loadUsers(); }
   catch(e){ toast(e.message,"bad"); }
 }
 function batchAccount(on){ batchOp({op:on?"enable":"disable"}, on?"已启用 {n} 个账号":"已停用 {n} 个账号"); }
 function batchDelete(){ confirmDo({title:"批量删除用户",text:`即将删除选中 <b>${uSel.size}</b> 个用户，其账号立即失效、客户端掉线；请求记录保留。不可撤销。`,okLabel:"确认删除",onOk:()=>batchOp({op:"delete"},"已删除 {n} 个")}); }
-/* 迁移只提交身份与目标归属，积分由服务端保留当前值。 */
-let USER_TRANSFER_IDS = [];
-let userTransferSaving = false;
 const userCompanyName = id => id ? ((uAgentsCache||[]).find(a=>a.id===id)?.name || id) : "源站（平台直属）";
-async function openUserTransferDlg(ids){
-  if (IS_RELAY || userTransferSaving) return;
-  const selected = [...new Set(ids)].map(id=>USERS.find(u=>u.id===id)).filter(Boolean);
-  if (!selected.length) return;
-  try { uAgentsCache = (await api("/admin-api/agents")).items || []; }
-  catch(e){ toast("无法加载迁移目标："+e.message,"bad"); return; }
-  USER_TRANSFER_IDS = selected.map(u=>u.id);
-  const targets = [{id:"",name:"源站（平台直属）"}, ...uAgentsCache.filter(a=>a.enabled).map(a=>({id:a.id,name:a.name}))];
-  $("#dlgTitle").textContent = "迁移用户";
-  $("#dlgBody").innerHTML = `
-    <p class="mut" style="margin:0 0 12px">将选中的 <b>${selected.length}</b> 个用户转到指定归属。现有积分、登录账号和团队关系保留，后续模型、价格和功能权限按目标归属生效。</p>
-    <div class="tblwrap" style="max-height:240px;overflow:auto;margin-bottom:14px"><table>
-      <thead><tr><th>用户</th><th>当前归属</th><th style="text-align:right">现有积分</th></tr></thead>
-      <tbody>${selected.map(u=>`<tr><td>${esc(dispName(u))}</td><td>${esc(userCompanyName(u.agentId))}</td><td style="text-align:right">${(u.credits||0).toLocaleString()}</td></tr>`).join("")}</tbody>
-    </table></div>
-    <div class="frow"><label for="ut_target">迁移到</label><select id="ut_target" style="flex:1">
-      <option value="__choose" selected disabled>请选择目标归属</option>
-      ${targets.map(a=>`<option value="${esc(a.id)}" ${selected.every(u=>(u.agentId||"")===a.id)?"disabled":""}>${esc(a.name)}</option>`).join("")}
-    </select></div>
-    <p class="faint" style="font-size:12px">已属于目标归属的用户会跳过。列表中的积分仅供核对，迁移保留提交时的实际余额。</p>
-    <p id="ut_err" class="bad-t" role="alert" style="font-size:12.5px;margin:6px 0"></p>
-    <div style="display:flex;justify-content:flex-end;gap:9px;margin-top:14px"><button onclick="dlg.close()">取消</button><button id="ut_submit" class="pri" onclick="saveUserTransfer()">确认迁移</button></div>`;
-  dlg.classList.remove("wide"); dlg.showModal(); $("#ut_target").focus();
-}
-async function saveUserTransfer(){
-  if (userTransferSaving) return;
-  const target = $("#ut_target").value;
-  const err = $("#ut_err"), button = $("#ut_submit");
-  err.textContent = "";
-  if (target==="__choose"){ err.textContent = "请选择目标归属"; return; }
-  userTransferSaving = true; button.disabled = true; button.textContent = "迁移中…";
-  try {
-    const r = await api("/admin-api/users/transfer",{method:"POST",body:JSON.stringify({ids:USER_TRANSFER_IDS.slice(),targetAgentId:target||null})});
-    dlg.close(); closeDrawer();
-    uAgentId = target || "platform"; uSearch = ""; uChip = "all";
-    toast(`已迁移 ${r.affected} 个用户至${userCompanyName(target)}，积分保持不变${r.unchanged?`（${r.unchanged} 个已在目标归属）`:""}`);
-    await loadUsers();
-  } catch(e){ err.textContent = e.message; }
-  finally { userTransferSaving = false; button.disabled = false; button.textContent = "确认迁移"; }
-}
-function batchSetMode(on){
-  const v = ($("#u_batchmode")||{}).value; if(!v) return;
-  const k = v.split(":")[1];
-  batchOp({op:"setFeature",feature:k,value:on}, (on?"已开启":"已关闭")+" {n} 个用户的该模式（心跳 ≤30s 生效）");
-}
-function setUSort(key){
-  if (uSort.key!==key) uSort = { key, dir: 1 };        // 新列：降序（大在前 / 最近活跃在前）
-  else if (uSort.dir===1) uSort.dir = -1;              // 再点：升序
-  else uSort = { key: "", dir: 1 };                    // 三点：恢复默认顺序
-  renderUsers();
-}
 async function updUser(id, k, v, rerender){
   try {
     await api("/admin-api/users/"+id, { method:"PUT", body: JSON.stringify({ [k]: v }) });
@@ -773,7 +752,7 @@ async function updUser(id, k, v, rerender){
 /* 表格生图始终可用；表格视频与其它能力分别开关。 */
 async function toggleFeat(id, k){
   const u = USERS.find(x=>x.id===id); if(!u) return;
-  const f = Object.assign({assetMode:true,canvasMode:true,editorMode:true,libtv:true,dreamina:true,comfyui:true}, u.features||{});
+  const f = Object.assign({dualMode:true,assetMode:true,canvasMode:true,editorMode:true,libtv:true,dreamina:true,comfyui:true}, u.features||{});
   f[k] = f[k]===false;
   try {
     await api("/admin-api/users/"+id, { method:"PUT", body: JSON.stringify({ features: f }) });
@@ -791,6 +770,12 @@ function openUserDrawer(id){ DRAWER_UID = id; renderUserDrawer(); $("#scrim").cl
 function closeDrawer(){ DRAWER_UID = null; $("#scrim").classList.remove("on"); $("#drawer").classList.remove("on"); }
 function renderUserDrawer(){
   const u = USERS.find(x=>x.id===DRAWER_UID); if(!u) return;
+  if(u.readOnly){
+    $("#drawerBody").innerHTML = `<div class="dh"><h2>${esc(dispName(u))}</h2><span class="badge">只读</span><span class="sp"></span><button class="ghost icon" onclick="closeDrawer()"><svg><use href="#i-x"/></svg></button></div>
+      <div class="db"><div class="dsec">${[["归属",userCompanyName(u.agentId)],["账号",u.account||"未注册"],["积分",Number(u.credits||0).toLocaleString()],["今日消耗",Number(u.dailySpent||0).toLocaleString()],["累计消耗",Number(u.totalSpent||0).toLocaleString()],["状态",u.enabled?"启用":"停用"]].map(([k,v])=>`<div class="frow"><label>${k}</label><span class="val">${esc(String(v))}</span></div>`).join("")}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px"><button class="sm" onclick="openUserLogs('${u.id}','${esc(dispName(u))}')">请求记录</button>${IS_RELAY?"":`<button class="sm pri" data-user-id="${esc(u.id)}" onclick="openUserTransfer([this.dataset.userId])">迁移用户</button><button class="sm" data-user-id="${esc(u.id)}" onclick="openUserTransferHistory(this.dataset.userId)">迁移记录</button>`}</div></div>`;
+    return;
+  }
   const f = userFeat(u);
   const swrow = (k,on,nm,ds) => `<div class="swrow"><div><div class="nm">${nm}</div><div class="ds">${ds}</div></div><span class="sp"></span><label class="sw"><input type="checkbox" ${on?"checked":""} onchange="toggleFeat('${u.id}','${k}')"/><i></i></label></div>`;
   $("#drawerBody").innerHTML = `
@@ -806,14 +791,15 @@ function renderUserDrawer(){
         <div class="t">基 本 信 息</div>
         <div class="frow"><label>用户名</label><input type="text" value="${esc(u.name)}" onchange="updUser('${u.id}','name',this.value,true)" /></div>
         <div class="frow"><label>备注</label><input type="text" value="${esc(u.note||"")}" onchange="updUser('${u.id}','note',this.value,true)" /></div>
-        ${IS_RELAY ? "" : `<div class="frow"><label>归属</label><span class="val">${esc(userCompanyName(u.agentId))}</span><button class="sm" onclick="openUserTransferDlg(['${u.id}'])">迁移用户</button></div>`}
+        ${IS_RELAY ? "" : `<div class="frow"><label>归属</label><span class="val">${esc(userCompanyName(u.agentId))}</span><button class="sm" data-user-id="${esc(u.id)}" onclick="openUserTransfer([this.dataset.userId])">迁移</button><button class="sm ghost" data-user-id="${esc(u.id)}" onclick="openUserTransferHistory(this.dataset.userId)">迁移记录</button></div>`}
         <div class="frow"><label>积分</label><input type="number" value="${u.credits||0}" style="width:140px" onchange="updUser('${u.id}','credits',Number(this.value),true)" /><span class="faint" style="font-size:11.5px">改完即生效</span></div>
-        <div class="frow"><label>设备上限</label><input type="number" min="0" max="100" value="${u.deviceLimit??""}" placeholder="默认" style="width:140px" onchange="updUser('${u.id}','deviceLimit',this.value===''?null:Number(this.value),true)" /><span class="faint" style="font-size:11.5px" title="同账号同时在线设备数（登录抢占制）；留空=跟随「注册与安全」页全局默认，0=不限">留空=全局默认 · 0=不限</span></div>
-        <div class="frow"><label>启用</label><label class="sw"><input type="checkbox" ${u.enabled?"checked":""} onchange="updUser('${u.id}','enabled',this.checked,true);renderUserDrawer()"/><i></i></label></div>
+        <div class="frow"><label>设备上限</label><input type="number" min="0" max="100" value="${u.deviceLimit??""}" placeholder="默认" style="width:140px" onchange="updUser('${u.id}','deviceLimit',this.value===''?null:Number(this.value),true)" /><span class="faint" style="font-size:11.5px" title="同账号同时在线设备数（登录抢占制）；留空=跟随「设置 → 注册与安全」全局默认，0=不限">留空=全局默认 · 0=不限</span></div>
+        <div class="frow"><label>启用</label><label class="sw"><input type="checkbox" ${u.readOnly?"disabled":""} ${u.enabled?"checked":""} onchange="updUser('${u.id}','enabled',this.checked,true);renderUserDrawer()"/><i></i></label></div>
       </div>
       <div class="dsec">
         <div class="t">可 用 模 式（心跳 ≤30s 生效）</div>
         ${swrow("assetMode",f.asset,"表格视频","控制表格视频区、视频生成与视频选择；资产和故事板生图始终可用")}
+        ${swrow("dualMode",f.dual,"双模","关闭后只能使用同源")}
         ${swrow("canvasMode",f.canvas,"画布模式","节点画布")}
         ${swrow("editorMode",f.editor,"实时剪辑模式","实时剪辑")}
         ${swrow("libtv",f.libtv,"LibTV 授权入口","用户自有账号生成，不经管理端不扣积分")}
@@ -911,68 +897,7 @@ function downloadCsv(rows, baseName){
 }
 
 /* ════════════════ 统计（独立页，按用户/时间/模型筛选；纯文字无图表）════════════════ */
-let statFilter = { rangeKey:"7d", user:"", model:"", agentId:"platform" };
-let statFacetsCache = null;
-function readStatInputs(){ const u=$("#sf_user"), m=$("#sf_model"); if(u)statFilter.user=u.value.trim(); if(m)statFilter.model=m.value.trim(); }
-function applyStatFilter(){ readStatInputs(); refreshStats(); }
-function clearStatFilter(){ statFilter.user=statFilter.model=""; refreshStats(); }
-function setStatRange(key){ readStatInputs(); statFilter.rangeKey=key; refreshStats(); }
-function setStatAgent(v){ readStatInputs(); statFilter.agentId=v; statFacetsCache=null; loadStats(); }
-async function loadStats(){
-  const el = $("#tab-stats");
-  await ensureScopeAgents();
-  if (!statFacetsCache){ try { statFacetsCache = await api("/admin-api/logs/facets?agentId="+encodeURIComponent(statFilter.agentId)); } catch { statFacetsCache={users:[],purposes:[],models:[]}; } }
-  const f = statFacetsCache;
-  el.innerHTML = `
-    <div class="filterbar">
-      ${scopeSelect("sf_agent", statFilter.agentId, "setStatAgent", "统计范围：源站直属用户，或某渠道商体系（其名下用户消耗 + 该商开码），或全部")}
-      <div class="seg">${LOG_RANGES.map(([k,lb])=>`<button class="${statFilter.rangeKey===k?'on':''}" onclick="setStatRange('${k}')">${lb}</button>`).join("")}</div>
-      <div class="div"></div>
-      <input id="sf_user" type="text" value="${esc(statFilter.user)}" placeholder="按用户" list="dl_suser" style="width:120px" onkeydown="if(event.key==='Enter')applyStatFilter()">
-      <input id="sf_model" type="text" value="${esc(statFilter.model)}" placeholder="按模型" list="dl_smodel" style="width:140px" onkeydown="if(event.key==='Enter')applyStatFilter()">
-      <button class="sm" onclick="applyStatFilter()">应用</button>
-      <button class="sm ghost" onclick="clearStatFilter()">清空</button>
-      <span class="sp"></span>
-      <button class="sm" onclick="statFacetsCache=null;loadStats()"><svg><use href="#i-refresh"/></svg>刷新</button>
-      <button class="sm" onclick="exportStatsCsv()"><svg><use href="#i-dl"/></svg>导出 CSV</button>
-      ${selDatalist("dl_suser", f.users)}${selDatalist("dl_smodel", f.models)}
-    </div>
-    <div class="kpis" id="s_kpis"><div class="faint" style="font-size:12px">统计加载中…</div></div>
-    <div class="statlists" id="s_lists"></div>`;
-  refreshStats();
-}
-function statQs(){
-  const r = computeRange(statFilter.rangeKey);
-  const qs = new URLSearchParams();
-  if (r.from!=null) qs.set("from", String(r.from));
-  if (r.to!=null) qs.set("to", String(r.to));
-  if (statFilter.user) qs.set("user", statFilter.user);
-  if (statFilter.model) qs.set("model", statFilter.model);
-  qs.set("agentId", statFilter.agentId);
-  return qs;
-}
-async function refreshStats(){
-  try {
-    const s = await api("/admin-api/logs/summary?"+statQs().toString());
-    window.__statSummary = s;
-    const kpis = [["总请求",s.total],["成功",s.success],["失败",s.failed],["进行中",s.running],["消耗积分",s.credits]];
-    $("#s_kpis").innerHTML = kpis.map(([k,v])=>`<div class="kpi"><div class="k">${k}</div><div class="v">${Number(v).toLocaleString()}</div></div>`).join("");
-    const listCard = (title, rows) => `<div class="statlist"><h4>${title}</h4>${rows.length?rows.map(([lb,vl])=>`<div class="row"><span class="lb" title="${esc(lb)}">${esc(lb)}</span><span class="vl">${esc(vl)}</span></div>`).join(""):`<div class="empty">暂无数据</div>`}</div>`;
-    const bm = s.byModel.map(m=>[m.key, `${m.count} 次 · ${Number(m.credits).toLocaleString()} 积分`]);
-    const bu = s.byUser.map(u=>[u.name, `${u.count} 次 · ${Number(u.credits).toLocaleString()} 积分`]);
-    const bp = s.byPurpose.map(p=>[p.label, p.count+" 次"]);
-    $("#s_lists").innerHTML = listCard("按模型", bm) + listCard("按用户", bu) + listCard("按步骤", bp);
-  } catch(e){ $("#s_kpis").innerHTML = `<div class="bad-t" style="font-size:12px">统计加载失败：${esc(e.message)}</div>`; }
-}
-function exportStatsCsv(){
-  const s = window.__statSummary; if(!s){ toast("暂无数据","bad"); return; }
-  const rows = [["分区","项","次数","消耗积分"]];
-  rows.push(["概览","总请求",s.total,s.credits],["概览","成功",s.success,""],["概览","失败",s.failed,""],["概览","进行中",s.running,""]);
-  s.byModel.forEach(m=>rows.push(["按模型",m.key,m.count,m.credits]));
-  s.byUser.forEach(u=>rows.push(["按用户",u.name,u.count,u.credits]));
-  s.byPurpose.forEach(p=>rows.push(["按步骤",p.label,p.count,""]));
-  downloadCsv(rows,"qiji-stats");
-}
+function loadStats(){ window.QijiUsageReports.mount(document.getElementById('tab-stats'), { api, merchant: false }); }
 
 /* ════════════════ 渠道管理（上游凭据组）════════════════ */
 // Channel pages and model parameter summaries are loaded from channels.js.
@@ -1013,8 +938,15 @@ function delChannel(id,name){
 }
 
 /* ════════════════ 模型管理 ════════════════ */
-const PROTOCOLS = ["echo","openai-chat","anthropic-messages","openai-image","gemini-image","jianmeng-video","openai-video","volc-mediakit","sudashui-video","aistars-video","aistars-image","huaying-video","dimensio-video","aivide-video","jianmengp-video","musem-video","jmz-video","jmz-image","jmt-video","jmf-video","overseas-video","suanli-video","jmh-image","jmh-video","skylee-image","yali-image","congge-image","congge-video","autodl-video","qijicloud-comfy","bys-video","qiqi-video","official-video","zero007-video","stub"];
-const CAPS = ["text","image","video","audio","video-enhance","video-erase"];
+const PROTOCOLS = ["echo","openai-chat","anthropic-messages","openai-image","gemini-image","jianmeng-video","openai-video","volc-mediakit","sudashui-video","aistars-video","aistars-image","huaying-video","dimensio-video","aivide-video","jianmengp-video","musem-video","jmz-video","jmz-image","jmt-video","jmf-video","overseas-video","suanli-video","skylee-image","yali-image","congge-image","congge-video","xiha888-image", "zongheng-video", "xingguang-video", "longyou-video", "autodl-video","qijicloud-comfy","bys-video","qiqi-video","official-video","zero007-video","stub"];
+const CAPS = ["text","image","video","audio","image-enhance","video-enhance","video-erase"];
+const ADMIN_CAP_GROUPS = ['text','image','video','audio','other'];
+const adminCapabilityGroup=cap=>ADMIN_CAP_GROUPS.slice(0,4).includes(cap)?cap:'other';
+function adminCapabilityOptions(current){
+ const capabilities=[...CAPS,...(current&&!CAPS.includes(current)?[current]:[])];
+ const option=cap=>`<option value="${esc(cap)}" ${cap===current?'selected':''}>${esc(CAP_LABELS[cap]||cap)}</option>`;
+ return capabilities.filter(c=>adminCapabilityGroup(c)!=='other').map(option).join('')+'<optgroup label="其他">'+capabilities.filter(c=>adminCapabilityGroup(c)==='other').map(option).join('')+'</optgroup>';
+}
 /* ── 模式（第130轮）：动态注册表，模型归属 + 用户/渠道商开关。全局缓存 MODES（null=未加载） ── */
 let MODES=null, mGroup='channel', mChip='on'; // mChip=模型状态筛选（on=启用/off=已禁用/all=全部）；默认只看启用——禁用的收进「已禁用」页签，防列表过长
 async function ensureModes(force){ if(force) MODES=null; if(MODES===null){ try{ MODES=(await api("/admin-api/modes")).items||[]; }catch{ MODES=[]; } } return MODES; }
@@ -1023,7 +955,26 @@ function modeNameA(id){ if(!id) return "默认模式（常开）"; const m=(MODE
 /* ── 家族（第163轮）：模型种类注册表（纯展示分组，客户端一级筛选）。全局缓存 FAMS ── */
 let FAMS=null;
 async function ensureFams(force){ if(force) FAMS=null; if(FAMS===null){ try{ FAMS=(await api("/admin-api/families")).items||[]; }catch{ FAMS=[]; } } return FAMS; }
-function famOptions(cur){ return `<option value="">其他（未分家族）</option>`+(FAMS||[]).map(f=>`<option value="${esc(f.id)}" ${f.id===cur?"selected":""}>${esc(f.name)}${f.enabled===false?"（已停用）":""}</option>`).join(""); }
+function famOptions(cur,capability){ return `<option value="">其他（未分家族）</option>`+(FAMS||[]).filter(f=>!capability||!f.capability||f.capability===capability||f.id===cur).map(f=>`<option value="${esc(f.id)}" ${f.id===cur?"selected":""} ${capability&&f.capability&&f.capability!==capability?'disabled':''}>${esc(f.name)}${capability&&f.capability&&f.capability!==capability?'（类型不匹配）':f.enabled===false?'（已停用）':''}</option>`).join(""); }
+function modelFamilyEditor(m){
+  const arg=esc(JSON.stringify(m.id));
+  return `<select onchange="msUpd(${arg},'familyId',this.value)">${famOptions(m.familyId,m.capability)}</select><details style="margin-top:6px"><summary style="cursor:pointer">＋ 新建家族</summary><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"><input aria-label="新家族名称" placeholder="家族名称" maxlength="60" style="min-width:100px;flex:1"/><button class="sm" onclick="msCreateFamily(${arg},this)">创建并选用</button><span class="bad-t" role="status"></span></div></details>`;
+}
+async function msCreateFamily(id,button){
+  const box=button.parentElement,input=box.querySelector('input'),error=box.querySelector('[role="status"]'),name=input.value.trim();
+  const model=(window.__models||[]).find(m=>m.id===id);if(!model)return;
+  if(!name){error.textContent='请填写家族名称';return;}
+  button.disabled=true;error.textContent='';
+  try{
+    const previous=button.createdFamily;
+    const family=previous&&previous.name===name&&previous.capability===model.capability?previous:await api('/admin-api/families',{method:'POST',body:JSON.stringify({name,capability:model.capability})});
+    button.createdFamily=family;
+    FAMS=[...(FAMS||[]).filter(f=>f.id!==family.id),family];
+    const saved=await api('/admin-api/models/'+encodeURIComponent(id),{method:'PUT',body:JSON.stringify({familyId:family.id})});
+    Object.assign(model,saved);model.familyId=family.id;
+    renderModels();if(CUR_TAB!=='channels')msRender(id);toast('家族已创建并选用');
+  }catch(e){error.textContent=(button.createdFamily?'家族已创建，选用失败，可重试：':'')+e.message;button.disabled=false;}
+}
 function famNameA(id){ if(!id) return "其他（未分家族）"; const f=(FAMS||[]).find(x=>x.id===id); return f?(f.name+(f.enabled===false?"（已停用）":"")):id; }
 /* 用户批量选择（第130轮）：uSel=选中 id 集；U_SHOWN=当前筛选后展示的 id 列表（供全选） */
 let uSel = new Set(), U_SHOWN = [];
@@ -1045,52 +996,18 @@ let mScope = "__all";  // 模型无「创建方」维度——范围=按可用�
 function setModelScope(v){ mScope = v; loadModels(); }
 async function loadModels(){
   if(CUR_TAB === "channels") return loadChannels();
-  const el = $("#tab-models");
-  await ensureScopeAgents();
-  await fetchChannels();
-  await fetchProtocols(); // 协议下拉含已启用自定义协议
-  await ensureModes(); // 模式下拉/分组/自动路由需要
-  await ensureFams(); // 家族下拉/分组需要（第163轮）
-  const chOpts = CHANNELS.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
-  el.innerHTML = `
-    <div class="card"><div class="hd"><h3>新建模型</h3><span class="mut" style="font-size:12px">翻译格式 = 协议 + 上游模型名 + 渠道凭据；模型 baseUrl/apiKey 覆盖优先于渠道；「重定向」按请求参数选用不同真实上游模型。用户线路在「自动路由」页配置。</span></div>
-      <div class="bd">
-        <div class="fgrid">
-          <div class="fld"><span>逻辑 id</span><input id="nm_id" type="text" placeholder="如 gpt-5.5 / my-model"/></div>
-          <div class="fld"><span>显示名</span><input id="nm_label" type="text"/></div>
-          <div class="fld"><span>能力</span><select id="nm_cap" onchange="syncBillMode()">${CAPS.map(c=>`<option>${c}</option>`).join("")}</select></div>
-          <div class="fld"><span>协议</span><select id="nm_proto">${protoOptions()}</select></div>
-          <div class="fld"><span>渠道</span><select id="nm_channel"><option value="">默认网关</option>${chOpts}</select></div>
-
-          <div class="fld"><span>家族（模型种类）</span><select id="nm_fam"><option value="__auto">自动识别（按名称）</option>${famOptions()}</select></div>
-          <div class="fld"><span>上游模型名（默认=id）</span><input id="nm_up" type="text"/></div>
-          <div class="fld"><span>计费方式</span><select id="nm_billmode" disabled title="仅视频生成模型支持按秒计费"><option value="">按次</option><option value="duration">按秒</option></select></div>
-          <div class="fld"><span>单价（按次=积分/次；按秒=积分/秒）</span><input id="nm_price" type="number" step="0.1" value="10"/></div>
-        </div>
-        <p class="faint" style="font-size:12px;margin:8px 0 0">计费：按次=每次扣「单价」；按秒=单价 × 时长秒数（每秒 3 分 × 15 秒 = 45，仅视频生成模型可选按秒）。重定向规则可为每档单独设价。</p>
-        <div class="toolbar" style="margin:12px 0 0"><button class="pri" onclick="addModel()"><svg><use href="#i-plus"/></svg>保存模型</button><span class="bad-t" id="m_err" style="font-size:12px"></span></div>
-      </div>
-    </div>
-    <div class="toolbar" id="m_toolbar" style="margin:0 0 8px"></div>
-    <div id="m_body"></div>`;
-  try {
-    const { items } = await api("/admin-api/models?agentId="+encodeURIComponent(mScope));
-    window.__models = items;
-    // 第167轮：开放范围标签显示具体分组名 → 模型页也要有分组表（AGROUPS 与渠道商页共用缓存）
-    try { AGROUPS = await api("/admin-api/agent-groups"); } catch {}
-    $("#cnt-models").textContent = items.length;
-    renderModels();
-  } catch(e){ $("#m_err").textContent = e.message; }
+  if(CUR_TAB !== "availability") return switchTab('availability');
+  await loadModelConfigurations();
+  await loadAvailability(true);
 }
 /* ── 自动路由（第165轮：卡片式 + 拖动排序 + 全局启停）── */
 /* 卡片底部模型数按能力细分（第165轮补充6）：如「2文本/3图像/2视频」；无模型=「0 个模型」 */
-const CAP_LABELS = { text:"文本", image:"图像", video:"视频", audio:"音频", "video-enhance":"超分", "video-erase":"去字幕", "image-enhance":"图超分" };
+const CAP_LABELS = { text:"文本", image:"图像", video:"视频", audio:"音频", other:"其他", "video-enhance":"视频超分", "video-erase":"视频去字幕", "image-enhance":"图像超分" };
 const CAP_ORDER = ["text","image","video","audio","video-enhance","video-erase","image-enhance"];
 function capBreakdown(pred){
   const by = {};
-  (window.__models||[]).forEach(m=>{ if(pred(m)) by[m.capability]=(by[m.capability]||0)+1; });
-  const parts = CAP_ORDER.filter(c=>by[c]).map(c=>by[c]+CAP_LABELS[c]);
-  Object.keys(by).filter(c=>!CAP_ORDER.includes(c)).forEach(c=>parts.push(by[c]+c)); // 未知能力兜底按原名
+  (window.__models||[]).forEach(m=>{ if(pred(m)){const group=adminCapabilityGroup(m.capability);by[group]=(by[group]||0)+1;} });
+  const parts = ADMIN_CAP_GROUPS.filter(c=>by[c]).map(c=>by[c]+CAP_LABELS[c]);
   return parts.length ? parts.join("/") : "0 个模型";
 }
 /* 通用卡片拖动排序：只有按住 ⠿ 才可拖（避免劫持输入框选字）；dragover 实时把被拖卡插到落点预览，
@@ -1139,7 +1056,7 @@ function draftCard(k, col){
   if(k==='fam') return `<div class="mfcard draft">
     <div class="top"><input id="nfam_name" type="text" placeholder="显示名（如 Wan 2.5）" onkeydown="if(event.key==='Enter')addFamily()"/></div>
     <div class="frow"><span>id</span><input id="nfam_id" type="text" placeholder="英文 id（留空按名自动）" onkeydown="if(event.key==='Enter')addFamily()"/></div>
-    <div class="frow"><span>能力</span><select id="nfam_cap"><option value="video" ${col!=='image'?'selected':''}>视频</option><option value="image" ${col==='image'?'selected':''}>图像</option></select></div>
+    <div class="frow"><span>能力</span><select id="nfam_cap">${adminCapabilityOptions(col==='other'?'image-enhance':col||'video')}</select></div>
     <div class="ft"><span class="bad-t" id="fam_err" style="font-size:11.5px"></span><span class="sp" style="flex:1"></span><button class="sm ghost" onclick="cancelDraft('fam')">取消</button><button class="sm pri" onclick="addFamily()">新增</button></div>
   </div>`;
   return `<div class="mfcard chcard draft">
@@ -1223,37 +1140,42 @@ function matTagText(m){
   const L=m.matLimits||{}, t=(v)=>v==null?'∞':v;
   return `${t(L.img)}图/${t(L.vid)}视/${t(L.aud)}音`;
 }
-function modelCard(m){
-  return `<div class="mfcard ${m.enabled?'':'off'}" data-id="${esc(m.id)}">
-    <div class="top">
-      <span class="grip" title="按住拖动＝在本组内排序（影响客户端下拉里同模式模型的先后顺序）">⠿</span>
-      <span class="mname" title="id：${esc(m.id)} · 上游：${esc(m.upstreamModel||m.id)}">${esc(m.label)}</span>
-      ${m.hidden?'<span class="mtag" style="border-color:rgba(96,165,250,.5);color:#8ec2ff" title="内部计费模型：不进客户端下拉，仅按 id 调用计费（LibTV/即梦手续费）">手续费</span>':''}
-      ${m.enabled?'':'<span class="offbadge">已禁用</span>'}
-    </div>
-    <div class="meta">
-      <span class="mtag" title="能力">${esc(CAP_LABELS[m.capability]||m.capability)}</span>
-
-      ${m.hidden?'':`<span class="mtag" title="家族（底层模型种类，客户端一级筛选）">${esc(famNameA(m.familyId))}</span>`}
-      <span class="mtag" title="计费方式与单价（改动在「设置」里）">${modelBillText(m)}</span>
-      ${(m.capability==='video'||m.capability==='image')&&!m.hidden?`<span class="mtag" title="参考素材上限（图/视/音）：∞=不限（按上游能力）、0=不允许该类素材；在「设置」里修改">${matTagText(m)}</span>`:''}
-    </div>
-    <div class="ft" style="flex-wrap:wrap">
-      <label class="sw" title="启用/禁用（关=从客户端目录移除；与上方状态筛选联动）"><input type="checkbox" ${m.enabled?"checked":""} onchange="toggleModelEnabled('${m.id}',this.checked)"/><i></i></label>
-      <span style="flex:1"></span>
-      <button class="sm" onclick="openShareMenu('${m.id}',this)" style="max-width:160px;overflow:hidden;text-overflow:ellipsis" title="开放范围：${esc(modelShareLabel(m))}（点开分组勾选，点选即存；全勾=全部受众、全不勾=不开放）">${esc(modelShareLabel(m))}</button>
-      <button class="sm" onclick="cloneModelDlg('${esc(m.id)}')">克隆</button>
-      <button class="sm" onclick="openModelSettings('${m.id}')">设置</button>
-      <button class="sm danger" onclick="delModel('${m.id}')">删除</button>
-    </div>
-  </div>`;
-}
 /* 「设置」弹窗：原表格行的全部编辑能力收敛于此——逐字段 onchange 即存（与旧表格同语义），
    保存后同步重渲染卡片网格保持卡面一致；参数/重定向/开放范围 点击切换为对应编辑器（同一弹窗）。 */
-function openModelSettings(id){
-  msRender(id);
-  dlg.classList.add("wide");
-  if(!dlg.open) dlg.showModal();
+async function openModelSettings(id){
+  try {
+    await refreshModelRoutingState();
+    msRender(id);
+    dlg.classList.add("wide");
+    if(!dlg.open) dlg.showModal();
+  } catch(e){ toast(e.message,'bad'); }
+}
+
+window.__modelRoutingEnabled = true;
+const MODEL_ENABLE_BUSY = new Set();
+async function refreshModelRoutingState(){
+  const state=await api('/admin-api/auto-routing');
+  window.__modelRoutingEnabled=state.config?.enabled!==false;
+  return window.__modelRoutingEnabled;
+}
+function directModelEnabledFields(m,fld){
+  if(window.__modelRoutingEnabled!==false||m.hidden)return '';
+  return fld('直连启用',`<select ${MODEL_ENABLE_BUSY.has(m.id)?'disabled':''} onchange="setDirectModelEnabled(${esc(JSON.stringify(m.id))},this.value==='true')"><option value="true" ${m.enabled?'selected':''}>启用</option><option value="false" ${!m.enabled?'selected':''}>停用</option></select>`);
+}
+async function setDirectModelEnabled(id,on){
+  if(MODEL_ENABLE_BUSY.has(id))return;
+  MODEL_ENABLE_BUSY.add(id);
+  try{
+    if(await refreshModelRoutingState())throw new Error('自动路由已开启，请在自动路由中设置渠道启用状态');
+    const saved=await api('/admin-api/models/'+encodeURIComponent(id),{method:'PUT',body:JSON.stringify({enabled:on})});
+    const model=(window.__models||[]).find(m=>m.id===id);if(model)model.enabled=saved.enabled;
+    toast(on?'直连模型已启用':'直连模型已停用');
+  }catch(e){toast(e.message,'bad');}
+  finally{
+    MODEL_ENABLE_BUSY.delete(id);
+    if(CUR_TAB==='channels')renderChannelModels();
+    else if(dlg.open)msRender(id);
+  }
 }
 
 function textPeakPeriodRow(r={start:'09:00',end:'12:00'}){
@@ -1316,13 +1238,168 @@ async function textPricingFlush(id){
 async function saveTextPricing(button){const id=textPricingChanged(button.closest('[data-text-pricing]'));await textPricingFlush(id);}
 window.addEventListener('beforeunload',e=>{if([...TEXT_PRICE_DRAFTS.values()].some(d=>d.dirty||d.saving)){e.preventDefault();e.returnValue='';}});
 
+
+const IMAGE_SIZE_DRAFTS=new Map();
+function imageSizeParamKind(p){
+ if(p.type!=='enum')return '';
+ if(['resolution','imageSize'].includes(p.key))return 'resolution';
+ if(['aspect_ratio','aspectRatio','ratio','size'].includes(p.key))return 'aspect';
+ return '';
+}
+function imageSizeParamSelected(m,p){return p.inImageSizeMap??(!!m.imageSizeMap&&!!imageSizeParamKind(p));}
+function imageSizeAxes(m){
+ const selected=(m.params||[]).filter(p=>imageSizeParamSelected(m,p));
+ const res=selected.find(p=>imageSizeParamKind(p)==='resolution');
+ const aspect=selected.find(p=>imageSizeParamKind(p)==='aspect');
+ let aspects=(aspect?.options||[]).filter(x=>/^\d+(?:\.\d+)?:\d+(?:\.\d+)?$/.test(x));
+ // 旧版size参数只有像素值时，保留已存对应表的比例轴；新比例参数优先。
+ if(aspect&&!aspects.length&&aspect.key==='size')aspects=Object.keys(m.imageSizeMap||{});
+ return {aspects:[...new Set(aspects)],resolutions:[...new Set((res?.options||[]).map(x=>x.toLowerCase()))]};
+}
+function imageSizeDraft(m){
+ let d=IMAGE_SIZE_DRAFTS.get(m.id);
+ if(!d){d={map:structuredClone(m.imageSizeMap||{}),enabled:!!m.imageSizeMap};IMAGE_SIZE_DRAFTS.set(m.id,d);}
+ return d;
+}
+function imageSizePresets(){
+ return (window.__models||[]).filter(m=>m.capability==='image'&&Object.values(m.imageSizeMap||{}).some(row=>Object.values(row).some(Boolean)));
+}
+function fillImageSizePreset(map,preset,axes,overwrite=false){
+ let filled=0;
+ for(const a of axes.aspects)for(const r of axes.resolutions){
+  const value=preset[a]?.[r];
+  if(value&&(overwrite||!map[a]?.[r]?.trim())){(map[a]??={})[r]=value;filled++;}
+ }
+ return filled;
+}
+function applyImageSizePreset(button,overwrite=false){
+ const box=button.closest('[data-image-sizes]'),id=box.dataset.imageSizes;
+ const m=(window.__models||[]).find(m=>m.id===id);
+ const source=imageSizePresets().find(m=>m.id===box.querySelector('[data-size-preset]').value);
+ if(!source){toast('请先选择对应表预设','bad');return;}
+ const params=box.closest('#channel-param-editor')?chParamDraft(id).params:window.__params||m.params;
+ const d=imageSizeDraft(m),count=fillImageSizePreset(d.map,source.imageSizeMap,imageSizeAxes({...m,params}),overwrite);
+ if(!count){toast('没有可填入的匹配项');return;}
+ d.enabled=true;
+ const sourceId=source.id;
+ box.outerHTML=imageSizeFields({...m,params});
+ for(const next of document.querySelectorAll('[data-image-sizes]'))if(next.dataset.imageSizes===id){
+  next.querySelector('[data-size-preset]').value=sourceId;
+  next.querySelector('[data-size-status]').textContent='已填入 '+count+' 项，待保存';
+ }
+}
+function imageSizeFields(m){
+ if(m.capability!=='image')return '';
+ const d=imageSizeDraft(m),{aspects,resolutions}=imageSizeAxes(m),id=esc(JSON.stringify(m.id));
+ const grid=aspects.length&&resolutions.length?'<div class="tblwrap"><table><thead><tr><th>比例</th>'+resolutions.map(r=>'<th>'+esc(r.toUpperCase())+'</th>').join('')+'</tr></thead><tbody>'+aspects.map(a=>'<tr><td>'+esc(a)+'</td>'+resolutions.map(r=>`<td><input aria-label="${esc(a+' '+r+' 请求尺寸')}" data-aspect="${esc(a)}" data-resolution="${esc(r)}" value="${esc(d.map[a]?.[r]||'')}" oninput="(IMAGE_SIZE_DRAFTS.get(${id}).map[this.dataset.aspect]??={})[this.dataset.resolution]=this.value" placeholder="不支持" style="width:130px"></td>`).join('')+'</tr>').join('')+'</tbody></table></div>':'<p class="mut">在上方比例和分辨率参数后勾选“加入对应表”。</p>';
+ const presets=imageSizePresets();
+ const presetFields=`<div class="toolbar" style="margin-top:8px"><select aria-label="对应表预设" data-size-preset><option value="">选择预设（模型已保存的对应表）</option>${presets.map(p=>`<option value="${esc(p.id)}">${esc(p.label||p.name||p.id)}</option>`).join('')}</select><button class="sm" onclick="applyImageSizePreset(this)" ${presets.length?'':'disabled'}>填入空白</button><button class="sm" onclick="applyImageSizePreset(this,true)" ${presets.length?'':'disabled'}>覆盖匹配项</button></div>`;
+ return `<div data-image-sizes="${esc(m.id)}" style="margin-top:16px"><div class="toolbar"><b>图片请求对应表</b><button class="sm" onclick="saveImageSizes(this)">保存对应表</button><span data-size-status class="faint"></span></div><label><input type="checkbox" data-size-enabled ${d.enabled?'checked':''} onchange="IMAGE_SIZE_DRAFTS.get(${id}).enabled=this.checked">启用对应表</label>${presetFields}${grid}</div>`;
+}
+function refreshImageSizeTable(id,params){
+ const m=(window.__models||[]).find(m=>m.id===id);if(!m)return;
+ for(const box of document.querySelectorAll('[data-image-sizes]'))if(box.dataset.imageSizes===id)box.outerHTML=imageSizeFields({...m,params});
+}
+async function saveImageSizes(button){
+ const box=button.closest('[data-image-sizes]'),id=box.dataset.imageSizes,status=box.querySelector('[data-size-status]');
+ const m=(window.__models||[]).find(m=>m.id===id),d=imageSizeDraft(m);
+ const channel=box.closest('#channel-param-editor');
+ const params=cleanModelParams(channel?chParamDraft(id).params:window.__params||m.params);
+ const axes=imageSizeAxes({...m,params});
+ if(d.enabled&&(!axes.aspects.length||!axes.resolutions.length)){toast('请选择加入对应表的比例和分辨率参数','bad');return;}
+ // 保存整个草稿，隐藏或临时移除的轴仍保留原尺寸，避免重绘丢数据。
+ button.disabled=true;status.textContent='保存中…';
+ try{
+  const saved=await api('/admin-api/models/'+encodeURIComponent(id),{method:'PUT',body:JSON.stringify({params,imageSizeMap:d.enabled?d.map:null})});
+  m.params=params;m.imageSizeMap=saved.imageSizeMap;d.map=structuredClone(saved.imageSizeMap||d.map);
+  if(channel){const p=chParamDraft(id);p.base=JSON.stringify(params);p.params=structuredClone(params);}
+  status.textContent='已保存';
+ }catch(e){status.textContent=e.message;toast(e.message,'bad');}finally{button.disabled=false;}
+}
+
+function imageMaterialModeFields(m,fld){
+ if(m.capability!=='image')return '';
+ const mode=m.imageMaterialMode||(m.protocol==='gemini-image'||m.protocol==='yali-image'&&/gemini|banana/i.test(m.upstreamModel||m.id)?'direct':'url');
+ return fld('素材请求方式',`<select aria-label="图片素材请求方式" onchange="msUpd('${m.id}','imageMaterialMode',this.value)"><option value="direct" ${mode==='direct'?'selected':''}>直传</option><option value="url" ${mode==='url'?'selected':''}>普通 URL</option></select>`);
+}
+function materialPolicyValue(m){
+ if(m.materialPolicy)return m.materialPolicy;
+ if(m.protocol==='official-video'||m.officialAssets){const upstream=String(m.upstreamModel||m.id),library=/^(sd|me|we)-/.exec(upstream)?.[1]||'sd';return {kind:'official-assets',library,groupRequired:library==='sd'&&!upstream.includes('2.5')};}
+ if(m.protocol==='jianmeng-video')return {kind:'nyxen'};
+ return {kind:'url'};
+}
+const MATERIAL_POLICY_DRAFTS=new Map();
+function materialPolicyDraft(id){
+ const m=(window.__models||[]).find(m=>m.id===id),base=JSON.stringify({policy:materialPolicyValue(m),upstreamModel:m.upstreamModel||m.id});
+ let d=MATERIAL_POLICY_DRAFTS.get(id);if(!d||!d.dirty&&d.base!==base){d={...JSON.parse(base),base,dirty:false,saving:false,error:''};MATERIAL_POLICY_DRAFTS.set(id,d);}return d;
+}
+function materialPolicyFields(m,fld){
+ if(m.capability!=='video')return '';
+ const d=materialPolicyDraft(m.id),p=d.policy,selected=p.kind==='official-assets'?p.library||'sd':p.kind;
+ return `<div data-material-policy="${esc(m.id)}" style="grid-column:1/-1;border:1px solid var(--line2);border-radius:8px;padding:12px"><fieldset class="fgrid" ${d.saving&&CUR_TAB!=='channels'?'disabled':''} style="border:0;padding:0;margin:0">`
+  +fld('上游模型名（默认=id）',`<input type="text" value="${esc(d.upstreamModel)}" oninput="const d=materialPolicyDraft('${m.id}');d.upstreamModel=this.value;d.dirty=true;queueMaterialPolicySave('${m.id}')"/>`)
+  +fld('素材请求方式',`<select onchange="msMaterialPolicy('${m.id}',this.value)">${[['url','普通 URL'],['nyxen','加速桶'],['sd','官方1 · sd 素材库'],['me','官方2 · me 素材库'],['we','官方3 · we 素材库']].map(([value,label])=>`<option value="${value}" ${selected===value?'selected':''}>${label}</option>`).join('')}</select>`)
+  +(p.kind==='official-assets'?fld('素材分组',p.library==='sd'?`<select onchange="msMaterialGroup('${m.id}',this.value==='true')"><option value="true" ${p.groupRequired!==false?'selected':''}>先建分组</option><option value="false" ${p.groupRequired===false?'selected':''}>直接上传</option></select>`:'<input type="text" value="直接上传" readonly/>'):'')
+  +`</fieldset>${CUR_TAB==='channels'?`<span data-material-status class="bad-t" role="status" ${d.error?'':'hidden'}>${esc(d.error||'')}</span>`:`<div class="toolbar" style="margin:12px 0 0"><button ${d.saving?'disabled':''} onclick="saveMaterialPolicy('${m.id}')">保存请求方式</button><span data-material-status class="${d.error?'bad-t':'mut'}" role="status">${esc(d.error||(d.saving?'保存中…':d.dirty?'未保存':''))}</span></div>`}</div>`;
+
+}
+function msMaterialPolicy(id,value){
+ const d=materialPolicyDraft(id);d.policy=['sd','me','we'].includes(value)?{kind:'official-assets',library:value,groupRequired:value==='sd'}:{kind:value};d.dirty=true;d.error='';
+ if(CUR_TAB==='channels'){renderChannelModels();queueMaterialPolicySave(id);}else msRender(id);
+}
+function msMaterialGroup(id,groupRequired){const d=materialPolicyDraft(id);d.policy={...d.policy,groupRequired};d.dirty=true;queueMaterialPolicySave(id);}
+function materialPolicyStatus(id){
+ const d=MATERIAL_POLICY_DRAFTS.get(id);if(!d)return;
+ for(const host of document.querySelectorAll('[data-material-policy]'))if(host.dataset.materialPolicy===id){const status=host.querySelector('[data-material-status]');if(status){status.textContent=d.error||(CUR_TAB==='channels'?'':d.saving?'保存中…':d.dirty?'未保存':'');status.hidden=CUR_TAB==='channels'&&!d.error;status.className=d.error?'bad-t':'mut';}}
+}
+function queueMaterialPolicySave(id){
+ if(CUR_TAB!=='channels')return;
+ const d=materialPolicyDraft(id);d.auto=true;clearTimeout(d.timer);d.error='';
+ d.timer=setTimeout(()=>saveMaterialPolicy(id),600);materialPolicyStatus(id);
+}
+async function saveMaterialPolicy(id){
+ const d=materialPolicyDraft(id);if(d.saving)return;clearTimeout(d.timer);d.saving=true;d.error='';materialPolicyStatus(id);
+ try{
+  do{
+   const snapshot=JSON.stringify({upstreamModel:d.upstreamModel.trim()||id,materialPolicy:d.policy});
+   const saved=await api('/admin-api/models/'+encodeURIComponent(id),{method:'PUT',body:snapshot});
+   const m=(window.__models||[]).find(m=>m.id===id);if(m)Object.assign(m,saved);
+   d.base=JSON.stringify({policy:saved.materialPolicy||d.policy,upstreamModel:saved.upstreamModel||id});
+   d.dirty=snapshot!==JSON.stringify({upstreamModel:d.upstreamModel.trim()||id,materialPolicy:d.policy});
+  }while(d.dirty);
+ }catch(e){d.error=e.message;d.dirty=true;toast(e.message,'bad');}
+ finally{d.saving=false;materialPolicyStatus(id);if(!d.auto&&CUR_TAB!=='channels')msRender(id);}
+}
+function modelResolutionOptions(m){
+  return [...new Set((m?.params?.find(p=>p.key==='resolution')?.options||[]).map(String).filter(Boolean))];
+}
+function modelUsesResolutionRoutes(m){return !m?.tokenPricing?.enabled&&modelResolutionOptions(m).length>1;}
+function resolutionRouteDefaults(m,routes){
+  const result=structuredClone(routes||[]);
+  if(!modelUsesResolutionRoutes(m))return result;
+  const upstreamModel=m.upstreamModel||m.id;
+  for(const resolution of modelResolutionOptions(m)){
+    const row=result.find(r=>r.when?.resolution===resolution&&Object.keys(r.when).length===1);
+    if(row){
+      if(!row.upstreamModel?.trim())row.upstreamModel=upstreamModel;
+      if(m.costField&&row.costPerUnit==null)row.costPerUnit=m.costPerUnit;
+      if(row.cost==null)row.cost=m.costField&&row.costPerUnit!=null?Math.round(row.costPerUnit*maxDurOf(m)):m.cost;
+    }else{
+      const route={when:{resolution},upstreamModel,cost:m.cost,...(m.costField&&m.costPerUnit!=null?{costPerUnit:m.costPerUnit,cost:Math.round(m.costPerUnit*maxDurOf(m))}:{})};
+      const fallback=result.findIndex(r=>!Object.keys(r.when||{}).length);
+      result.splice(fallback<0?result.length:fallback,0,route);
+    }
+  }
+  return result;
+}
 function modelSettingsFields(m){
   const fld=(lab,ctl,tip)=>`<div class="fld"${tip?` title="${esc(tip)}"`:''}><span>${lab}</span>${ctl.replace(/<(input|select)\b/,`<$1 aria-label="${esc(lab)}"`)}</div>`;
   const markup = `
     <div class="fgrid">
       ${fld("逻辑 id",`<input type="text" class="mono" value="${esc(m.id)}" readonly style="opacity:.7"/>`)}
       ${fld("显示名",`<input type="text" value="${esc(m.label)}" onchange="msUpd('${m.id}','label',this.value)"/>`)}
-      ${fld("能力",`<select onchange="msUpd('${m.id}','capability',this.value)">${CAPS.map(c=>`<option ${c===m.capability?"selected":""}>${c}</option>`).join("")}</select>`)}
+      ${directModelEnabledFields(m,fld)}
+      ${fld("能力",`<select onchange="msUpd('${m.id}','capability',this.value)">${adminCapabilityOptions(m.capability)}</select>`)}
       ${fld("协议",`<select onchange="msUpd('${m.id}','protocol',this.value)">${protoOptions(m.protocol)}</select>`)}
       ${fld("渠道",`<select onchange="msUpd('${m.id}','channelId',this.value)"><option value="" ${!m.channelId?"selected":""}>默认网关</option>${CHANNELS.map(c=>`<option value="${esc(c.id)}" ${c.id===m.channelId?"selected":""}>${esc(c.name)}</option>`).join("")}</select>`)}
       ${m.hidden
@@ -1330,21 +1407,24 @@ function modelSettingsFields(m){
         : fld("用户线路",`<button onclick="dlg.close();switchTab('routing')">在自动路由中配置</button>`,"渠道模型仅作为线路的后台候选")}
       ${m.hidden
         ? fld("家族",`<input type="text" value="—" readonly style="opacity:.7"/>`)
-        : fld("家族（模型种类）",`<select onchange="msUpd('${m.id}','familyId',this.value)">${famOptions(m.familyId)}</select>`,"家族=底层模型种类（客户端一级筛选），纯展示分组不参与门禁/计费")}
-      ${fld("上游模型名（默认=id）",`<input type="text" value="${esc(m.upstreamModel||"")}" placeholder="${esc(m.id)}" onchange="msUpd('${m.id}','upstreamModel',this.value)"/>`)}
+        : fld("家族（模型种类）",modelFamilyEditor(m),"按当前模型能力选择或新建家族")}
+      ${m.capability==='video'?'':fld("上游模型名（默认=id）",`<input type="text" value="${esc(m.upstreamModel||"")}" placeholder="${esc(m.id)}" onchange="msUpd('${m.id}','upstreamModel',this.value)"/>`)}
+      ${["image","video","audio"].includes(m.capability)&&!m.hidden ? fld("是否保存 OSS",`<select onchange="msUpd('${m.id}','saveToOss',this.value==='true')"><option value="true" ${m.saveToOss!==false?"selected":""}>是</option><option value="false" ${m.saveToOss===false?"selected":""}>否</option></select>`,"是：保存 OSS；否：返回上游原链。上游无原链时使用本地临时结果。") : ""}
       ${fld("覆盖 URL",`<input type="text" value="${esc(m.baseUrl||"")}" placeholder="跟渠道" onchange="msUpd('${m.id}','baseUrl',this.value)"/>`,"上游地址覆盖：优先级最高，留空=走渠道/默认网关")}
       ${fld("覆盖 Key",msKeyCell(m),"上游密钥覆盖：优先级最高，留空=走渠道/默认网关密钥")}
       ${fld("计费方式",m.tokenPricing?.enabled ? `<input value="按 token（预扣10积分）" readonly/>` : m.capability==='video'||m.costField
         ? `<select onchange="msBillMode('${m.id}',this.value)"><option value="" ${!m.costField?"selected":""}>按次</option><option value="duration" ${m.costField==='duration'?"selected":""}>按秒</option>${m.costField&&m.costField!=='duration'?`<option value="${esc(m.costField)}" selected>按 ${esc(m.costField)}</option>`:""}</select>`
         : `<input type="text" value="按次" readonly style="opacity:.7"/>`,m.capability==='video'||m.costField?undefined:"仅视频生成模型支持按秒计费（其余无时长概念，恒按次）")}
-      ${fld(m.tokenPricing?.enabled?"预扣积分":m.costField?"单价（积分/秒）":"单价（积分/次）",m.tokenPricing?.enabled?`<input value="10" readonly/>`:`<input type="number" step="0.1" value="${m.costField?(m.costPerUnit!=null?m.costPerUnit:''):m.cost}" onchange="msPrice('${m.id}',this.value)"/>`,m.costField?"每秒积分（×时长秒数）；兜底次价自动=每秒价×最长时长（默认按最高）":"每次扣的积分")}
+      ${fld(m.tokenPricing?.enabled?"预扣积分":m.costField?"单价（积分/秒）":"单价（积分/次）",m.tokenPricing?.enabled?`<input value="10" readonly/>`:modelUsesResolutionRoutes(m)?`<input value="按重定向设定" readonly/>`:`<input type="number" step="0.1" value="${m.costField?(m.costPerUnit!=null?m.costPerUnit:''):m.cost}" onchange="msPrice('${m.id}',this.value)"/>`,modelUsesResolutionRoutes(m)?"在下方重定向规则中设置各分辨率价格":m.costField?"每秒积分（×时长秒数）；兜底次价自动=每秒价×最长时长（默认按最高）":"每次扣的积分")}
       ${textPricingFields(m)}
       ${m.costField&&m.capability==='video'
         ? fld("参考视频折算 ×",`<input type="number" step="0.1" min="0" value="${m.refVideoSecondsWeight!=null?m.refVideoSecondsWeight:''}" placeholder="0" onchange="updRefW('${m.id}',this.value)"/>`,"参考视频按秒计费折算系数：空/0=不计费；1=与出片每秒价同价（不足1秒算1秒，服务端探测时长）")
         : ''}
       ${fld("素材上限",`<div style="display:flex;align-items:center;flex-wrap:wrap;min-height:26px">${m.hidden?'<span class="faint">—（内部计费模型无素材概念）</span>':matLimitCell(m)}</div>`,"图/视/音 各自上限：空=不限（按上游能力）、0=不允许该类素材（如 933 收紧为 903 即「视」填 0）。服务端硬闸：超限明确拒单")}
-      ${fld("启用",`<label class="sw"><input type="checkbox" ${m.enabled?"checked":""} onchange="msEnabled('${m.id}',this.checked)"/><i></i></label>`)}
+      ${materialPolicyFields(m,fld)}
+      ${imageMaterialModeFields(m,fld)}
     </div>
+
     <div class="fld" style="margin-top:10px"><span>备注（用户可见：客户端悬浮「积分消耗」图标显示；留空=默认显示参考素材上限）</span>
       <input aria-label="模型备注" type="text" value="${esc(m.note||"")}" maxlength="200" placeholder="默认=参考素材上限（图/视/音）" title="随 catalog 下发给用户（≤30s 热更），勿写接入信息等敏感内容" onchange="msUpd('${m.id}','note',this.value)"/></div>
 `;
@@ -1371,7 +1451,6 @@ async function msUpd(id,k,v){
 }
 async function msBillMode(id,v){ await updModel(id,'costField',v); renderModels(); if(CUR_TAB!=="channels") msRender(id); }
 async function msPrice(id,v){ await updPrice(id,v); if(CUR_TAB!=='channels') renderModels(); }
-async function msEnabled(id,on){ await updModel(id,'enabled',on); renderModels(); }
 function msKeyCell(m){
   const set=m.apiKeySet;
   return `<div style="display:flex;gap:6px;align-items:center"><input type="password" placeholder="${set?esc(m.apiKey)+' 留空不变':'跟渠道'}" onchange="msSetKey('${m.id}',this.value)" style="flex:1;min-width:0"/>${set?`<button class="sm ghost" title="清除覆盖、改用渠道/默认密钥" onclick="msClearKey('${m.id}')">清除</button>`:''}</div>`;
@@ -1457,41 +1536,8 @@ function toggleShareGroup(id, gid, on){
   shareSave(id, patch);
 }
 function renderModels(){
-  if(CUR_TAB === "channels") { renderChannelCards(); return; }
-  if(!$("#m_body")) return; // 模式增删改也会调它刷新分组——「渠道」页（自动路由所在页）无模型表，跳过
-  const all = window.__models||[];
-  // 工具栏（分组 + 状态筛选）随数据重渲染：高亮与计数实时（禁用一个模型立刻从「启用」视图消失、计数同步）
-  const nOn = all.filter(m=>m.enabled).length;
-  const tb = $("#m_toolbar");
-  if(tb) tb.innerHTML = `${scopeSelect("m_scope", mScope, "setModelScope", "按可用性查看：某渠道商实际能用的模型（开放范围命中 且 未被其链上任一级禁用）")}
-    <span class="faint" style="margin-left:10px">${mScope==="__all" ? "全部模型" : (mScope==="platform" ? "源站（平台直属用户）可用" : esc(scopeName(mScope))+" 可用")}</span>
-    <span class="faint" style="margin-left:14px">分组：</span>
-    <span class="chip ${mGroup==='channel'?'on':''}" onclick="mGroup='channel';renderModels()">按渠道</span>
-
-    <span class="chip ${mGroup==='family'?'on':''}" onclick="mGroup='family';renderModels()">按家族</span>
-    <span class="faint" style="margin-left:14px">状态：</span>
-    <span class="chip ${mChip==='on'?'on':''}" onclick="mChip='on';renderModels()">启用 ${nOn}</span>
-    <span class="chip ${mChip==='off'?'on':''}" onclick="mChip='off';renderModels()">已禁用 ${all.length-nOn}</span>
-    <span class="chip ${mChip==='all'?'on':''}" onclick="mChip='all';renderModels()">全部 ${all.length}</span>`;
-  const items = mChip==='all' ? all : all.filter(m=> mChip==='off' ? !m.enabled : m.enabled);
-  const keyOf = mGroup==='mode' ? (m)=>(m.modeId||"") : mGroup==='family' ? (m)=>(m.familyId||"") : (m)=>(m.channelId||"");
-  const nameOf = mGroup==='mode' ? (k)=>(k?modeNameA(k):"默认模式（常开）") : mGroup==='family' ? (k)=>famNameA(k) : (k)=>channelName(k);
-  const groups = {};
-  items.forEach(m=>{ const k = keyOf(m); (groups[k]=groups[k]||[]).push(m); });
-  // 组内顺序（第176轮）：与 catalog 下发同一把尺——模型 order（管理端拖动）→ 原始加入序（稳定、未排序过的库不变）
-  const addIdx = new Map(all.map((m,i)=>[m.id,i]));
-  const MAXI = Number.MAX_SAFE_INTEGER;
-  Object.values(groups).forEach(a=>a.sort((x,y)=>((x.order??MAXI)-(y.order??MAXI)) || (addIdx.get(x.id)-addIdx.get(y.id))));
-  // 按渠道分组时跟随渠道现有排序（CHANNELS 已按 order 排好；找不到的排在最后）；其余维度按显示名
-  const chIdx = (k)=>{ const i = CHANNELS.findIndex(c=>c.id===k); return i<0 ? Number.MAX_SAFE_INTEGER : i; };
-  const cmp = mGroup==='channel' ? (a,b)=>(chIdx(a)-chIdx(b)) || nameOf(a).localeCompare(nameOf(b)) : (a,b)=>nameOf(a).localeCompare(nameOf(b));
-  const keys = Object.keys(groups).sort((a,b)=> a===""?(mGroup==='family'?1:-1) : b===""?(mGroup==='family'?-1:1) : cmp(a,b));
-  $("#m_body").innerHTML = keys.map((k,gi)=>{
-    const head = `<div class="mgrph">▍ ${esc(nameOf(k))} <span class="faint" style="font-weight:400">（${groups[k].length} 个模型 · 按住 ⠿ 可在组内拖动排序）</span></div>`;
-    return head + `<div class="mfgrid wide" id="m_grid_${gi}">${groups[k].map(modelCard).join("")}</div>`;
-  }).join("") || `<div class="faint" style="text-align:center;padding:18px 0">${mChip==='off'?'没有已禁用的模型':'该筛选下暂无模型'}</div>`;
-  // 组内拖动排序（第176轮）：只提交**本组这批**的 id（其余模型 order 不动，见 store/models.ts reorderModels 注释）
-  keys.forEach((k,gi)=>wireMfSort(`m_grid_${gi}`, saveModelOrder));
+  if(CUR_TAB === "channels") return renderChannelCards();
+  if(CUR_TAB === "availability") { renderAvailability(); loadAvailability(true); }
 }
 /* 模型排序落库：影响 catalog 下发顺序 → 客户端模型下拉（家族内线路 / 同模式款式）顺序跟随，≤30s 热更 */
 async function saveModelOrder(ids){
@@ -1502,33 +1548,12 @@ async function saveModelOrder(ids){
     toast("模型排序已保存（客户端 ≤30s 生效）");
   }catch(e){ toast(e.message,"bad"); await loadModels(); }
 }
-/* 启用开关：保存后重渲染——禁用的行当场收进「已禁用」筛选（启用视图下立即消失），计数同步 */
-async function toggleModelEnabled(id,on){ await updModel(id,'enabled',on); renderModels(); }
-async function addModel(){
-  try {
-    await api("/admin-api/models",{method:"POST",body:JSON.stringify({
-      id:$("#nm_id").value.trim(), label:$("#nm_label").value.trim()||$("#nm_id").value.trim(),
-      capability:$("#nm_cap").value, protocol:$("#nm_proto").value,
-      channelId:$("#nm_channel").value||undefined,
-
-      // 家族：「自动识别」不发字段（服务端按名称归类）；显式选择（含「其他」=空串）原样发
-      ...($("#nm_fam").value!=="__auto" ? { familyId:$("#nm_fam").value } : {}),
-      upstreamModel:$("#nm_up").value.trim()||undefined,
-      // 单价按计费方式落字段：按次→cost（固定价）；按秒→costPerUnit（每秒价）+ 兜底 cost=每秒价×15（默认按最高；建模时还没配时长参数，按标准上限 15s）
-      ...($("#nm_billmode").value
-        ? { costField:$("#nm_billmode").value, costPerUnit:Number($("#nm_price").value)||0, cost:Math.round((Number($("#nm_price").value)||0)*15) }
-        : { cost:Number($("#nm_price").value)||10 }) })});
-    toast("模型已保存"); loadModels();
-  } catch(e){ $("#m_err").textContent = e.message; }
-}
 async function updModel(id,k,v){
   try { await api("/admin-api/models/"+id,{method:"PUT",body:JSON.stringify({[k]: v===""?null:v})}); const m=(window.__models||[]).find(x=>x.id===id); if(m) m[k]=v===""?undefined:v; toast("已保存"); }
   catch(e){ toast(e.message,"bad"); }
 }
 /* 计费方式切换：改 costField 后重渲染表格——「单价」输入随之改绑 cost（按次）↔ costPerUnit（按秒） */
 async function setBillMode(id,v){ await updModel(id,'costField',v); renderModels(); }
-/* 新建模型表单：仅视频生成能力可选「按秒」（图/文/音/处理类无时长概念，恒按次） */
-function syncBillMode(){ const isV=$("#nm_cap").value==='video'; const b=$("#nm_billmode"); b.disabled=!isV; if(!isV) b.value=''; }
 /* 模型最长时长（秒）：计费字段对应参数 数字型取 max、枚举取最大档；缺省 15。兜底规则用（见 updPrice） */
 function maxDurOf(m){
   const d=(m&&m.params||[]).find(p=>p.key===(m.costField||'duration'));
@@ -1591,7 +1616,7 @@ function cloneModelDlg(id){
   $("#dlgTitle").textContent = "克隆模型 · " + id;
   $("#dlgBody").innerHTML = `
     <div class="fld"><span>新模型 id</span><input id="cm_id" type="text" value="${esc(id)}-copy" /></div>
-    <p class="faint" style="font-size:12px;margin:10px 0 0">协议/渠道/上游模型名/参数/重定向/计费/开放范围全部复制；新模型默认<b>停用</b>防误用；<b>密钥覆盖不复制</b>（跟随同一渠道的密钥）。</p>
+    <p class="faint" style="font-size:12px;margin:10px 0 0">协议/渠道/上游模型名/参数/重定向/计费/开放范围全部复制；新模型保存为配置方案，加入线路后使用；<b>密钥覆盖不复制</b>（跟随同一渠道的密钥）。</p>
     <p id="cm_err" class="bad-t" style="font-size:12.5px;margin:6px 0 0"></p>
     <div style="display:flex;justify-content:flex-end;gap:9px;margin-top:12px"><button onclick="dlg.close()">取消</button><button class="pri" onclick="cloneModel('${esc(id)}')">克隆</button></div>`;
   dlg.classList.remove("wide"); dlg.showModal();
@@ -1600,16 +1625,18 @@ async function cloneModel(id){
   const src = (window.__models||[]).find(x=>x.id===id); if(!src) return;
   const nid = $("#cm_id").value.trim();
   if (!nid){ $("#cm_err").textContent = "请填新模型 id"; return; }
+  if((window.__models||[]).some(m=>m.id===nid)){ $("#cm_err").textContent="模型 id 已存在，请填写新的 id";return; }
   try {
     await api("/admin-api/models",{method:"POST",body:JSON.stringify({
       id:nid, label:(src.label||id)+"（副本）", capability:src.capability, protocol:src.protocol,
       channelId:src.channelId||undefined, upstreamModel:src.upstreamModel||undefined,
       routes:src.routes||undefined, baseUrl:src.baseUrl||undefined,
       params:src.params||[], cost:src.cost, costField:src.costField||undefined,
-      tokenPricing:src.tokenPricing?{...structuredClone(src.tokenPricing),enabled:false}:undefined, costPerUnit:src.costPerUnit!=null?src.costPerUnit:undefined, hidden:src.hidden||undefined,
-      modeId:src.modeId||undefined, familyId:src.familyId||"", methods:src.methods||undefined, officialAssets:src.officialAssets||undefined,
-      shareScope:src.shareScope||undefined, shareAgentIds:src.shareAgentIds||undefined, enabled:false })});
-    dlg.close(); toast("已克隆（新模型已停用，确认后再启用）"); loadModels();
+      tokenPricing:src.tokenPricing?structuredClone(src.tokenPricing):undefined, costPerUnit:src.costPerUnit!=null?src.costPerUnit:undefined, hidden:src.hidden||undefined,
+      modeId:src.modeId||undefined, familyId:src.familyId||"", methods:src.methods||undefined, officialAssets:src.officialAssets||undefined, materialPolicy:src.materialPolicy?structuredClone(src.materialPolicy):undefined, saveToOss:src.saveToOss!==false, imageSizeMap:src.imageSizeMap, imageMaterialMode:src.imageMaterialMode,
+      matLimits:src.matLimits,refVideoSecondsWeight:src.refVideoSecondsWeight,minVisualMaterials:src.minVisualMaterials,note:src.note,
+      shareScope:src.shareScope||undefined, shareGroupIds:src.shareGroupIds||undefined, shareAgentIds:src.shareAgentIds||undefined })});
+    dlg.close(); toast("模型配置已克隆"); loadModels();
   } catch(e){ $("#cm_err").textContent = e.message; }
 }
 /* ── 重定向规则（同一逻辑模型按请求参数选真实上游）── */
@@ -1621,31 +1648,31 @@ function parseWhen(s){
 const whenToStr = (w) => Object.entries(w||{}).map(([k,v])=>`${k}=${v}`).join(", ");
 function editRoutes(id){
   const m = (window.__models||[]).find(x=>x.id===id); if(!m) return;
-  window.__routes = JSON.parse(JSON.stringify(m.routes||[]));
+  window.__routes = resolutionRouteDefaults(m,m.routes);
   $("#dlgTitle").textContent = "重定向规则 · " + id;
   renderRoutesDlg(id);
   dlg.classList.remove("wide"); dlg.showModal();
 }
-function renderRoutesDlg(id){
-  const rs = window.__routes||[];
+function renderRoutesDlg(id){ $("#dlgBody").innerHTML=routeEditorHtml(id,window.__routes||[]); }
+function routeEditorHtml(id,rs,{reference='window.__routes',redraw=`renderRoutesDlg('${id}')`,save=`saveRoutes('${id}')`,price='routePerUnitChanged'}={}){
   const m = (window.__models||[]).find(x=>x.id===id);
   const paramKeys = (m?.params||[]).map(p=>p.key).join(" / ") || "（该模型暂无参数，先去「参数」配置）";
   const chOpts = (cur) => `<option value="">跟随模型渠道</option>` + CHANNELS.map(c=>`<option value="${esc(c.id)}" ${c.id===cur?'selected':''}>${esc(c.name)}</option>`).join("");
-  $("#dlgBody").innerHTML = `
+  return `
     <p class="mut" style="font-size:12.5px;margin:0 0 10px">规则按顺序匹配：请求参数满足「匹配条件」时改用对应「真实上游模型」（及可选积分/渠道）。未命中用模型默认。可用参数键：<span class="mono">${esc(paramKeys)}</span></p>
-    <div class="tblwrap" style="margin-bottom:12px"><table><thead><tr><th>匹配条件（参数=值，逗号分隔）</th><th>真实上游模型</th><th>积分</th><th>每单位价</th><th>渠道（可选）</th><th></th></tr></thead><tbody>
+    <div class="tblwrap" style="margin-bottom:12px"><table><thead><tr><th>匹配条件（参数=值，逗号分隔）</th><th>真实上游模型</th><th>${m?.costField?'兜底积分/次':'积分/次'}</th><th>${m?.costField==='duration'?'单价（积分/秒）':'每单位价'}</th><th>渠道（可选）</th><th></th></tr></thead><tbody>
     ${rs.map((r,i)=>`<tr>
-      <td><input type="text" value="${esc(whenToStr(r.when))}" onchange="window.__routes[${i}].when=parseWhen(this.value)" style="width:230px" placeholder="resolution=480p, version=fast"/></td>
-      <td><input type="text" value="${esc(r.upstreamModel||'')}" onchange="window.__routes[${i}].upstreamModel=this.value" style="width:170px" placeholder="上游真实模型名"/></td>
-      <td><input type="number" value="${r.cost!=null?r.cost:''}" onchange="window.__routes[${i}].cost=this.value===''?undefined:Number(this.value)" style="width:60px" placeholder="基准"/></td>
-      <td><input type="number" step="0.1" value="${r.costPerUnit!=null?r.costPerUnit:''}" onchange="routePerUnitChanged('${id}',${i},this.value)" style="width:60px" placeholder="—"/></td>
-      <td><select onchange="window.__routes[${i}].channelId=this.value||undefined">${chOpts(r.channelId)}</select></td>
-      <td><button class="sm danger" onclick="window.__routes.splice(${i},1);renderRoutesDlg('${id}')">×</button></td></tr>`).join("") || `<tr><td colspan="6" class="faint" style="text-align:center;padding:18px">暂无规则</td></tr>`}
+      <td><input type="text" value="${esc(whenToStr(r.when))}" onchange="${reference}[${i}].when=parseWhen(this.value)" style="width:230px" placeholder="resolution=480p, version=fast"/></td>
+      <td><input type="text" value="${esc(r.upstreamModel||'')}" onchange="${reference}[${i}].upstreamModel=this.value" style="width:170px" placeholder="上游真实模型名"/></td>
+      <td><input type="number" value="${r.cost!=null?r.cost:''}" onchange="${reference}[${i}].cost=this.value===''?undefined:Number(this.value)" style="width:60px" placeholder="基准"/></td>
+      <td><input type="number" step="0.1" value="${r.costPerUnit!=null?r.costPerUnit:''}" onchange="${price}('${id}',${i},this.value)" style="width:60px" placeholder="—"/></td>
+      <td><select onchange="${reference}[${i}].channelId=this.value||undefined">${chOpts(r.channelId)}</select></td>
+      <td><button class="sm danger" onclick="${reference}.splice(${i},1);${redraw}">×</button></td></tr>`).join("") || `<tr><td colspan="6" class="faint" style="text-align:center;padding:18px">暂无规则</td></tr>`}
     </tbody></table></div>
     <div class="toolbar" style="margin:0">
-      <button class="sm" onclick="window.__routes.push({when:{},upstreamModel:''});renderRoutesDlg('${id}')"><svg><use href="#i-plus"/></svg>添加规则</button>
+      <button class="sm" onclick="${reference}.push({when:{},upstreamModel:''});${redraw}"><svg><use href="#i-plus"/></svg>添加规则</button>
       <span class="sp"></span>
-      <button class="pri" onclick="saveRoutes('${id}')">保存重定向</button>
+      <button class="pri" onclick="${save}">保存重定向</button>
     </div>`;
 }
 /* 路由「每单位价」变更：档兜底（积分列）自动跟随 = 每秒价×最长时长（保存前仍可手改覆盖） */
@@ -1670,6 +1697,12 @@ async function saveRoutes(id){
 }
 /* ── 模型参数（ParamField[]：客户端面板表单字段；重定向按这些键匹配）── */
 const PARAM_TYPES = ["text","textarea","enum","number","boolean"];
+function addThinkingParams(params){
+  for(const field of [
+    {key:'thinkingMode',label:'思考模式',type:'enum',options:['enabled','disabled'],default:'disabled'},
+    {key:'reasoning_effort',label:'思考强度',type:'enum',options:['low','medium','high'],default:'high'}
+  ])if(!params.some(p=>p.key===field.key))params.push(field);
+}
 function editParams(id){
   const m = (window.__models||[]).find(x=>x.id===id); if(!m) return;
   window.__params = JSON.parse(JSON.stringify(m.params||[]));
@@ -1681,28 +1714,32 @@ function renderParamsDlg(id){
   $("#dlgBody").innerHTML=paramEditorHtml(id,window.__params||[]);
 }
 function paramEditorHtml(id,ps,{reference='window.__params',redraw=`renderParamsDlg(${JSON.stringify(id)})`,save=`saveParams(${JSON.stringify(id)})`,reset='',saving=false}={}){
+  const model=(window.__models||[]).find(m=>m.id===id),image=model?.capability==='image';
+  const refresh=`refreshImageSizeTable(${JSON.stringify(id)},${reference})`;
   const P=(i,k)=>`${reference}[${i}].${k}`;
-  const input=(i,p,k,label,width,type='text',disabled=false,value=p[k]??'')=>`<input aria-label="参数${i+1} ${label}" type="${type}" value="${esc(String(value))}" ${disabled?'disabled':''} oninput="${esc(P(i,k)+"="+(type==='number'?"this.value===''?undefined:Number(this.value)":k==='options'?"parseList(this.value)":k==='key'?"this.value.trim()":"this.value"))}" style="width:${width}px"/>`;
+  const input=(i,p,k,label,width,type='text',disabled=false,value=p[k]??'')=>`<input aria-label="参数${i+1} ${label}" type="${type}" value="${esc(String(value))}" ${disabled?'disabled':''} oninput="${esc(P(i,k)+"="+(type==='number'?"this.value===''?undefined:Number(this.value)":k==='options'?"parseList(this.value)":k==='key'?"this.value.trim()":"this.value")+';'+refresh)}" style="width:${width}px"/>`;
   return `<p class="mut" style="font-size:12.5px;margin:0 0 10px">直接编辑后点击“保存参数”。key 是请求参数名；enum 选项用逗号分隔；number 可设置最小值、最大值和步长。线路对用户开放的公共参数在自动路由中统一。</p>
     <fieldset ${saving?'disabled':''} style="border:0;padding:0;margin:0;min-width:0">
-    <div class="tblwrap" style="margin-bottom:12px"><table><thead><tr><th>key</th><th>显示名</th><th>类型</th><th>选项（逗号分隔）</th><th>默认值</th><th>最小值</th><th>最大值</th><th>步长</th><th>单位</th><th></th></tr></thead><tbody>
+    <div class="tblwrap" style="margin-bottom:12px"><table><thead><tr><th>key</th><th>显示名</th><th>类型</th><th>选项（逗号分隔）</th><th>默认值</th><th>最小值</th><th>最大值</th><th>步长</th><th>单位</th>${image?'<th>加入对应表</th>':''}<th></th></tr></thead><tbody>
     ${ps.map((p,i)=>`<tr>
       <td>${input(i,p,'key','key',105)}</td>
       <td>${input(i,p,'label','显示名',120)}</td>
       <td><select aria-label="参数${i+1} 类型" onchange="${esc(P(i,'type')+'=this.value;'+redraw)}">${PARAM_TYPES.map(t=>`<option ${t===(p.type||'text')?'selected':''}>${t}</option>`).join('')}</select></td>
       <td>${input(i,p,'options','选项',160,'text',p.type!=='enum',(p.options||[]).join(','))}</td>
-      <td>${input(i,p,'default','默认值',76)}</td>
+        <td>${model?.capability==='text'&&['thinkingMode','reasoning_effort'].includes(p.key)&&p.type==='enum'?`<select aria-label="${esc(p.label)}默认值" onchange="${esc(P(i,'default')+'=this.value')}">${(p.options||[]).map(v=>`<option value="${esc(v)}" ${String(p.default??'default')===v?'selected':''}>${esc(({default:'跟随上游',enabled:'开启',disabled:'关闭',none:'关闭',minimal:'极低',low:'低',medium:'中',high:'高',xhigh:'极高',max:'最高'})[v]||v)}</option>`).join('')}</select>`:input(i,p,'default','默认值',76)}</td>
       <td>${input(i,p,'min','最小值',64,'number',p.type!=='number')}</td>
       <td>${input(i,p,'max','最大值',64,'number',p.type!=='number')}</td>
       <td>${input(i,p,'step','步长',56,'number',p.type!=='number')}</td>
       <td>${input(i,p,'unit','单位',48)}</td>
+      ${image?`<td><input type="checkbox" aria-label="参数${i+1} 加入对应表" ${imageSizeParamSelected(model,p)?'checked':''} ${imageSizeParamKind(p)?'':'disabled'} onchange="${esc(P(i,'inImageSizeMap')+'=this.checked;'+refresh)}"></td>`:''}
       <td><button class="sm danger" aria-label="删除参数${i+1}" onclick="${esc(reference+'.splice('+i+',1);'+redraw)}">×</button></td>
     </tr>`).join('')||'<tr><td colspan="10" class="faint" style="text-align:center;padding:18px">暂无参数，点击下方“添加参数”配置。</td></tr>'}
     </tbody></table></div><div class="toolbar" style="margin:0">
       <button class="sm" onclick="${esc(reference+".push({key:'',label:'',type:'text'});"+redraw)}"><svg><use href="#i-plus"/></svg>添加参数</button>
+      ${model?.capability==='text'&&model.protocol==='openai-chat'?`<button class="sm" onclick="${esc('addThinkingParams('+reference+');'+redraw)}">添加思考模式 / 强度</button><span class="mut" style="font-size:12px">思考选项可编辑，按上游支持设置；请选择明确的思考开关与强度。</span>`:''}
       <span class="sp"></span>${reset?`<button onclick="${esc(reset)}">放弃参数修改</button>`:''}
       <button class="pri" onclick="${esc(save)}">${saving?'保存中…':'保存参数'}</button>
-    </div></fieldset>`;
+    </div></fieldset>${image?imageSizeFields({...model,params:ps}):''}`;
 }
 function cleanModelParams(params){
   return params.filter(p=>p.key && p.key.trim()).map(p=>{
@@ -1711,6 +1748,7 @@ function cleanModelParams(params){
     if (p.default!==undefined && p.default!=="") o.default = p.type==="number"?Number(p.default):(p.type==="boolean"?(p.default===true||p.default==="true"):p.default);
     if (p.type==="number"){ if(p.min!=null)o.min=p.min; if(p.max!=null)o.max=p.max; if(p.step!=null)o.step=p.step; }
     if (p.unit) o.unit = p.unit;
+    if(typeof p.inImageSizeMap==='boolean')o.inImageSizeMap=p.inImageSizeMap;
     return o;
   });
 }
@@ -1778,7 +1816,7 @@ function setTplView(v){ tplView = v; renderTplView(); document.querySelectorAll(
 function renderTplView(){
   const host = $("#tpl_view"); if(!host) return;
   const roBanner = isAgentScope(tplScope)
-    ? `<div class="mut" style="font-size:12px;margin:0 0 10px;padding:8px 12px;border:1px solid var(--line2);border-radius:var(--r-sm);background:rgba(90,167,240,.08)">当前查看 <b>${esc(scopeName(tplScope))}</b> 的自营模板：<b>只读</b>——自营提示词属该渠道商，改动须由其在自己门户操作（源站可经「渠道商 → 详情 → 查看信息」免密直登代为处理）。</div>`
+    ? `<div class="mut" style="font-size:12px;margin:0 0 10px;padding:8px 12px;border:1px solid var(--line2);border-radius:var(--r-sm);background:rgba(90,167,240,.08)">当前查看 <b>${esc(scopeName(tplScope))}</b> 的自营模板：<b>只读</b>——自营提示词属该渠道商，改动须由其在自己门户操作。</div>`
     : "";
   if (tplView === "table"){ renderTplTable(); const t=$("#tpl_view"); if(t&&roBanner) t.insertAdjacentHTML("afterbegin", roBanner); return; }
   host.innerHTML = roBanner + `
@@ -2282,20 +2320,28 @@ async function removePresetImage(id, idx){
 }
 
 /* ════════════════ 兑换码 ════════════════ */
-/* 第175轮：兑换码有归属——平台直发（源站）全体用户可兑换、渠道商签发仅其名下用户可兑换。
+/* 第175轮：兑换码有归属——平台直发（源站）仅源站用户可兑换、渠道商签发仅其名下用户可兑换。
    本页范围下拉与「请求记录」页同款：缺省=源站直发，可切到某渠道商或全部。 */
 let rdScope = "platform";      // 三态见 scopeSelect：platform=源站直发 / __all=全部 / <agentId>=该渠道商
 let rdAgentsCache = null;      // 渠道商清单（null=未拉取）
 function setRedeemScope(v){ rdScope = v; loadRedeem(); }
+
+function clearUsedCodes(kind){
+ const label=kind==='team-codes'?'团队码':'兑换码';
+ confirmDo({title:'清除已使用'+label,text:'清除源站签发的已使用'+label+'？'+(kind==='team-codes'?'已创建的团队和成员积分保持不变。':'已兑换的积分保持不变。'),okLabel:'清除',onOk:async()=>{
+  try{const r=await api('/admin-api/'+kind+'/prune-used',{method:'POST',body:'{}'});toast(r.removed?'已清除 '+r.removed+' 个'+label:'没有已使用的'+label);await (kind==='team-codes'?loadTeams():loadRedeem());}catch(e){toast(e.message,'bad');}
+ }});
+}
+
 async function loadRedeem(){
   const el = $("#tab-redeem");
   await ensureScopeAgents(); rdAgentsCache = SCOPE_AGENTS;
   const isPlatform = rdScope === "platform";
-  const scopeSel = scopeSelect("rd_scope", rdScope, "setRedeemScope", "兑换码归属范围：源站直发的码全体用户可兑换；渠道商签发的码仅其名下用户可兑换");
+  const scopeSel = scopeSelect("rd_scope", rdScope, "setRedeemScope", "兑换码归属范围：源站直发的码仅源站用户可兑换；渠道商签发的码仅其名下用户可兑换");
   el.innerHTML = `
     <div class="card"><div class="hd"><h3>${isPlatform?"生成兑换码":"兑换码"}</h3><span class="mut" style="font-size:12px">一次性码：每码固定面额，用户在个人中心兑换一次后作废；可设有效期（留空=永不过期）。</span></div>
       <div class="bd">
-        <div class="toolbar" style="margin:0 0 12px">${scopeSel}<span class="mut" style="font-size:12px">${isPlatform?"源站直发的码<b>所有用户</b>都能兑换":"渠道商签发的码<b>只有其名下用户</b>能兑换（在其门户签发，此处只读查看）"}</span></div>
+        <div class="toolbar" style="margin:0 0 12px">${scopeSel}<span class="mut" style="font-size:12px">${isPlatform?"源站积分码仅供源站用户兑换":"渠道商积分码仅供所属渠道商用户兑换"}</span></div>
         ${isPlatform ? `
         <div class="fgrid">
           <div class="fld"><span>面额（积分）</span><input id="rd_credits" type="number" value="10000" min="1"/></div>
@@ -2306,13 +2352,14 @@ async function loadRedeem(){
         <div class="toolbar" style="margin:12px 0 0">
           ${isPlatform ? `<button class="pri" onclick="genRedeem()"><svg><use href="#i-plus"/></svg>生成兑换码</button>` : ""}
           <button class="sm" onclick="copyUnusedCodes()"><svg><use href="#i-copy"/></svg>复制全部未使用码</button>
-          <button class="sm danger" onclick="pruneRedeem()" title="一键删除全部「已使用」与「已过期」的兑换码（不限当前范围）。已过期未使用的渠道商码，面额自动退回该商积分池">清除失效兑换码</button>
+          <button class="sm danger" onclick="clearUsedCodes('redeem-codes')">清除已使用兑换码</button>
+          <button class="sm danger" onclick="pruneRedeem()" title="清除源站签发的已使用、已过期兑换码">清除失效兑换码</button>
           <span class="bad-t" id="rd_err" style="font-size:12px"></span>
         </div>
       </div>
     </div>
     <div class="tblwrap"><table><thead><tr><th>兑换码</th><th>归属（可兑换范围）</th><th style="text-align:right">面额</th><th>状态</th><th>兑换用户</th><th>有效期</th><th>备注</th><th>生成时间</th><th></th></tr></thead><tbody id="rd_body"></tbody></table></div>
-    <div class="tfoot"><span class="faint">${isPlatform?"当前范围=源站平台直发（全体用户可兑换）":(rdScope==="__all"?"当前范围=全部兑换码（归属列即其可兑换范围）":"当前范围=该渠道商签发（仅其名下用户可兑换）")}</span></div>`;
+    <div class="tfoot"><span class="faint">${isPlatform?"当前范围=源站平台直发（仅源站用户可兑换）":(rdScope==="__all"?"当前范围=全部兑换码（归属列即其可兑换范围）":"当前范围=该渠道商签发（仅其名下用户可兑换）")}</span></div>`;
   try {
     const { items } = await api("/admin-api/redeem-codes?agentId="+encodeURIComponent(rdScope));
     window.__codes = items;
@@ -2332,7 +2379,7 @@ async function loadRedeem(){
         <td class="mut">${c.expiresAt ? new Date(c.expiresAt).toLocaleDateString() : '永久'}</td>
         <td class="mut">${esc(c.note||'')}</td>
         <td class="mut">${new Date(c.createdAt).toLocaleString()}</td>
-        <td><button class="sm danger" onclick="delRedeem('${esc(c.code)}')">删除</button></td></tr>`;
+        <td>${c.agentId?'<span class="faint">只读</span>':`<button class="sm danger" onclick="delRedeem('${esc(c.code)}')">删除</button>`}</td></tr>`;
     }).join("") || `<tr><td colspan="9" class="faint" style="text-align:center;padding:24px">该范围暂无兑换码</td></tr>`;
   } catch(e){ $("#rd_err").textContent = e.message; }
 }
@@ -2366,7 +2413,7 @@ function delRedeem(code){
   }});
 }
 function pruneRedeem(){
-  confirmDo({ title:"清除失效兑换码", text:"删除<b>全部范围</b>内「已使用」与「已过期」的兑换码？<br>已过期未使用的<b>渠道商码</b>，面额会自动退回该商积分池（与作废同语义）。此操作不可撤销。", okLabel:"清除", onOk: async ()=>{
+  confirmDo({ title:"清除失效兑换码", text:"清除源站签发的已使用、已过期兑换码？此操作不可撤销。", okLabel:"清除", onOk: async ()=>{
     try {
       const r = await api("/admin-api/redeem-codes/prune",{method:"POST",body:"{}"});
       toast(r.removed ? `已清除 ${r.removed} 个（已使用 ${r.usedRemoved} / 已过期 ${r.expiredRemoved}）${r.refunded?`，退回渠道商 ${r.refunded.toLocaleString()} 积分`:""}` : "没有失效的兑换码");
@@ -2393,6 +2440,7 @@ async function loadTeams(){
           <input id="tc_count" type="number" value="5" min="1" max="200" style="width:90px" title="生成数量"/>
           <input id="tc_note" type="text" placeholder="备注（可空）" style="width:180px"/>
           <button class="pri" onclick="genTeamCodes()"><svg><use href="#i-plus"/></svg>生成团队码</button>
+          <button class="sm danger" onclick="clearUsedCodes('team-codes')">清除已使用团队码</button>
           <button class="sm" onclick="copyUnusedTeamCodes()"><svg><use href="#i-copy"/></svg>复制全部未用码</button>
           <span class="sp"></span><span class="faint" id="tc_meta"></span>
         </div>
@@ -2506,9 +2554,10 @@ async function loadAgents(){
   el.innerHTML = `
     <div class="kpis" id="ag_kpis"></div>
     <div class="toolbar">
-      <span class="mut" style="font-size:12.5px"><b>统一定价</b>：渠道商向源站买积分（在此分发/扣回）；获客靠<b>邀请码</b>（用户注册时填码即归属该商）、给用户充值发<b>兑换码</b>（面额从其池实扣）；用户消耗按<b>平台统一价</b>扣用户自己，渠道商不按请求结算。<b>源站</b>作为受众常驻本页（分组决定模型开放范围）。</span>
+
       <span class="sp"></span>
-      <button onclick="openGroupsDlg()"><svg><use href="#i-tag"/></svg>分组管理</button>
+      <button onclick="openNewPriceGroupDlg()"><svg><use href="#i-plus"/></svg>新增分组</button>
+      <button onclick="openGroupPriceSettings()"><svg><use href="#i-tag"/></svg>修改分组设置</button>
       <button class="pri" onclick="openNewAgentDlg()"><svg><use href="#i-plus"/></svg>新建渠道商</button>
     </div>
     <div class="tblwrap">
@@ -2651,7 +2700,6 @@ function openAgentEditDlg(id){
     <div class="fgrid">
       <div class="fld"><span>渠道商名称</span><input id="ea_name" type="text" value="${esc(a.name)}" /></div>
       <div class="fld"><span>登录账号</span><input id="ea_account" type="text" value="${esc(a.account)}" /></div>
-      <div class="fld"><span>重置密码（留空=不改）</span><input id="ea_pw" type="text" placeholder="留空不改" /></div>
       <div class="fld"><span>启用</span><div style="padding:5px 0"><label class="sw"><input id="ea_enabled" type="checkbox" ${a.enabled?"checked":""}/><i></i></label></div></div>
       <div class="fld full"><span>备注</span><input id="ea_note" type="text" value="${esc(a.note||'')}" /></div>
     </div>
@@ -2662,15 +2710,14 @@ function openAgentEditDlg(id){
 async function saveAgent(id){
   $("#ea_err").textContent = "";
   const patch = { name:$("#ea_name").value.trim(), account:$("#ea_account").value.trim(), note:$("#ea_note").value.trim(), enabled:$("#ea_enabled").checked };
-  const pw = $("#ea_pw").value.trim(); if (pw) patch.password = pw;
-  try { await api("/admin-api/agents/"+id,{method:"PUT",body:JSON.stringify(patch)}); dlg.close(); toast(pw?"已保存（密码已重置）":"已保存"); loadAgents(); }
+  try { await api("/admin-api/agents/"+id,{method:"PUT",body:JSON.stringify(patch)}); dlg.close(); toast("已保存"); loadAgents(); }
   catch(e){ $("#ea_err").textContent = e.message; }
 }
 function openCreditDlg(id){
   const a = AGENTS.find(x=>x.id===id); if(!a) return;
   $("#dlgTitle").textContent = "分发积分 · " + a.name;
   $("#dlgBody").innerHTML = `
-    <p class="mut" style="margin:0 0 12px;font-size:12.5px">当前积分 <b style="color:var(--text)">${(a.credits||0).toLocaleString()}</b>。渠道商向源站买积分后在此分发；商给用户发兑换码时按面额从此池实扣。分发（+）充值，扣回（−）收回未用额度（不透支）。</p>
+    <p class="mut" style="margin:0 0 12px;font-size:12.5px">当前积分 <b style="color:var(--text)">${(a.credits||0).toLocaleString()}</b>。渠道商向源站买积分后在此分发；用户生成时从此余额扣进货成本。分发（+）充值，扣回（−）收回未用额度（不透支）。</p>
     <div style="display:flex;flex-direction:column;gap:12px">
       <div class="seg" style="align-self:flex-start"><button class="on" id="cd_add" onclick="cdMode(true)">分发 +</button><button id="cd_sub" onclick="cdMode(false)">扣回 −</button></div>
       <div class="fld"><span>积分数量</span><input id="cd_amt" type="number" value="100000" min="1" /></div>
@@ -2840,10 +2887,10 @@ async function sharedFolderPreview(fid, name){
 }
 /* 渠道商共享素材库开关（「对允许的渠道商开放」）：关=该商门户不可建/管共享库 */
 /* 渠道商级可用模式（第121轮整商硬闸）：与用户级 features 同项（含实时剪辑/ComfyUI）；商关=名下用户一律不可用（AND 合成下发） */
-const AGENT_FEATURES = [["assetMode","表格视频"],["canvasMode","画布模式"],["editorMode","实时剪辑模式"],["libtv","LibTV"],["dreamina","即梦"],["comfyui","ComfyUI"]];
+const AGENT_FEATURES = [["dualMode","双模"],["assetMode","表格视频"],["canvasMode","画布模式"],["editorMode","实时剪辑模式"],["libtv","LibTV"],["dreamina","即梦"],["comfyui","ComfyUI"]];
 async function toggleAgentFeature(id, key, on){
   const a = AGENTS.find(x=>x.id===id); if(!a) return;
-  const f = Object.assign({assetMode:true,canvasMode:true,editorMode:true,libtv:true,dreamina:true,comfyui:true}, a.features||{});
+  const f = Object.assign({dualMode:true,assetMode:true,canvasMode:true,editorMode:true,libtv:true,dreamina:true,comfyui:true}, a.features||{});
   f[key] = (on===true || on==="true");
   try { await api("/admin-api/agents/"+id,{method:"PUT",body:JSON.stringify({ features: f })}); toast("已更新可用模式（其用户心跳 ≤30s 生效）");
     AGENTS = (await api("/admin-api/agents")).items || []; openAgentDetail(id); }
@@ -2852,7 +2899,7 @@ async function toggleAgentFeature(id, key, on){
 /* 渠道商级动态模式硬闸（第130轮）：写 features.modes[id]（AND 合成后随其用户心跳下发） */
 async function toggleAgentMode(id, modeId, on){
   const a = AGENTS.find(x=>x.id===id); if(!a) return;
-  const f = Object.assign({assetMode:true,canvasMode:true,editorMode:true,libtv:true,dreamina:true,comfyui:true}, a.features||{});
+  const f = Object.assign({dualMode:true,assetMode:true,canvasMode:true,editorMode:true,libtv:true,dreamina:true,comfyui:true}, a.features||{});
   f.modes = Object.assign({}, (a.features&&a.features.modes)||{});
   f.modes[modeId] = (on===true || on==="true");
   try { await api("/admin-api/agents/"+id,{method:"PUT",body:JSON.stringify({ features: f })}); toast("已更新可用模式（其用户心跳 ≤30s 生效）");
@@ -2865,7 +2912,7 @@ async function toggleAgentSharedLib(id, allow){
   catch(e){ toast(e.message,"bad"); }
 }
 
-/* ── 渠道商详情（P1 统一定价：定价能力整体退役，只剩 配置/开放管控/名下用户/请求记录）──
+/* ── 渠道商详情（功能权限、线路进货价、名下用户、请求记录）──
    查看信息 = 免密打开其 /agent 门户（用户/积分/统计/提示词全在门户里，与渠道商本人所见一致）。 */
 let AGP_ITEMS = [], AGP_AID = "";
 /* 渠道商详情 = **内嵌二级页**（第121轮：弹窗改内嵌，渲染进 #tab-agents，「← 返回」回列表）；
@@ -2901,26 +2948,17 @@ async function openAgentDetail(id, sub){
   else if (AGD_SUB === "logs") renderAgentDetailLogs(id);
   else await renderAgentDetailConfig(a);
 }
-/* 子页①：渠道商配置（共享素材库开关 + 模式硬闸 + 模型开放/禁用管控——P1 统一定价后无定价） */
+/* 子页①：渠道商配置（功能权限 + 线路进货价格） */
 async function renderAgentDetailConfig(a){
-  await ensureModes(); // 动态模式硬闸按钮需要
   $("#agd_body").innerHTML = `
-    <div style="background:var(--panel2);border:1px solid var(--line);border-radius:var(--r-md);padding:12px 16px;margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <b style="font-size:12.5px;color:var(--acc)">共享素材库</b>
-      <span class="faint" style="font-size:11.5px">关=该商门户不可建/管共享素材库（「对允许的渠道商开放」）。</span>
-      <button class="sm ${a.allowSharedLib===false?"":"pri"}" onclick="toggleAgentSharedLib('${a.id}',${a.allowSharedLib===false?"true":"false"})">${a.allowSharedLib===false?"已关（点击开放）":"已开放（点击关闭）"}</button>
-    </div>
-    <div style="background:var(--panel2);border:1px solid var(--line);border-radius:var(--r-md);padding:12px 16px;margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <b style="font-size:12.5px;color:var(--acc)">可用功能与线路（整商硬闸）</b>
-      <span class="faint" style="font-size:11.5px">关=该商<b>全部名下用户</b>不可用该模式（用户自身开关失效）；开=按用户自身设置。心跳 ≤30s 生效。表格视频只控制视频区与视频选择，表格资产和故事板生图始终可用。</span>
+    <div class="agent-features" style="background:var(--panel2);border:1px solid var(--line);border-radius:var(--r-md);padding:12px 16px;margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <b style="font-size:12.5px;color:var(--acc)">可用功能</b>
       ${AGENT_FEATURES.map(([k,lb])=>{ const on = !(a.features && a.features[k]===false);
         return `<button class="sm ${on?"pri":""}" onclick="toggleAgentFeature('${a.id}','${k}',${on?"false":"true"})">${lb}：${on?"开":"已禁用"}</button>`; }).join("")}
-      ${(MODES||[]).map(m=>{ const on = !(a.features && a.features.modes && a.features.modes[m.id]===false);
-        return `<button class="sm ${on?"pri":""}" onclick="toggleAgentMode('${a.id}','${m.id}',${on?"false":"true"})">${esc(m.name)}：${on?"开":"已禁用"}</button>`; }).join("")}
+      <button class="sm ${a.allowSharedLib===false?"":"pri"}" onclick="toggleAgentSharedLib('${a.id}',${a.allowSharedLib===false?"true":"false"})">共享素材库：${a.allowSharedLib===false?"已禁用":"开"}</button>
     </div>
-    <div style="background:var(--panel2);border:1px solid var(--line);border-radius:var(--r-md);padding:12px 16px;margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <b style="font-size:12.5px;color:var(--acc)">渠道节点（独立部署）</b>
-      <span class="faint" style="font-size:11.5px">商自部署 relay 节点的对接密钥（ank-）：节点凭它走源站 /v1，消耗从该商积分池扣（平台价）。<b>重置=旧密钥立即失效</b>。</span>
+    <details style="margin-bottom:16px"><summary style="cursor:pointer;padding:12px">渠道节点（独立部署）</summary><div style="padding:12px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span class="faint" style="font-size:11.5px">商自部署 relay 节点的对接密钥（ank-）：节点凭它走源站 /v1，消耗从该商积分池扣（该商进货价）。<b>重置=旧密钥立即失效</b>。</span>
       ${a.nodeKey
         ? `<span>节点密钥 <b class="mono">${esc(a.nodeKey.slice(0,12))}…</b></span>
            <button class="sm" onclick="copyText('${esc(a.nodeKey)}','节点密钥已复制')">复制完整密钥</button>
@@ -2928,19 +2966,9 @@ async function renderAgentDetailConfig(a){
         : `<span class="faint">未生成（该商未部署节点）</span>
            <button class="sm pri" onclick="regenNodeKey('${a.id}', false)">生成节点密钥</button>`}
       <span class="faint" style="font-size:11.5px;width:100%">部署指引：节点服务器 <span class="mono">.env</span> 配 <span class="mono">NODE_ROLE=relay</span> + <span class="mono">SOURCE_URL=本源站地址</span> + <span class="mono">SOURCE_NODE_KEY=上方密钥</span>，详见 docs/渠道节点部署手册.md。</span>
-    </div>
-    <p class="mut" style="margin:0 0 10px;font-size:12px">「查看信息」以该渠道商身份免密打开 <span class="mono">/agent</span> 门户——其用户、积分、统计、提示词一览无余（与本人登录所见一致）。下表为该商可用模型的<b>开放/禁用管控</b>；价格为<b>源站统一价</b>（全体用户同价，P1 商业化改造后渠道商不再定价）。</p>
-    <div class="tblwrap">
-      <table>
-        <thead><tr><th>模型</th><th>能力</th><th>开放 / 禁用</th><th>价格（统一价）</th></tr></thead>
-        <tbody id="agp_body"><tr><td colspan="4" class="faint" style="text-align:center;padding:22px">加载中…</td></tr></tbody>
-      </table>
-      <div class="tfoot"><span id="agp_meta"></span><span class="sp"></span><span class="faint">「未开放」在模型页「开放范围」按分组调整；「禁用」是对该商的整商禁用（其用户 catalog 热更移除 + 调用 403）</span></div>
-    </div>`;
-  try {
-    AGP_ITEMS = (await api("/admin-api/agents/"+a.id+"/pricing")).items || [];
-    renderAgentPricing();
-  } catch(e){ $("#agp_body").innerHTML = `<tr><td colspan="4" class="bad-t">${esc(e.message)}</td></tr>`; }
+    </div></details>
+    <div id="agent-lines-panel"></div>`;
+  AgentLines.mount($("#agent-lines-panel"), {endpoint: "/admin-api/agents/"+encodeURIComponent(a.id)+"/lines", layer: "purchase", layout: "prices"});
 }
 /* 子页②：渠道商名下用户（只读） */
 function renderAgentDetailUsers(id){
@@ -2950,7 +2978,7 @@ function renderAgentDetailUsers(id){
         <thead><tr><th>用户</th><th style="text-align:right">积分</th><th style="text-align:right">今日 / 总消耗</th><th>账号</th><th>最近活跃</th><th></th></tr></thead>
         <tbody id="agu_body"></tbody>
       </table>
-      <div class="tfoot"><span id="agu_meta"></span><span class="sp"></span><span class="faint">只读查看——渠道商用户由渠道商自己管理（改动经「查看信息」进其门户）</span></div>
+      <div class="tfoot"><span id="agu_meta"></span><span class="sp"></span><span class="faint">渠道商用户由所属渠道商管理</span></div>
     </div>`;
   loadAgentUsers(id);
 }
@@ -2959,10 +2987,10 @@ function renderAgentDetailLogs(id){
   $("#agd_body").innerHTML = `
     <div class="tblwrap">
       <table>
-        <thead><tr><th>请求时间</th><th>用户</th><th>步骤</th><th>模型</th><th style="text-align:right" title="统一定价后=用户实扣（积分实时扣用户，源站实收即用户扣费）；切换前的旧记录=按结算价从渠道商实收；发码记录=商积分池划转">源站实收</th><th style="text-align:right" title="用户被扣的积分（统一平台价）">用户扣费</th><th>状态</th><th></th></tr></thead>
+        <thead><tr><th>请求时间</th><th>使用用户</th><th>积分用户 / 来源</th><th>步骤</th><th>模型</th><th style="text-align:right" title="从渠道商余额扣除的进货成本">源站实收</th><th style="text-align:right" title="按用户所属积分制度扣除的积分">用户扣费</th><th>状态</th><th></th></tr></thead>
         <tbody id="agl_body"></tbody>
       </table>
-      <div class="tfoot"><span id="agl_meta"></span><span class="sp"></span><button class="sm ghost" id="agl_more" style="display:none" onclick="loadAgentLogsMore()">加载更多</button><span class="faint">统一定价下积分实时扣用户，「源站实收」=用户实扣（旧链式记录=当时的结算实扣）；详情可见完整四段报文（①③②④）</span></div>
+      <div class="tfoot"><span id="agl_meta"></span><span class="sp"></span><button class="sm ghost" id="agl_more" style="display:none" onclick="loadAgentLogsMore()">加载更多</button><span class="faint"></span></div>
     </div>`;
   loadAgentLogs(id);
 }
@@ -2974,14 +3002,14 @@ async function loadAgentLogs(id, append){
   if (!$("#agl_body")) return;
   if (!append){
     AGL_OFFSET = 0;
-    $("#agl_body").innerHTML = `<tr><td colspan="8" class="faint" style="text-align:center;padding:16px">加载中…</td></tr>`;
+    $("#agl_body").innerHTML = `<tr><td colspan="9" class="faint" style="text-align:center;padding:16px">加载中…</td></tr>`;
   }
   try {
     const r = await api("/admin-api/logs?agentId="+encodeURIComponent(id)+"&limit=30&offset="+AGL_OFFSET);
     AGL_TOTAL = r.total;
     const rows = (r.items||[]).map(l=>`<tr>
       <td class="mut" style="white-space:nowrap">${fmtTime(l.startedAt)}</td>
-      <td>${esc(l.userName||"—")}</td>
+      <td>${esc(l.userName||l.userId||"—")}</td><td>${esc(l.creditUserName||"未记录")}<div class="faint">${esc(l.creditSourceLabel||"未记录")}</div></td>
       <td>${esc(purposeLabel(l.purpose))}</td>
       <td class="mono">${esc(l.modelLabel||l.model||"—")}</td>
       <td style="text-align:right">${l.platformCost!=null?l.platformCost:"—"}</td>
@@ -2990,11 +3018,11 @@ async function loadAgentLogs(id, append){
       <td style="text-align:right"><button class="sm" onclick="showLog('${l.id}','${id}')">详情</button></td>
     </tr>`).join("");
     if (append) $("#agl_body").insertAdjacentHTML("beforeend", rows);
-    else $("#agl_body").innerHTML = rows || `<tr><td colspan="8" class="faint" style="text-align:center;padding:16px">该渠道商的用户还没有请求记录</td></tr>`;
+    else $("#agl_body").innerHTML = rows || `<tr><td colspan="9" class="faint" style="text-align:center;padding:16px">该渠道商的用户还没有请求记录</td></tr>`;
     AGL_OFFSET += (r.items||[]).length;
     $("#agl_meta").textContent = `共 ${AGL_TOTAL} 条 · 已显示 ${AGL_OFFSET}`;
     $("#agl_more").style.display = AGL_OFFSET < AGL_TOTAL ? "" : "none";
-  } catch(e){ $("#agl_body").innerHTML = `<tr><td colspan="8" class="bad-t">${esc(e.message)}</td></tr>`; }
+  } catch(e){ $("#agl_body").innerHTML = `<tr><td colspan="9" class="bad-t">${esc(e.message)}</td></tr>`; }
 }
 function loadAgentLogsMore(){ loadAgentLogs(AGP_AID, true); }
 /* ── 单用户请求记录（第121轮「每个用户的请求记录」）：源站权限——平台直属/渠道商用户都可查，
@@ -3006,7 +3034,7 @@ function openUserLogs(id, name){
   $("#dlgBody").innerHTML = `
     <div class="tblwrap" style="margin:0">
       <table>
-        <thead><tr><th>请求时间</th><th>步骤</th><th>模型</th><th style="text-align:right">消耗</th><th>状态</th><th></th></tr></thead>
+        <thead><tr><th>请求时间</th><th>积分用户 / 来源</th><th>步骤</th><th>模型</th><th style="text-align:right">消耗</th><th>状态</th><th></th></tr></thead>
         <tbody id="ulog_body"></tbody>
       </table>
       <div class="tfoot"><span id="ulog_meta"></span><span class="sp"></span><button class="sm ghost" id="ulog_more" style="display:none" onclick="loadUserLogs(true)">加载更多</button><span class="faint">源站权限：详情可见完整四段报文（①③②④）</span></div>
@@ -3018,25 +3046,25 @@ async function loadUserLogs(append){
   if (!ULOG || !$("#ulog_body")) return;
   if (!append){
     ULOG_OFFSET = 0;
-    $("#ulog_body").innerHTML = `<tr><td colspan="6" class="faint" style="text-align:center;padding:16px">加载中…</td></tr>`;
+    $("#ulog_body").innerHTML = `<tr><td colspan="7" class="faint" style="text-align:center;padding:16px">加载中…</td></tr>`;
   }
   try {
     const r = await api("/admin-api/logs?userId="+encodeURIComponent(ULOG.id)+"&limit=30&offset="+ULOG_OFFSET);
     ULOG_TOTAL = r.total;
     const rows = (r.items||[]).map(l=>`<tr>
       <td class="mut" style="white-space:nowrap">${fmtTime(l.startedAt)}</td>
-      <td>${esc(purposeLabel(l.purpose))}</td>
+      <td>${esc(l.creditUserName||"未记录")}<div class="faint">${esc(l.creditSourceLabel||"未记录")}</div></td><td>${esc(purposeLabel(l.purpose))}</td>
       <td class="mono">${esc(l.modelLabel||l.model||"—")}</td>
       <td style="text-align:right">${l.cost!=null?l.cost:"—"}</td>
       <td>${statusBadge(l.status)}</td>
       <td style="text-align:right"><button class="sm" onclick="showLog('${l.id}',null,true)">详情</button></td>
     </tr>`).join("");
     if (append) $("#ulog_body").insertAdjacentHTML("beforeend", rows);
-    else $("#ulog_body").innerHTML = rows || `<tr><td colspan="6" class="faint" style="text-align:center;padding:16px">该用户还没有请求记录</td></tr>`;
+    else $("#ulog_body").innerHTML = rows || `<tr><td colspan="7" class="faint" style="text-align:center;padding:16px">该用户还没有请求记录</td></tr>`;
     ULOG_OFFSET += (r.items||[]).length;
     $("#ulog_meta").textContent = `共 ${ULOG_TOTAL} 条 · 已显示 ${ULOG_OFFSET}`;
     $("#ulog_more").style.display = ULOG_OFFSET < ULOG_TOTAL ? "" : "none";
-  } catch(e){ $("#ulog_body").innerHTML = `<tr><td colspan="6" class="bad-t">${esc(e.message)}</td></tr>`; }
+  } catch(e){ $("#ulog_body").innerHTML = `<tr><td colspan="7" class="bad-t">${esc(e.message)}</td></tr>`; }
 }
 /* 渠道商名下用户（只读；渠道商用户不进源站用户页——「源站可查看，不直接显示」） */
 async function loadAgentUsers(id){
@@ -3109,9 +3137,11 @@ async function toggleAgentModelAccess(mid, blocked){
 }
 /* ════════════════ 请求记录 ════════════════ */
 let logOffset = 0;
+let logLoadVersion = 0;
 let logFacetsCache = null;
 let logAgentsCache = null; // 渠道商清单（第168轮：范围切换下拉；null=未拉取）
-let logFilter = { rangeKey:"today", user:"", purpose:"", model:"", status:"", agentId:"platform" }; // agentId 空=源站直属
+let logFilter = { rangeKey:"today", user:"", purpose:"", model:"", family:"", capability:"", status:"", agentId:"platform" }; // agentId 空=源站直属
+function setLogCapability(v){ readLogInputs(); logFilter.capability=v; loadLogs(true); }
 function setLogAgent(v){ readLogInputs(); logFilter.agentId = v; logFacetsCache = null; loadLogs(true); }
 function dayStartMs(t){ const x=new Date(t); x.setHours(0,0,0,0); return x.getTime(); }
 function computeRange(key){
@@ -3131,10 +3161,11 @@ function readLogInputs(){
   if(u) logFilter.user = u.value.trim();
   if(p) logFilter.purpose = p.value.trim();
   if(m) logFilter.model = m.value.trim();
+  const family=$("#f_family"); if(family)logFilter.family=family.value.trim();
   if(s) logFilter.status = s.value;
 }
 function applyLogFilter(){ readLogInputs(); loadLogs(true); }
-function clearLogFilter(){ logFilter.user=logFilter.purpose=logFilter.model=logFilter.status=""; loadLogs(true); }
+function clearLogFilter(){ logFilter.user=logFilter.purpose=logFilter.model=logFilter.family=logFilter.capability=logFilter.status=""; loadLogs(true); }
 function setLogRange(key){ readLogInputs(); logFilter.rangeKey = key; loadLogs(true); }
 function fmtTime(s){ return s ? new Date(s).toLocaleString() : "—"; }
 /**
@@ -3150,31 +3181,36 @@ function fmtDur(durationMs, queuedMs){
 }
 const statusBadge = (s) => s==="success" ? `<span class="badge ok">成功</span>` : s==="failed" ? `<span class="badge bad">失败</span>` : `<span class="badge run">进行中</span>`;
 async function loadLogs(reset=true){
+  const requestVersion=++logLoadVersion;
   if (reset) logOffset = 0;
   const el = $("#tab-logs");
   if (reset){
     await ensureScopeAgents(); logAgentsCache = SCOPE_AGENTS;
     if (!logFacetsCache){ try { logFacetsCache = await api("/admin-api/logs/facets" + (logFilter.agentId ? "?agentId="+encodeURIComponent(logFilter.agentId) : "")); } catch { logFacetsCache = {users:[],purposes:[],models:[]}; } }
+    if(requestVersion!==logLoadVersion)return;
     const f = logFacetsCache;
     el.innerHTML = `
-      <div class="filterbar">
+      <div class="page-sticky" aria-label="请求记录筛选与统计"><div class="filterbar">
         ${scopeSelect("f_agent", logFilter.agentId, "setLogAgent", "查看范围：源站直属用户，或某渠道商体系（其名下用户消耗 + 该商开码记录），或全部")}
         <div class="seg">${LOG_RANGES.map(([k,lb])=>`<button class="${logFilter.rangeKey===k?'on':''}" onclick="setLogRange('${k}')">${lb}</button>`).join("")}</div>
         <div class="div"></div>
         <input id="f_user" type="text" value="${esc(logFilter.user)}" placeholder="用户" list="dl_user" style="width:110px" onkeydown="if(event.key==='Enter')applyLogFilter()">
         <input id="f_purpose" type="text" value="${esc(logFilter.purpose)}" placeholder="步骤（如 角色出图）" list="dl_purpose" style="width:150px" onkeydown="if(event.key==='Enter')applyLogFilter()">
-        <input id="f_model" type="text" value="${esc(logFilter.model)}" placeholder="模型" list="dl_model" style="width:130px" onkeydown="if(event.key==='Enter')applyLogFilter()">
+        <input id="f_family" aria-label="搜索家族" type="text" value="${esc(logFilter.family)}" placeholder="家族" list="dl_family" style="width:130px" onkeydown="if(event.key==='Enter')applyLogFilter()">
+        <input id="f_model" type="text" value="${esc(logFilter.model)}" aria-label="搜索模型" placeholder="模型 ID / 名称（支持中段）" list="dl_model" style="width:130px" onkeydown="if(event.key==='Enter')applyLogFilter()">
         <select id="f_status" onchange="applyLogFilter()" style="width:92px">${[["","全部状态"],["success","成功"],["failed","失败"],["running","进行中"]].map(([v,t])=>`<option value="${v}" ${v===logFilter.status?"selected":""}>${t}</option>`).join("")}</select>
         <button class="sm" onclick="applyLogFilter()">应用</button>
         <button class="sm ghost" onclick="clearLogFilter()">清空</button>
         <span class="sp"></span>
         <button class="sm" onclick="logFacetsCache=null;logAgentsCache=null;loadLogs(true)"><svg><use href="#i-refresh"/></svg>刷新</button>
         <button class="sm" onclick="exportLogsCsv()"><svg><use href="#i-dl"/></svg>导出 CSV</button>
-        ${selDatalist("dl_user", f.users)}${selDatalist("dl_purpose", (f.purposes||[]).map(purposeLabel))}${selDatalist("dl_model", f.models)}
+        ${selDatalist("dl_user", f.users)}${selDatalist("dl_purpose", (f.purposes||[]).map(purposeLabel))}${selDatalist("dl_model", f.models)}${selDatalist("dl_family", f.families)}
       </div>
+      <div class="seg" style="margin-bottom:12px" aria-label="请求类型快捷筛选">${[["","全部"],["text","文本"],["image","图像"],["video","视频"],["audio","音频"],["other","其他"]].map(([v,label])=>`<button class="${logFilter.capability===v?'on':''}" aria-pressed="${logFilter.capability===v}" onclick="setLogCapability('${v}')">${label}</button>`).join("")}</div>
       <div class="kpis" id="l_statbar" style="margin-bottom:13px"></div>
+      </div>
       <div class="tblwrap">
-        <table><thead><tr><th>请求时间</th><th>完成时间</th><th style="text-align:right">用时</th><th>用户</th><th>步骤</th><th>模型</th><th style="text-align:right">消耗</th><th>状态</th></tr></thead><tbody id="l_body"></tbody></table>
+        <table><thead><tr><th>请求时间</th><th>完成时间</th><th style="text-align:right">用时</th><th>使用用户</th><th>积分用户 / 来源</th><th>步骤</th><th>模型</th><th style="text-align:right">消耗</th><th>状态</th></tr></thead><tbody id="l_body"></tbody></table>
         <div class="tfoot"><span id="l_meta"></span><span class="sp"></span><span class="faint">${logFilter.agentId ? "当前范围=该渠道商体系（名下用户消耗 + 该商开码记录）" : "当前范围=平台直属用户（源站视为一个渠道商）；渠道商记录经左上下拉切换"} · 点行看四段报文详情</span><button class="sm" onclick="moreLogs()">加载更多</button></div>
       </div>`;
     loadLogStatbar();
@@ -3188,21 +3224,24 @@ async function loadLogs(reset=true){
     if (logFilter.user) qs.set("user", logFilter.user);
     if (logFilter.purpose) qs.set("purpose", logFilter.purpose);
     if (logFilter.model) qs.set("model", logFilter.model);
+    if (logFilter.family) qs.set("family", logFilter.family);
+    if (logFilter.capability) qs.set("capability", logFilter.capability);
     if (logFilter.status) qs.set("status", logFilter.status);
     const { total, items } = await api("/admin-api/logs?"+qs.toString());
+    if(requestVersion!==logLoadVersion)return;
     $("#l_meta").textContent = "共 " + total + " 条（已筛选）";
     const rows = items.map(l=>`<tr class="clk" onclick="showLog('${l.id}')">
       <td class="mut">${fmtTime(l.startedAt)}</td>
       <td class="mut">${fmtTime(l.finishedAt)}</td>
       <td class="mut" style="text-align:right" title="${l.queuedMs?'实际生成秒数（排队秒数）——排队不计入生成时长':''}">${fmtDur(l.durationMs,l.queuedMs)}</td>
-      <td>${esc(l.userName||"—")}</td>
+      <td>${esc(l.userName||l.userId||"—")}</td><td>${esc(l.creditUserName||"未记录")}<div class="faint">${esc(l.creditSourceLabel||"未记录")}</div></td>
       <td title="${esc(l.purpose||"")}">${esc(purposeLabel(l.purpose))}</td>
       <td class="mono">${esc(l.modelLabel||l.model||"—")}</td>
       <td style="text-align:right">${l.cost!=null?l.cost:"—"}</td>
       <td>${statusBadge(l.status)}</td></tr>`).join("");
-    if (reset) $("#l_body").innerHTML = rows || `<tr><td colspan="8" class="faint" style="text-align:center;padding:24px">该筛选条件下暂无记录</td></tr>`;
+    if (reset) $("#l_body").innerHTML = rows || `<tr><td colspan="9" class="faint" style="text-align:center;padding:24px">该筛选条件下暂无记录</td></tr>`;
     else $("#l_body").insertAdjacentHTML("beforeend", rows);
-  } catch(e){ $("#l_body").innerHTML = `<tr><td colspan="8" class="bad-t">${esc(e.message)}</td></tr>`; }
+  } catch(e){ if(requestVersion!==logLoadVersion)return; $("#l_body").innerHTML = `<tr><td colspan="9" class="bad-t">${esc(e.message)}</td></tr>`; }
 }
 function moreLogs(){ logOffset += 50; loadLogs(false); }
 // 请求记录顶部简单统计条：按当前筛选（忽略状态，以便四态计数都可见）取聚合
@@ -3216,6 +3255,8 @@ async function loadLogStatbar(){
   if (logFilter.user) qs.set("user", logFilter.user);
   if (logFilter.purpose) qs.set("purpose", logFilter.purpose);
   if (logFilter.model) qs.set("model", logFilter.model);
+    if (logFilter.family) qs.set("family", logFilter.family);
+    if (logFilter.capability) qs.set("capability", logFilter.capability);
   try {
     const s = await api("/admin-api/logs/summary?"+qs.toString());
     const kpis = [["消耗积分",s.credits],["成功数",s.success],["失败数",s.failed],["正在运行",s.running]];
@@ -3232,13 +3273,15 @@ async function exportLogsCsv(){
   if (logFilter.user) qs.set("user", logFilter.user);
   if (logFilter.purpose) qs.set("purpose", logFilter.purpose);
   if (logFilter.model) qs.set("model", logFilter.model);
+    if (logFilter.family) qs.set("family", logFilter.family);
+    if (logFilter.capability) qs.set("capability", logFilter.capability);
   if (logFilter.status) qs.set("status", logFilter.status);
   let items;
   try { items = (await api("/admin-api/logs/export?"+qs.toString())).items; }
   catch(e){ toast("导出失败："+e.message,"bad"); return; }
   if (!items.length){ toast("该筛选条件下暂无记录","bad"); return; }
-  const rows = [["用户","请求时间","完成时间","步骤","模型","消耗","结果","结果链接","失败原因"]];
-  items.forEach(it=>rows.push([it.user, fmtTime(it.startedAt), fmtTime(it.finishedAt), it.purpose, it.model, it.cost, it.status, it.resultLink, it.error]));
+  const rows = [["使用用户","积分用户","积分来源","请求时间","完成时间","步骤","模型","消耗","结果","结果链接","失败原因"]];
+  items.forEach(it=>rows.push([it.user,it.creditUserName,it.creditSourceLabel, fmtTime(it.startedAt), fmtTime(it.finishedAt), it.purpose, it.model, it.cost, it.status, it.resultLink, it.error]));
   downloadCsv(rows, "qiji-logs");
 }
 /* ════════════════ 批量下载（第232轮）════════════════
@@ -3250,7 +3293,7 @@ let dlFilter = { rangeKey:"today", user:"", purpose:"", model:"", storage:"raw",
 let dlManifest = null;      // 最近一次拉到的清单（导出/直下复用，不重复请求）
 let dlFacetsCache = null;
 const DL_STORAGE_OPTS = [["","全部保存情况"],["raw","仅上游原链（需抢救）"],["oss","仅已存 OSS"],["oss-old","仅旧桶（已舍弃）"],["local","仅服务端兜底链"]];
-const DL_KIND_OPTS = [["","全部类型"],["image","图片"],["video","视频"],["audio","音频"],["other","其他"]];
+const DL_KIND_OPTS = [["","全部类型"],["image","图片"],["video","视频"],["audio","音频"]];
 const DL_STORAGE_LABEL = { oss:"已存 OSS", "oss-old":"旧桶（已舍弃）", local:"服务端兜底链", raw:"上游原链" };
 const DL_RISK_BADGE = {
   none: `<span class="badge ok">永久</span>`,
@@ -3416,15 +3459,13 @@ async function showLog(id, backAgentId, backUser){
     s3: l.upstreamRequest!==undefined ? JSON.stringify(l.upstreamRequest, null, 2) : "（无：echo/stub 或上游未发起）",
     s4: l.upstreamResponse!==undefined ? JSON.stringify(l.upstreamResponse, null, 2) : "（无）",
   };
-  const meta = [["用户",esc(l.userName||"—")],["步骤",esc(purposeLabel(l.purpose))],["模型",`<span class="mono">${esc(l.modelLabel||l.model||"—")}</span>`],
+  const meta = [["使用用户",esc(l.userName||l.userId||"—")],["积分用户",esc(l.creditUserName||"未记录")],["积分来源",esc(l.creditSourceLabel||"未记录")],["步骤",esc(purposeLabel(l.purpose))],["模型",`<span class="mono">${esc(l.modelLabel||l.model||"—")}</span>`],
     ["用户扣费",l.cost!=null?l.cost+" 积分":"—"],["请求时间",fmtTime(l.startedAt)],["完成时间",fmtTime(l.finishedAt)],
     ["耗时",fmtDur(l.durationMs,l.queuedMs)+(l.queuedMs?' <span class="mut">（实际生成（排队））</span>':"")],["taskId",`<span class="mono">${esc(l.taskId||"—")}</span>`]];
   if(l.usage)meta.push(['输入 token',l.usage.inputTokens],['输出 token',l.usage.outputTokens],['缓存命中 token',l.usage.cachedInputTokens??'未提供']);
   if(l.textBilling){const b=l.textBilling;meta.push(['预扣',b.precharged+' 积分'],['结算',b.cost+' 积分'],['退补',b.cost>b.precharged?'补扣 '+(b.cost-b.precharged):'退回 '+(b.precharged-b.cost)]);if(b.items)meta.push(['输入扣费',b.items.input+' 积分'],['输出扣费',b.items.output+' 积分'],['缓存扣费',b.items.cache+' 积分']);}
   // 链路扣费明细（第124轮）：归属链各级渠道商的结算侧实扣（直属商→根，根级=源站实收）——源站全见
-  const chain = Array.isArray(l.agentCosts) && l.agentCosts.length
-    ? `<div class="badge plain" style="margin-bottom:12px;max-width:100%;white-space:normal">链路扣费：用户 ${l.cost!=null?l.cost:"—"} · ${l.agentCosts.map(a=>`${esc(a.name||a.id)} ${a.cost}`).join(" · ")} <span class="faint">（根级=源站实收 ${l.agentCosts[l.agentCosts.length-1].cost} 积分；失败已逐级退回）</span></div>`
-    : "";
+  const chain = `<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 16px" aria-label="积分消耗链路">${(l.creditChain||[]).map((a,i)=>`${i?'<span class="faint">→</span>':''}<div style="border:1px solid var(--line);border-radius:10px;padding:12px 16px;min-width:150px"><div class="faint">${esc(a.label)}</div><strong>${Number(a.amount||0).toLocaleString()} 积分</strong><div class="faint">${esc(a.domain||'')}</div></div>`).join('')}</div>`;
   // 四栏 2×2：左列请求（①③）、右列响应（②④）——读序 ①③②④；每格独立可复制
   const cell = (t, seg) => `<div class="logcell"><div class="lc-t">${t} <button class="sm ghost icon" title="复制本段" onclick="copyText(window.__logSegs['${seg}'],'本段已复制')"><svg><use href="#i-copy"/></svg></button></div><pre>${esc(window.__logSegs[seg])}</pre></div>`;
   $("#dlgTitle").innerHTML = `请求详情 &nbsp;${statusBadge(l.status)}`;
@@ -3556,26 +3597,17 @@ async function loadQuota(){
   try { d = await api("/admin-api/quota"); }
   catch(e){ el.innerHTML = `<div class="bad-t">${esc(e.message)}</div>`; return; }
   $("#cnt-quota").textContent = d.owners.length || "";
-  const sc = d.storageCode;
   el.innerHTML = `
     <div class="card" style="max-width:1100px;margin-bottom:16px">
-      <div class="hd"><h3>默认配额与扩容卡规格</h3><span class="sp"></span><button class="sm" onclick="loadQuota()">刷新</button></div>
+      <div class="hd"><h3>默认配额</h3><span class="sp"></span><button class="sm" onclick="loadQuota()">刷新</button></div>
       <div class="bd">
         <p class="mut" style="font-size:12.5px;margin:0 0 14px">
           <b>收藏 = 永久保留额度</b>，不是「存不存得下」。超额只挡新增收藏，用户照常生成、照常使用已有素材。
-          平台收藏（审核钉住）优先级最高、不占任何人的配额。改动即时生效（不影响已签发的扩容卡）。
+          平台收藏（审核钉住）优先级最高、不占任何人的配额。改动即时生效。
         </p>
         <div class="fgrid">
           <div class="fld"><span>个人收藏配额（MB）</span><input id="q_fav" type="number" min="1" value="${toMB(d.defaults.favQuotaBytes)}"/></div>
           <div class="fld"><span>团队共享库配额（MB）</span><input id="q_team" type="number" min="1" value="${toMB(d.defaults.teamLibQuotaBytes)}"/></div>
-        </div>
-        <div class="fgrid" style="margin-top:10px">
-          <div class="fld"><span>个人扩容卡：容量（MB）</span><input id="q_scu_b" type="number" min="1" value="${toMB(sc.user.bytes)}"/></div>
-          <div class="fld"><span>个人扩容卡：有效天数</span><input id="q_scu_d" type="number" min="1" value="${sc.user.days}"/></div>
-          <div class="fld"><span>个人扩容卡：签发价（暂未启用，签发免费）</span><input id="q_scu_p" type="number" min="0" value="${sc.user.price}"/></div>
-          <div class="fld"><span>团队扩容卡：容量（MB）</span><input id="q_sct_b" type="number" min="1" value="${toMB(sc.team.bytes)}"/></div>
-          <div class="fld"><span>团队扩容卡：有效天数</span><input id="q_sct_d" type="number" min="1" value="${sc.team.days}"/></div>
-          <div class="fld"><span>团队扩容卡：签发价（暂未启用，签发免费）</span><input id="q_sct_p" type="number" min="0" value="${sc.team.price}"/></div>
         </div>
         <div class="toolbar" style="margin:14px 0 0"><button class="pri" onclick="saveQuotaDefaults()">保存</button>
           <span class="mut" style="font-size:12px">当前全站永久保留素材：<b>${(d.pinnedAssets||0).toLocaleString()}</b> 个</span></div>
@@ -3599,56 +3631,16 @@ async function loadQuota(){
       </div>
     </div>
 
-    <div class="card" style="max-width:1100px">
-      <div class="hd"><h3>扩容卡</h3><span class="sp"></span>
-        <select id="q_sc_target" style="width:auto"><option value="user">个人（+${toMB(sc.user.bytes)}MB / ${sc.user.days}天）</option><option value="team">团队（+${toMB(sc.team.bytes)}MB / ${sc.team.days}天）</option></select>
-        <input id="q_sc_n" type="number" min="1" max="200" value="1" style="width:70px" title="数量"/>
-        <input id="q_sc_note" type="text" placeholder="备注（选填）" style="width:150px"/>
-        <button class="pri sm" onclick="genStorageCodes()">源站签发</button></div>
-      <div class="bd">
-        <p class="mut" style="font-size:12.5px;margin:0 0 10px">扩容卡签发<b>免费</b>（P1 商业化改造：开码积分退役；上方「签发价」字段保留供后续升级收费）。未核销可作废，已核销留档不可删。</p>
-        ${d.codes.length ? `<table class="tbl"><thead><tr><th>卡号</th><th>类型</th><th>容量/天数</th><th>签发方</th><th>状态</th><th>备注</th><th></th></tr></thead><tbody>
-          ${d.codes.map(c => `<tr>
-            <td><code>${esc(c.code)}</code></td>
-            <td>${c.target==='team'?'团队':'个人'}</td>
-            <td>${toMB(c.bytes)}MB / ${c.days}天</td>
-            <td>${esc(c.agentName || '源站')}</td>
-            <td>${c.usedBy ? `<span class="badge ok">已用</span> ${esc(c.usedBy.type)}:${esc(c.usedBy.id)}` : '<span class="badge">未用</span>'}</td>
-            <td class="mut">${esc(c.note||'')}</td>
-            <td>${c.usedBy ? '' : `<button class="ghost sm" onclick="delStorageCode('${esc(c.code)}')">作废</button>`}</td>
-          </tr>`).join("")}
-        </tbody></table>` : `<div class="mut" style="font-size:12.5px">还没有扩容卡</div>`}
-      </div>
-    </div>`;
+`;
 }
 async function saveQuotaDefaults(){
   const body = {
     favQuotaBytes: Number($("#q_fav").value) * MB,
     teamLibQuotaBytes: Number($("#q_team").value) * MB,
-    storageCodeUser: { bytes: Number($("#q_scu_b").value) * MB, days: Number($("#q_scu_d").value), price: Number($("#q_scu_p").value) },
-    storageCodeTeam: { bytes: Number($("#q_sct_b").value) * MB, days: Number($("#q_sct_d").value), price: Number($("#q_sct_p").value) },
   };
   try { await api("/admin-api/quota/defaults",{method:"PUT",body:JSON.stringify(body)}); toast("已保存"); loadQuota(); }
   catch(e){ toast(e.message,"bad"); }
 }
-async function genStorageCodes(){
-  const body = { count: Number($("#q_sc_n").value)||1, target: $("#q_sc_target").value, note: $("#q_sc_note").value.trim() };
-  try {
-    const r = await api("/admin-api/storage-codes",{method:"POST",body:JSON.stringify(body)});
-    const codes = r.items.map(c=>c.code).join("\n");
-    $("#dlgTitle").textContent = `已签发 ${r.items.length} 张扩容卡`;
-    $("#dlgBody").innerHTML = `<textarea readonly style="width:100%;height:220px;font-family:var(--mono);font-size:12px">${esc(codes)}</textarea>
-      <div class="toolbar" style="margin-top:10px"><button class="pri" onclick="navigator.clipboard.writeText(${JSON.stringify(codes)}).then(()=>toast('已复制'))">复制全部</button></div>`;
-    dlg.showModal(); loadQuota();
-  } catch(e){ toast(e.message,"bad"); }
-}
-async function delStorageCode(code){
-  confirmDo({ title: "作废扩容卡", text: `确定作废 <code>${esc(code)}</code>？<br>作废后该卡不可再用，且<b>无退回</b>。`, okLabel: "作废", onOk: async () => {
-    try { await api("/admin-api/storage-codes/"+encodeURIComponent(code),{method:"DELETE"}); toast("已作废"); loadQuota(); }
-    catch(e){ toast(e.message,"bad"); }
-  }});
-}
-
 /* ── 会员（第246轮）：单档方案 + 会员卡签发（仅源站）+ 会员用户管理
    第247轮：+ 按模型单独调控折扣（modelDiscounts 覆盖表，实时生效不冻结进卡）── */
 let MB_MODELS = [];   // 模型清单缓存（折扣调控下拉与名称回查用）
@@ -3973,6 +3965,7 @@ async function loadSite(){
     </div>
     <div class="toolbar" style="margin:14px 0 0"><button class="pri" onclick="saveSite()">保存全部</button><span class="faint" style="font-size:12px">图片替换/恢复即时生效，其余字段点保存后生效</span></div>`;
   renderSiteAnns(); renderSiteRels(); renderSiteImgs();
+  void loadClientUpdateCard(el);
 }
 function renderSiteAnns(){
   $("#siteAnnList").innerHTML = SITE_ANNS.length ? SITE_ANNS.map((a,i)=>`
@@ -4099,100 +4092,41 @@ async function saveSite(silent){
   } catch(e){ toast(e.message,"bad"); if (silent) throw e; }
 }
 
-/* ════════════════ 注册与安全（P2 商业化改造：邮箱/手机注册 + 防滥用 + 同时在线限制）════════════════ */
-async function loadRegisterSettings(){
-  const el = $("#tab-register");
-  el.innerHTML = `<div class="mut" style="font-size:12.5px">加载中…</div>`;
-  let r;
-  try { r = await api("/admin-api/settings/register"); }
-  catch(e){ el.innerHTML = `<div class="bad-t">${esc(e.message)}</div>`; return; }
-  el.innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:14px;align-items:start">
-      <div class="card">
-        <div class="hd"><h3>注册开关与防滥用</h3><span class="badge ${r.smtpConfigured||r.smsConfigured?"ok":"bad"}">${r.smtpConfigured||r.smsConfigured?"注册通道可用":"未配置任何验证码通道"}</span></div>
-        <div class="bd">
-          <div class="mut" style="font-size:12px;margin-bottom:10px">用户凭 <b>邮箱/手机号 + 验证码 + 密码</b> 自助注册（平台直属）。防线：图形验证码前置发码 · 同目标 60s 冷却 · 验证码 10 分钟错 5 次作废 · IP 频控 · 临时邮箱域黑名单。机器码硬绑定已退役（改同时在线设备限制）。</div>
-          <div class="fgrid">
-            <div class="fld"><span>注册开关</span><div style="padding:5px 0"><label class="sw"><input id="rg_enabled" type="checkbox" ${r.enabled?"checked":""}/><i></i></label></div></div>
-            <div class="fld"><span>注册赠送积分（默认 0；&gt;0 请收紧 IP 限额）</span><input id="rg_gift" type="number" min="0" value="${r.giftCredits}"/></div>
-            <div class="fld"><span>同 IP 每日注册上限</span><input id="rg_ipreg" type="number" min="1" value="${r.ipRegPerDay}"/></div>
-            <div class="fld"><span>同 IP 发码上限（每小时）</span><input id="rg_iph" type="number" min="1" value="${r.ipSendPerHour}"/></div>
-            <div class="fld"><span>同 IP 发码上限（每天）</span><input id="rg_ipd" type="number" min="1" value="${r.ipSendPerDay}"/></div>
-            <div class="fld"><span>同账号同时在线设备数（0=不限；登录抢占制，可按用户覆盖）</span><input id="rg_devlimit" type="number" min="0" max="100" value="${r.deviceLimit}"/></div>
-            <div class="fld full"><span>邮箱域黑名单追加（内置常见临时邮箱域之外；逗号/空格分隔）</span><input id="rg_blacklist" type="text" value="${esc((r.emailDomainBlacklist||[]).join(", "))}" placeholder="如 example.com, spam.io"/></div>
-          </div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="hd"><h3>邮箱通道（SMTP）</h3><span class="badge ${r.smtpConfigured?"ok":"plain"}">${r.smtpConfigured?"已配置":"未配置"}</span></div>
-        <div class="bd">
-          <div class="fgrid">
-            <div class="fld"><span>SMTP 主机</span><input id="rg_smtp_host" type="text" value="${esc(r.smtp.host)}" placeholder="smtp.example.com"/></div>
-            <div class="fld"><span>端口（465=SSL / 587=STARTTLS）</span><input id="rg_smtp_port" type="number" value="${r.smtp.port}"/></div>
-            <div class="fld"><span>发信账号</span><input id="rg_smtp_user" type="text" value="${esc(r.smtp.user)}"/></div>
-            <div class="fld"><span>密码/授权码（留空=不改${r.smtp.hasPass?"，已配置":""}）</span><input id="rg_smtp_pass" type="password" placeholder="${r.smtp.hasPass?"已配置，留空不改":"未配置"}"/></div>
-            <div class="fld full"><span>发件人（可空=发信账号）</span><input id="rg_smtp_from" type="text" value="${esc(r.smtp.from)}" placeholder="Qiji &lt;no-reply@example.com&gt;"/></div>
-          </div>
-          <div class="toolbar" style="margin:10px 0 0">
-            <input id="rg_test_to" type="text" placeholder="测试收件邮箱" style="width:200px"/>
-            <button class="sm" onclick="testRegMail()">发测试邮件</button>
-            <span id="rg_test_msg" class="mut" style="font-size:12px"></span>
-          </div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="hd"><h3>短信通道（阿里云）</h3><span class="badge ${r.smsConfigured?"ok":"plain"}">${r.smsConfigured?"已配置":"未配置"}</span></div>
-        <div class="bd">
-          <div class="mut" style="font-size:12px;margin-bottom:10px">需企业实名 + 签名/模板审批通过（材料：软著/ICP/商标三选一）。未配置时注册页只显示邮箱通道。模板须为验证码类，变量名 <span class="mono">code</span>。</div>
-          <div class="fgrid">
-            <div class="fld"><span>AccessKeyId（建议只授权短信的子账号）</span><input id="rg_sms_ak" type="text" value="${esc(r.sms.accessKeyId)}"/></div>
-            <div class="fld"><span>AccessKeySecret（留空=不改${r.sms.hasSecret?"，已配置":""}）</span><input id="rg_sms_sk" type="password" placeholder="${r.sms.hasSecret?"已配置，留空不改":"未配置"}"/></div>
-            <div class="fld"><span>签名名称</span><input id="rg_sms_sign" type="text" value="${esc(r.sms.signName)}" placeholder="Qiji"/></div>
-            <div class="fld"><span>模板 Code</span><input id="rg_sms_tpl" type="text" value="${esc(r.sms.templateCode)}" placeholder="SMS_123456789"/></div>
-          </div>
-        </div>
-      </div>
-    </div>
-    <div class="toolbar" style="margin:14px 0 0"><button class="pri" onclick="saveRegisterSettings()">保存全部</button><span class="faint" style="font-size:12px">保存即生效（无需重启）；密钥只存服务端，页面不回显</span></div>`;
-}
-async function saveRegisterSettings(){
-  const num = (id) => { const v = $(id).value; return v === "" ? undefined : Number(v); };
-  const body = {
-    enabled: $("#rg_enabled").checked,
-    giftCredits: num("#rg_gift") ?? 0,
-    ipRegPerDay: num("#rg_ipreg"),
-    ipSendPerHour: num("#rg_iph"),
-    ipSendPerDay: num("#rg_ipd"),
-    deviceLimit: $("#rg_devlimit").value,
-    emailDomainBlacklist: $("#rg_blacklist").value.split(/[,，\s]+/).map(s=>s.trim().toLowerCase()).filter(Boolean),
-    smtp: {
-      host: $("#rg_smtp_host").value.trim(),
-      port: Number($("#rg_smtp_port").value)||465,
-      user: $("#rg_smtp_user").value.trim(),
-      pass: $("#rg_smtp_pass").value, // 空串=不改（服务端语义）
-      from: $("#rg_smtp_from").value.trim(),
-    },
-    sms: {
-      provider: "aliyun",
-      accessKeyId: $("#rg_sms_ak").value.trim(),
-      accessKeySecret: $("#rg_sms_sk").value, // 空串=不改
-      signName: $("#rg_sms_sign").value.trim(),
-      templateCode: $("#rg_sms_tpl").value.trim(),
-    },
-  };
+/* 消息发布：源站可发送全部用户、源站用户或指定渠道商用户。 */
+async function loadMessages(){
+  const el = $("#tab-messages");
+  el.innerHTML = '<div class="mut">加载中…</div>';
   try {
-    const r = await api("/admin-api/settings/register",{method:"PUT",body:JSON.stringify(body)});
-    toast(`已保存（邮箱通道${r.smtpConfigured?"可用":"未配置"} · 短信通道${r.smsConfigured?"可用":"未配置"} · 设备上限 ${r.deviceLimit===0?"不限":r.deviceLimit+" 台"}）`);
-    loadRegisterSettings();
-  } catch(e){ toast(e.message,"bad"); }
+    await ensureScopeAgents();
+    el.innerHTML = `<div class="card" style="max-width:1100px;margin-bottom:16px"><div class="hd"><h3>发布消息</h3></div><div class="bd">
+      <div class="fgrid"><div class="fld"><span>接收范围</span><select id="msg_audience"><option value="all">全部用户</option><option value="source">源站用户</option>${(SCOPE_AGENTS||[]).map(a=>`<option value="agent:${esc(a.id)}">${esc(a.name)} · 名下用户</option>`).join('')}</select></div>
+      <div class="fld"><span>类型</span><select id="msg_kind"><option value="announcement">公告</option><option value="notice">通知</option></select></div>
+      <div class="fld full"><span>标题</span><input id="msg_title" type="text" maxlength="80" /></div>
+      <div class="fld full"><span>正文</span><textarea id="msg_body" maxlength="5000" rows="7"></textarea></div></div>
+      <div class="toolbar" style="margin:14px 0 0"><button id="msg_publish" class="pri" onclick="publishAdminMessage()">发布</button><span id="msg_error" class="bad-t"></span></div>
+      </div></div><div class="card" style="max-width:1100px"><div class="hd"><h3>已发布</h3><span class="sp"></span><button class="sm" onclick="refreshAdminMessages()">刷新</button></div><div class="bd" id="msg_list"></div></div>`;
+    await refreshAdminMessages();
+  } catch(e){ el.innerHTML = `<div class="bad-t">${esc(e.message)}</div>`; }
 }
-async function testRegMail(){
-  const to = $("#rg_test_to").value.trim();
-  if (!to){ toast("请填写测试收件邮箱","bad"); return; }
-  $("#rg_test_msg").textContent = "发送中…";
-  try { await api("/admin-api/settings/register/test-mail",{method:"POST",body:JSON.stringify({to})}); $("#rg_test_msg").textContent = "已发送，请查收（含垃圾箱）"; toast("测试邮件已发送"); }
-  catch(e){ $("#rg_test_msg").textContent = "失败："+e.message; toast(e.message,"bad"); }
+async function refreshAdminMessages(){
+  const el=$("#msg_list"); if(!el)return;
+  try{
+    const r=await api('/admin-api/messages');
+    el.innerHTML=(r.items||[]).map(m=>`<article style="padding:14px 0;border-bottom:1px solid var(--line)"><div style="display:flex;align-items:center;gap:10px"><strong>${esc(m.title)}</strong><span class="badge">${m.kind==='notice'?'通知':'公告'}</span><span class="sp"></span><span class="faint">${esc(m.audience==='all'?'全部用户':m.audience==='source'?'源站用户':((SCOPE_AGENTS||[]).find(a=>a.id===m.audienceId)?.name||'渠道商'))} · ${fmtTime(m.createdAt)}</span></div><div style="white-space:pre-wrap;margin-top:10px">${esc(m.body)}</div></article>`).join('')||'<span class="faint">暂无消息</span>';
+  }catch(e){el.innerHTML=`<span class="bad-t">${esc(e.message)}</span>`;}
 }
+async function publishAdminMessage(){
+  const button=$("#msg_publish"),error=$("#msg_error"); if(!button||button.disabled)return;
+  const target=$("#msg_audience").value,title=$("#msg_title").value.trim(),body=$("#msg_body").value.trim();
+  if(!title||!body){error.textContent='请填写标题和正文';return;}
+  error.textContent='';button.disabled=true;
+  try{
+    await api('/admin-api/messages',{method:'POST',body:JSON.stringify({kind:$("#msg_kind").value,audience:target.startsWith('agent:')?'agent':target,audienceId:target.startsWith('agent:')?target.slice(6):undefined,title,body})});
+    $("#msg_title").value='';$("#msg_body").value='';toast('已发布');await refreshAdminMessages();
+  }catch(e){error.textContent=e.message;}finally{button.disabled=false;}
+}
+
+/* 注册设置由 source-settings.js 统一渲染。 */
 
 async function loadOss(){
   const el = $("#tab-oss");
@@ -4468,7 +4402,25 @@ setInterval(()=>{
 document.addEventListener("keydown", (e)=>{ if (e.key==="Escape" && $("#drawer").classList.contains("on")) closeDrawer(); });
 
 /* ── 启动 ── */
-if (TOKEN) { api("/admin-api/users").then(showApp).catch(showLogin); } else { showLogin(); }
+// 列表顶部相邻的筛选、分类与统计区域共用一个吸顶层，避免各行互相覆盖。
+function groupPageFilters(){
+  const selector='.toolbar,.filterbar,.kpis,.seg,nav,.ar-scroll-top';
+  for(const section of document.querySelectorAll('.views > section')){
+    if(section.querySelector(':scope > .page-sticky'))continue;
+    const first=Array.from(section.children).find(el=>el.matches(selector));
+    if(!first)continue;
+    const group=[];
+    for(let el=first;el&&el.matches(selector);el=el.nextElementSibling)group.push(el);
+    const box=document.createElement('div');box.className='page-sticky';box.setAttribute('aria-label','页面筛选与分类');
+    first.before(box);for(const el of group)box.append(el);
+  }
+}
+const pageFilterObserver=new MutationObserver(groupPageFilters);
+pageFilterObserver.observe(document.querySelector('.views'),{childList:true,subtree:true});
+groupPageFilters();
+document.addEventListener('DOMContentLoaded',()=>{
+  if (TOKEN) { api("/admin-api/users").then(showApp).catch(showLogin); } else { showLogin(); }
+},{once:true});
 </script>
 </body>
 </html>

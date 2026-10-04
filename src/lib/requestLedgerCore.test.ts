@@ -35,6 +35,10 @@ function entry(patch: Partial<LedgerEntry> = {}): LedgerEntry {
 }
 
 describe("sanitizeLedger（台账载入清洗）", () => {
+	it("重启后仍保留原链结果的不转存策略", () => {
+		const saved = entry({ status: "done", result: { assetId: "LC-task", url: "https://upstream.test/video.mp4", saveToOss: false } });
+		expect(sanitizeLedger(JSON.parse(JSON.stringify([saved])), NOW)[0].result?.saveToOss).toBe(false);
+	});
 	it("非数组/坏形状/缺关键字段一律丢弃，好条目保留", () => {
 		expect(sanitizeLedger(null, NOW)).toEqual([]);
 		expect(sanitizeLedger("x", NOW)).toEqual([]);

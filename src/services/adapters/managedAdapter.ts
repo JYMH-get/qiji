@@ -1,3 +1,4 @@
+import { prepareNyxenMaterial, cachedNyxenMaterial } from '../nyxenMaterialPreparation';
 /**
  * managedAdapter —— 唯一的模型适配器。
  *
@@ -21,8 +22,11 @@ import {
 	uploadToNyxenAccelerationBucket,
 } from "@/services/nyxenAcceleration";
 import type { TaskExtra } from "./types";
-import { routeParams } from '@/lib/routeParams';
+import { routeParams, normalizeIdentityInputs } from '@/lib/routeParams';
 import { usedPresetsForRequest } from '@/lib/usedPromptPresets';
+import { checkOfficialRequestMaterials } from '@/services/officialMaterialClient';
+import { supportsOfficialMaterials } from '@/services/materialPolicy';
+import { selectedReasoningParams } from '@/lib/textReasoningParams';
 
 /**
  * 能力 → 可服务的画布节点类型（真实 catalog 模型的 nodeTypes 白名单）。
@@ -97,15 +101,21 @@ export function buildManagedAdapter(model: CatalogModel): ModelAdapter {
 				(input.variables as Record<string, string>) ||
 				(input.prompt ? { prompt: String(input.prompt) } : undefined);
 
+			let inputs = normalizeIdentityInputs(collectInputs(input), params.officialAssetIndexes);
+			if (inputs?.images && supportsOfficialMaterials(model)) {
+				inputs = { ...inputs, images: inputs.images.map(asset => ({ ...asset, usage: 'identity' as const })) };
+			}
+
 			let req: GenerateRequest = {
 				purpose,
 				model: model.id,
+				materialPolicyKey: model.materialPolicy?.scopeKey ?? model.materialPolicy?.kind,
 				templateId: (input.templateId as string) || (params.template as string) || undefined,
 				inference: input.inference as GenerateRequest['inference'],
 				variables,
-				inputs: collectInputs(input),
-				// 图片请求统一使用公共比例/分辨率契约；上游字段由服务端选定实际模型后转换。
-				params: model.capability === 'image' || model.id.startsWith('route:') ? routeParams(params, model.capability) : params,
+				inputs,
+				// 直连与自动路由均保留完整参数；选路和定价只读这些值，不在此筛选字段。
+				params: routeParams(model.capability === 'text' ? { ...selectedReasoningParams(model.params, ps.projectModelConfig?.textParams?.[model.id]), ...params } : params, model.capability, model.params),
 				output: (input.output as GenerateRequest["output"]) || {
 					format: input.schemaId ? "json" : model.capability === "text" ? "text" : "asset",
 					schemaId: input.schemaId as string | undefined,
@@ -127,11 +137,13 @@ export function buildManagedAdapter(model: CatalogModel): ModelAdapter {
 			if ((req.inputs?.images?.length ?? 0) + (req.inputs?.videos?.length ?? 0) + (req.params?.firstFrameUrl ? 1 : 0) < (model.minVisualMaterials ?? 0)) throw new Error('该线路至少需要一份图片或视频参考素材');
 
 			const catalog = useCatalogStore.getState().catalog;
+			req = await checkOfficialRequestMaterials(model, req);
 			if (shouldUseNyxenAcceleration(model, catalog)) {
 				const onProgress = input._onClientProgress as
 					| ((progress: number, status: string, partialText?: string, extra?: TaskExtra) => void)
 					| undefined;
 				const acceleratedReq = await accelerateNyxenRequest(req, {
+                    prepareAsset: (asset, kind) => prepareNyxenMaterial(asset, kind, model.id), cachedAsset: (asset, kind) => cachedNyxenMaterial(asset, kind, model.id),
 					resolveAssetUrl: (assetId) => managedClient.resolveAssetUrl(assetId),
 					upload: uploadToNyxenAccelerationBucket,
 					onProgress,
@@ -155,7 +167,9 @@ export function buildManagedAdapter(model: CatalogModel): ModelAdapter {
 						(t.result?.json ? JSON.stringify(t.result.json) : "");
 					// rehosted=false：服务端下载上游成片失败、结果是原始时效直链 → 标记 rawLink，
 					// 由调用方（generationQueue/pluginRegistry）本机下载 + 上传转存 OSS（第158轮）
-					return { status: "success", progress: 100, resultUri: uri, assetId: a0?.id, rawLink: a0?.meta?.rehosted === false };
+					const localOnly = a0?.meta?.saveToOss === false;
+					const assetId = localOnly && a0?.id && !a0.id.startsWith("LC-") ? `LC-${a0.id}` : a0?.id;
+					return { status: "success", progress: 100, resultUri: uri, assetId, saveToOss: localOnly ? false : undefined, rawLink: !localOnly && a0?.meta?.rehosted === false };
 				}
 				if (t.status === "failed") {
 					return { status: "failed", progress: 100, error: t.error || "生成失败" };

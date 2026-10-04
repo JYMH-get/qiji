@@ -7,6 +7,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useConnectionStore } from "@/store/connectionStore";
 import { useUiStore } from "@/store/uiStore";
 import { managedClient } from "@/services/managedClient";
+import { ProjectSaveStatus } from "./ProjectSaveStatus";
 
 interface EditorHeaderProps {
     title: string;
@@ -51,11 +52,6 @@ const EditorHeader = ({ title, infoLabels = [], showAssetCheck = false }: Editor
     const toggleTheme = () => {
         const newTheme = theme === "dark" ? "light" : "dark";
         setTheme(newTheme);
-        if (newTheme === "dark") {
-            document.body.classList.add("dark");
-        } else {
-            document.body.classList.remove("dark");
-        }
     };
 
     return (
@@ -139,26 +135,15 @@ const EditorHeader = ({ title, infoLabels = [], showAssetCheck = false }: Editor
                                     检查所有资产
                                 </button>
                             )}
-                            <div id="16_105" className="stroke-wrapper-16_105">
-                                <div className="Pixso-frame-16_105">
-                                    <div className="frame-content-16_105">
-                                        <div id="16_106" className="Pixso-vector-16_106"></div>
-                                        <p id="16_109" className="Pixso-paragraph-16_109">
-                                            {"已同步云端"}
-                                        </p>
-                                    </div>
-                                </div>
-                                <div className="stroke-16_105"></div>
-                            </div>
+                            <ProjectSaveStatus />
                             {/* Theme Toggle Vector Icon（第245轮：项目内工作区恒深色渲染（ThemeBodySync），
                                 此开关只改「大厅/新建页」的主题偏好——悬浮说明语义，防被当成失灵） */}
-                            <div
-                                id="16_118"
-                                className="Pixso-vector-16_118"
+                            <button
+                                type="button"
                                 onClick={toggleTheme}
-                                style={{ cursor: "pointer" }}
+                                style={{ cursor: "pointer", marginLeft: 10, fontSize: 11, color: "#9ca3af", background: "none", border: 0 }}
                                 title="切换浅色/深色主题（浅色仅作用于大厅与新建项目页；项目内工作区恒为深色）"
-                            ></div>
+                            >大厅：{theme === "dark" ? "深色" : "浅色"}</button>
                         </div>
                     </div>
                 </div>

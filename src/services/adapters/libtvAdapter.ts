@@ -12,6 +12,7 @@
  * pendingGens 的「重连原任务」按钮）；尚未出结果则报 lost（稍后再点重连即可）。
  */
 import type { ModelAdapter, SubmitResult, PollResult } from "./types";
+import { withLocalGenerationReport } from '@/services/localGenerationReports';
 import type { ModelOption } from "./channelAdapter";
 import type { Capability } from "@/contract";
 import { registerAdapter } from "./registry";
@@ -30,7 +31,7 @@ import { isLibtvAuthed } from "@/store/libtvStore";
 import { getLibtvFeature } from "@/store/connectionStore";
 import { MENTION_TAG_RE, TAG_KIND } from "@/lib/shotMaterials";
 import { clampDuration } from "@/lib/genParams";
-import { precheckThirdPartyFee, chargeThirdPartyFee, THIRD_PARTY_FEE_CREDITS, thirdPartyFeeCredits } from "@/services/thirdPartyFee";
+import { THIRD_PARTY_FEE_CREDITS, thirdPartyFeeCredits } from "@/services/thirdPartyFee";
 
 /** 渠道显示名（画布面板「渠道」pill / 二级模型选择的分组名） */
 export const LIBTV_CHANNEL = "LibTV";
@@ -265,8 +266,6 @@ async function runGeneration(
 			variant,
 		});
 		tasks.set(taskId, { status: "success", url });
-		// 第三方调用成功（--run 同步跑完出片，CLI 无受理中间态）→ 扣 Qiji 手续费（best-effort）
-		void chargeThirdPartyFee("LibTV");
 	} catch (e) {
 		tasks.set(taskId, { status: "failed", error: e instanceof Error ? e.message : "LibTV 生成失败" });
 	}
@@ -301,7 +300,6 @@ function makeLibtvAdapter(key: string, label: string, variantLabel: string, vari
 	async submit(input, params): Promise<SubmitResult> {
 		if (!getLibtvFeature()) throw new Error("LibTV 功能未对当前账号开放");
 		if (!isLibtvAuthed()) throw new Error("尚未连接 LibTV：请到「个人中心 → LibTV 授权」登录后重试");
-		precheckThirdPartyFee(); // 手续费余额不足直接拒单（不打第三方）
 
 		// prompt：表格视频链路把正文放 variables.prompt；画布/直调可能给 input.prompt。
 		// 保留图例与 @ 胶囊原文——runGeneration 上传后把 @ 胶囊换成 LibTV 的 {{Node}} 引用
@@ -355,7 +353,10 @@ function makeLibtvAdapter(key: string, label: string, variantLabel: string, vari
 
 /** 渠道内各款模型的适配器（key=清单 id） */
 export const libtvAdapters: ModelAdapter[] = LIBTV_MODEL_CHOICES.map((c) =>
-	makeLibtvAdapter(c.id, c.label, c.variantLabel, c.variant),
+	withLocalGenerationReport(makeLibtvAdapter(c.id, c.label, c.variantLabel, c.variant), params => {
+    const spec=VARIANT_SPECS[c.variant];
+    return spec.legacyClamp ? clampDuration(params.duration) : passthruParams(params,spec).duration;
+  }),
 );
 
 /** App 启动时注册（一次即可；不依赖 catalog，key 不会被 syncManagedAdapters 覆盖） */

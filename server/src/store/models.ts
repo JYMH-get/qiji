@@ -1,5 +1,9 @@
+import { XINGGUANG_GENERIC, compactXingguangModels } from './xingguangModels.ts';
+import { AISC_IMAGE_SIZES, validateImageSizeMap, type ImageSizeMap } from '../imageSizes.ts';
+import { addTextReasoningFields } from '../textReasoning.ts';
 import { validateTextPricing, TEXT_PRECHARGE } from '../textPricing.ts';
-import type { TextTokenPricing } from '../contract.ts';
+import type { TextTokenPricing, MaterialPolicy } from '../contract.ts';
+import { validateMaterialPolicy, validateModelMaterialPolicy } from '../materialPolicy.ts';
 /**
  * 模型存储（文件持久化）—— 数据化的 catalog 模型 + 翻译格式。
  *
@@ -7,7 +11,8 @@ import type { TextTokenPricing } from '../contract.ts';
  * 管理端可自定义加载第三方模型、查看/编辑翻译格式。改动后 bump catalog 版本。
  */
 import { loadJson, saveJson } from "./db.ts";
-import { CH_GAISC, CH_JIANMENG, CH_VOLC, CH_SUDASHUI, CH_AISTARS, CH_HUAYING, CH_DIMENSIO, CH_AIVIDE, CH_JIANMENGP, CH_MUSEM, CH_JMZ, CH_JMH, CH_YUNWU, CH_JMT, CH_JMF, CH_OVERSEAS, CH_SUANLI, CH_YALI_OPENAI, CH_YALI_GEMINI, CH_SKYLEE, CH_CONGGE, CH_AUTODL, CH_QIJICLOUD, CH_BYS, CH_QIQI, CH_OFFICIAL, CH_007 } from "./channels.ts";
+import { notifyAvailabilityConfigChange } from '../availabilityConfigEvents.ts';
+import { CH_GAISC, CH_JIANMENG, CH_VOLC, CH_SUDASHUI, CH_AISTARS, CH_HUAYING, CH_DIMENSIO, CH_AIVIDE, CH_JIANMENGP, CH_MUSEM, CH_JMZ, CH_YUNWU, CH_JMT, CH_JMF, CH_OVERSEAS, CH_SUANLI, CH_YALI_OPENAI, CH_YALI_GEMINI, CH_SKYLEE, CH_CONGGE, CH_LONGYOU, CH_XIHA888, CH_AUTODL, CH_QIJICLOUD, CH_BYS, CH_QIQI, CH_OFFICIAL, CH_007 } from "./channels.ts";
 import { audienceChain, agentModelBlocked, audienceGroupId } from "./agents.ts";
 import { normMatLimits, type MatLimits } from "../materialLimits.ts";
 import type { ParamField, Capability } from "../contract.ts";
@@ -37,12 +42,14 @@ export type Protocol =
 	| "overseas-video"
 	| "suanli-video"
 	| "aistars-image"
-	| "jmh-image"
-	| "jmh-video"
 	| "yali-image"
 	| "skylee-image"
 	| "congge-image"
 	| "congge-video"
+	| "xiha888-image"
+	| "zongheng-video"
+	| "xingguang-video"
+	| "longyou-video"
 	| "autodl-video"
 	| "qijicloud-comfy"
 	| "bys-video"
@@ -69,6 +76,12 @@ export interface ModelRoute {
 }
 
 export interface ModelDef {
+  localFailureRefund?: boolean;
+  materialPolicy?: MaterialPolicy;
+  /** 渠道明确给出的像素档位表；不按长边推断 1K/2K/4K。 */
+  imageSizeMap?: ImageSizeMap;
+	/** 生成结果保存 OSS；缺省开启。管理端配置，不参与种子刷新。 */
+	saveToOss?: boolean;
 	tokenPricing?: TextTokenPricing;
 	minVisualMaterials?: number;
 	id: string;
@@ -130,6 +143,7 @@ export interface ModelDef {
 	 *  （如 933 收紧为 903 即「vid:0」禁垫视频）。generate/batch 硬闸（超限明确拒单）+ catalog 下发供客户端预检。
 	 *  语义=只能收紧（翻译器/上游能力表仍是最后一道闸）。⚠ 管理端自有配置：不入 MODEL_REFRESH_FIELDS（seed 刷新不冲掉）。 */
 	matLimits?: MatLimits;
+	imageMaterialMode?: 'direct' | 'url';
 	/** 模型备注（第166轮，管理端「模型」页可编辑）：**会经 catalog 下发给用户**（客户端悬浮积分图标显示），
 	 *  勿写接入信息/上游线路等敏感内容。未设=客户端默认显示参考素材上限（matLimits 派生文案）。
 	 *  ⚠ 管理端自有配置：不入 MODEL_REFRESH_FIELDS（seed 刷新不冲掉）。 */
@@ -145,6 +159,7 @@ export interface ModelDef {
 }
 
 interface Store {
+	xingguangGenericVersion?: number;
 	version: number;
 	/** 内置模型种子版本：bump 后启动时一次性"退役清理 + 刷新内置定义"（见 RETIRED_IDS / MODELS_SEED_VERSION） */
 	seedVersion?: number;
@@ -174,6 +189,7 @@ interface Store {
 	familyInitVersion?: number;
 	seedance25FamilyVersion?: number;
 	seedanceVariantsFamilyVersion?: number;
+	textReasoningVersion?: number;
 	/** 定向迁移版本（第187轮）：os933-sd2.5 时长上限 15→30（sd-2-5 支持 30s）+ 兜底价按最高档修正 */
 	osSd25DurVersion?: number;
 	/** 定向迁移版本（第216轮）：星辰按 2026-08-09 config 对齐存量能力（grok 两款大改/48 线 frames 下线/
@@ -643,37 +659,6 @@ const os = (id: string, upstream: string, res: string[], perUnit: number, cost: 
 		...extra,
 	});
 
-// ── 简梦H（ZhengAPI zhengapi.top）图片 6 模型（第154轮）────────────────────
-// 同步单请求渠道（协议 jmh-image 复用 createImageTask 图片管线，无轮询）；两形态见 translators/jmh.ts：
-//   grok 双款走 /v1/images/generations（参考图=单值纯 base64 字段 → matLimits 图1；-edit 图生图专用无图报错）；
-//   firefly 四款走 /v1/chat/completions（stream:false）+ **模型 ID 拼分辨率/比例后缀**（-{1k|2k|4k}-{16x9…}，
-//   翻译器按我方 resolution 档+size 就近比例现拼）——参考图张数未文档化不设上限（chat 形态按序多张，待真机实锤）。
-// 价格未公布 → 全员按次占位价（上线前管理端定真价）。视频系（grok/sora/veo/kling/runway chat 流式）本轮未接。
-const jmhImgRes = (): ParamField => ({ key: "resolution", label: "分辨率档", type: "enum", options: ["1k", "2k", "4k"], default: "2k" });
-/** 简梦H 图片模型简写工厂：外显 id=label、模式 jmh、按次占位价；imgMax 填了才设 matLimits（firefly 未文档化不设） */
-const jmh = (id: string, upstream: string, params: ParamField[], cost: number, imgMax?: number): ModelDef =>
-	def(id, id, "image", "jmh-image", params, cost, {
-		channelId: CH_JMH, upstreamModel: upstream, modeId: "jmh",
-		...(imgMax != null ? { matLimits: { img: imgMax, vid: 0, aud: 0 } } : { matLimits: { vid: 0, aud: 0 } }),
-	});
-// 简梦H 视频（第155轮）：同站 chat/completions SSE 流式单请求 9 款（协议 jmh-video，模型 ID 按家族现拼
-// 时长/比例/分辨率后缀——翻译器 VID_CAPS 表，见 translators/jmh.ts 视频段）。全渠道仅图片参考（视/音=0）；
-// veo31/-fast/kling3 文档有首尾帧示例 → methods omni+frames。价格未公布 → 按秒占位价（兜底=每秒价×最长时长，
-// 「默认按最高」规则第134轮补充2）；上线前管理端定真价。
-const jmhVidParams = (res: string[] | null, dur: ParamField, aspects: string[]): ParamField[] => [
-	...(res ? [{ key: "resolution", label: "分辨率", type: "enum", options: res, default: res[0] } as ParamField] : []),
-	dur,
-	{ key: "aspect_ratio", label: "宽高比", type: "enum", options: aspects, default: "16:9" },
-];
-/** 简梦H 视频模型简写工厂：外显 id=label、模式 jmh、按秒占位价 + 仅图参考（imgMax 未文档化不设） */
-const jmhVid = (id: string, upstream: string, params: ParamField[], perUnit: number, cost: number, imgMax?: number, extra?: Partial<ModelDef>): ModelDef =>
-	def(id, id, "video", "jmh-video", params, cost, {
-		channelId: CH_JMH, upstreamModel: upstream, modeId: "jmh",
-		costField: "duration", costPerUnit: perUnit,
-		...(imgMax != null ? { matLimits: { img: imgMax, vid: 0, aud: 0 } } : { matLimits: { vid: 0, aud: 0 } }),
-		...extra,
-	});
-
 // ── Yali AI Studio（api.yaliai.com）图片 4 模型（第229轮）────────────────────
 // 同步单请求渠道（协议 yali-image 复用 createImageTask 图片管线，无轮询）；统一走 OpenAI Images 形态
 // （/v1/images/generations 与 /v1/images/edits），见 translators/yali.ts。
@@ -686,6 +671,7 @@ const jmhVid = (id: string, upstream: string, params: ParamField[], perUnit: num
 // quality 仅 OpenAI Images 类有效（Gemini 类由翻译器按上游名跳过，文档明示上游会剥掉）。
 // 参考图上限 6 张（文档硬限），优先公网直链、字节兜底走 Data URL 内联（单张 12MiB/合计 30MiB）。
 // 上游未公布单价 → 全员按次**占位价**（上线前管理端定真价）。视频（Grok Videos 异步）本轮未接。
+import { YALI_GEMINI_SPECS, YALI_GROK_RATIOS, YALI_SEEDREAM_PRO_SIZES } from '../translators/yaliSpecs.ts';
 const YALI_QUALITY: ParamField = { key: "quality", label: "质量", type: "enum", options: ["auto", "low", "medium", "high"], default: "high" };
 /** OpenAI Images 类尺寸：auto + 官方比例档（须配 resolution）+ 常用具体像素 */
 const YALI_OPENAI_SIZE: ParamField = {
@@ -936,7 +922,7 @@ const official = (id: string, label: string, upstream: string, is25: boolean): M
 	return def(id, label, "video", "official-video", officialParams(is25), 50 * maxDuration, {
 		channelId: CH_OFFICIAL, upstreamModel: upstream, modeId: "official",
 		costField: "duration", costPerUnit: 50,
-		matLimits: is25 ? { img: 30, vid: 10, aud: 10 } : { img: 9, vid: 3, aud: 3 },
+		// Default open; operators may explicitly set matLimits after observing upstream behavior.
 		methods: ["omni", "frames"], officialAssets: true,
 	});
 };
@@ -962,9 +948,31 @@ const ZERO007_SD20_PARAMS: ParamField[] = [
 ];
 
 const DEFAULT_MODELS: ModelDef[] = [
+  // 纵横：仅三个通用入口，真实型号/分辨率重定向由管理端维护，不导入整个授权目录。
+  // 平台统一字段；文档未给逐模型规格，使用可编辑值，不猜测硬性范围/素材上限。
+  ...[
+    ['zh-seedance-2.0', '纵横·Seedance 2.0', 'sedanco2.0', 'fam-seedance'],
+    ['zh-seedance-2.5', '纵横·Seedance 2.5', 'XXseedacn2.5', 'fam-seedance-2-5'],
+    ['zh-wan', '纵横·Wan', 'wan-1080', 'fam-wan'],
+  ].map(([id, label, upstreamModel, familyId]) => def(id, label, 'video', 'zongheng-video', [
+    { key: 'duration', label: '时长', type: 'number', unit: 's' },
+    { key: 'aspect_ratio', label: '宽高比', type: 'text' },
+    { key: 'resolution', label: '分辨率', type: 'text' },
+    { key: 'quality', label: '质量', type: 'text' },
+    { key: 'negative_prompt', label: '负面提示词', type: 'textarea' },
+    { key: 'generate_audio', label: '生成音频', type: 'boolean' },
+  ], 1, {
+    channelId: 'ch-zongheng', modeId: 'zongheng', familyId, upstreamModel,
+    methods: ['omni', 'frames'], enabled: false, shareScope: 'none',
+  })),
+  // 星光仅保留通用入口；同类型分辨率通过 routes 维护，不逐项导入上游目录。
+  def('xg-13', XINGGUANG_GENERIC.label, 'video', 'xingguang-video', structuredClone(XINGGUANG_GENERIC.params), XINGGUANG_GENERIC.cost, {
+    ...structuredClone(XINGGUANG_GENERIC), channelId: 'ch-xingguang', modeId: 'xingguang', familyId: 'fam-seedance',
+    methods: ['omni'], enabled: false, shareScope: 'none',
+  }),
 	// ── G-AISC 聚合网关 ──
 	def("gpt-5.5", "GPT-5.5", "text", "openai-chat", TEXT_PARAMS, 10, { channelId: CH_GAISC }),
-	def("gpt-image-2", "GPT Image 2", "image", "openai-image", [IMG_RESOLUTION, IMG_SIZE], 20, { channelId: CH_GAISC, modeId: "qiji-img" }),
+	def("gpt-image-2", "GPT Image 2", "image", "openai-image", [{ ...IMG_RESOLUTION, options: ["1k", "2k", "4k"] }, { ...IMG_SIZE, options: Object.values(AISC_IMAGE_SIZES).flatMap(Object.values), default: "2048x1152" }], 20, { channelId: CH_GAISC, modeId: "qiji-img", imageSizeMap: AISC_IMAGE_SIZES }),
 	// ── 云雾（yunwu.ai）文本渠道（第157轮）：标准 OpenAI chat 协议 → 复用 openai-chat 翻译器零新代码；
 	//    聚合站模型众多、文档只给了一个实名 → 先种 1 款打样，其余管理端新建（协议 openai-chat、渠道 云雾、
 	//    上游名照抄站内模型名）。⚠ 渠道密钥必须在管理端「云雾」渠道填（openai-chat 的环境兜底是网关密钥）。
@@ -1147,23 +1155,6 @@ const DEFAULT_MODELS: ModelDef[] = [
 		],
 		methods: ["omni", "frames"], matLimits: { img: 9, vid: 3, aud: 3 },
 	}),
-	// ── 简梦H（ZhengAPI）图片 6 款（第154轮）：外显名=展示名 kebab 化加 jmh- 前缀，上游发实名/基名 ──
-	jmh("jmh-grok-imagine", "grok-imagine-1.0", [], 5, 1),
-	jmh("jmh-grok-imagine-edit", "grok-imagine-1.0-edit", [], 5, 1),
-	jmh("jmh-nano-banana", "firefly-nano-banana", [jmhImgRes()], 8),
-	jmh("jmh-nano-banana-pro", "firefly-nano-banana-pro", [jmhImgRes()], 12),
-	jmh("jmh-nano-banana-2", "firefly-nano-banana2", [jmhImgRes()], 9),
-	jmh("jmh-gpt-image", "firefly-gpt-image", [jmhImgRes()], 10),
-	// ── 简梦H 视频 9 款（第155轮）：统一视频文档全家族接入（grok≤7 图/veo31 系首尾帧/kling3 恒 15s）──
-	jmhVid("jmh-grok-video", "grok-imagine-1.0-video", jmhVidParams(["720p", "480p"], jmzDurOpts([6, 10], 6), ["16:9", "9:16", "3:2"]), 3, 30, 7),
-	jmhVid("jmh-sora2", "firefly-sora2", jmhVidParams(null, jmzDurOpts([4, 8, 12], 12), ["16:9", "9:16"]), 3, 36),
-	jmhVid("jmh-sora2-pro", "firefly-sora2-pro", jmhVidParams(null, jmzDurOpts([4, 8, 12], 12), ["16:9", "9:16"]), 5, 60),
-	jmhVid("jmh-veo31", "firefly-veo31", jmhVidParams(["1080p", "720p"], jmzDurOpts([4, 6, 8], 8), ["16:9", "9:16"]), 4, 32, 2, { methods: ["omni", "frames"] }),
-	jmhVid("jmh-veo31-ref", "firefly-veo31-ref", jmhVidParams(["1080p", "720p"], jmzDurOpts([4, 6, 8], 8), ["16:9", "9:16"]), 4, 32, 3),
-	jmhVid("jmh-veo31-fast", "firefly-veo31-fast", jmhVidParams(["1080p", "720p"], jmzDurOpts([4, 6, 8], 8), ["16:9", "9:16"]), 3, 24, 2, { methods: ["omni", "frames"] }),
-	jmhVid("jmh-kling3", "firefly-kling3", jmhVidParams(["1080p", "720p"], jmzDurOpts([15], 15), ["16:9", "9:16"]), 4, 60, 2, { methods: ["omni", "frames"] }),
-	jmhVid("jmh-kling3-omni", "firefly-kling3omni", jmhVidParams(["1080p", "720p"], jmzDurOpts([5, 8, 10], 10), ["16:9", "9:16"]), 4, 40),
-	jmhVid("jmh-runway45", "firefly-runway45", jmhVidParams(["720p"], jmzDurOpts([5, 10], 10), ["21:9", "16:9", "4:3", "1:1", "3:4", "9:16", "9:21"]), 4, 40),
 	// ── 火山引擎 AI MediaKit：视频超分（4 种）+ 去字幕（精细化版）。upstreamModel = 工具端点路径
 	//    （enhance-video 用 ":standard/:professional" 后缀区分 tool_version）；密钥/地址在「火山引擎 MediaKit」渠道配置。
 	def("volc-enhance-generative", "超分·大模型", "video-enhance", "volc-mediakit", VOLC_ENHANCE_GEN_PARAMS, 40, {
@@ -1184,6 +1175,16 @@ const DEFAULT_MODELS: ModelDef[] = [
 	def("volc-image-enhance", "图像超分（画质增强）", "image-enhance", "volc-mediakit", VOLC_IMG_ENHANCE_PARAMS, 10, {
 		channelId: CH_VOLC, upstreamModel: "enhance-image",
 	}),
+	// 2026-09-15 新文档，旧 Gemini ID 已删除：新 ID 补种，不复活墓碑。
+	...Object.entries(YALI_GEMINI_SPECS).map(([upstream,spec],i)=>def(`yali-v2-${upstream}`,['鸭梨·Banana','鸭梨·Banana Pro','鸭梨·Banana 2'][i],'image','yali-image',[
+		yaliRes(spec.resolutions,spec.resolutions.includes('2k')?'2k':'1k'),yaliSize(spec.ratios),
+	],10,{channelId:CH_YALI_OPENAI,upstreamModel:upstream,modeId:'yali',familyId:['fam-nano-banana','fam-nano-banana-pro','fam-nano-banana-2'][i],matLimits:{img:6,vid:0,aud:0},enabled:false,shareScope:'none',routes:spec.resolutions.map(resolution=>({when:{resolution},upstreamModel:upstream,cost:10}))})),
+	...['grok-imagine-image','grok-imagine-image-quality'].map(upstream=>def(`yali-v2-${upstream}`,`鸭梨·${upstream}`,'image','yali-image',[
+		yaliRes(['1k','2k'],'2k'),yaliSize(YALI_GROK_RATIOS),
+	],10,{channelId:CH_YALI_OPENAI,upstreamModel:upstream,modeId:'yali',familyId:'fam-grok-image',matLimits:{img:6,vid:0,aud:0},enabled:false,shareScope:'none',routes:['1k','2k'].map(resolution=>({when:{resolution},upstreamModel:upstream,cost:10}))})),
+	def('yali-v2-seedream-5-pro','鸭梨·Seedream 5.0 Pro','image','yali-image',[
+		yaliRes(['1k','1.5k','2k'],'2k'),yaliSize(Object.keys(YALI_SEEDREAM_PRO_SIZES)),
+	],10,{channelId:CH_YALI_OPENAI,upstreamModel:'doubao-seedream-5-0-pro',modeId:'yali',familyId:'fam-seedream-5-pro',imageSizeMap:YALI_SEEDREAM_PRO_SIZES,matLimits:{img:8,vid:0,aud:0},enabled:false,shareScope:'none',routes:['1k','1.5k','2k'].map(resolution=>({when:{resolution},upstreamModel:'doubao-seedream-5-0-pro',cost:10}))}),
 	// ── Yali（api.yaliai.com）图片 4 款（第229轮）：接口类型决定渠道归属，两类 Key 各自填 ──
 	yali("yali-gpt-image-2", "gpt-image-2", CH_YALI_OPENAI, [yaliRes(["1k", "2k", "4k"], "2k"), YALI_OPENAI_SIZE, YALI_QUALITY], 8),
 	yali("yali-gemini-2.5-flash-image", "gemini-2.5-flash-image-preview", CH_YALI_GEMINI, [yaliRes(["1k"], "1k"), yaliSize(YALI_GEMINI_RATIOS)], 5),
@@ -1339,6 +1340,24 @@ const DEFAULT_MODELS: ModelDef[] = [
 		matLimits: { img: 9, vid: 3, aud: 3 }, methods: ["omni"], enabled: false,
 		note: "至少添加一张图片或一段视频作为参考。",
 	}),
+	// xiha888：按用户文档接入；未核实价格，默认不开放。不从简介推断版本/分辨率字段。
+	def('xiha888-mj-imagine', 'Midjourney', 'image', 'xiha888-image', [
+		{ key: 'botType', label: '模型风格', type: 'enum', options: ['MID_JOURNEY', 'NIJI_JOURNEY'], default: 'MID_JOURNEY' },
+		{ key: 'aspectRatio', label: '图片比例', type: 'enum', options: ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3', '4:5', '5:4', '21:9'], default: '1:1' },
+		{ key: 'quality', label: '质量', type: 'enum', options: ['0.25', '0.5', '1', '2'], default: '1' },
+		{ key: 'stylize', label: '风格化', type: 'enum', options: ['0', '50', '100', '250', '500', '750', '1000'], default: '100' },
+		{ key: 'chaos', label: '混乱度', type: 'enum', options: ['0', '25', '50', '75', '100'], default: '0' },
+		{ key: 'style', label: '风格', type: 'enum', options: ['', 'raw'], default: '' },
+	], 1, { channelId: CH_XIHA888, upstreamModel: 'mj_imagine', modeId: 'xiha888', familyId: 'fam-mj', enabled: false, shareScope: 'none' }),
+	// 龙幽：文档未确认底层模型家族，不猜测映射为 Seedance；价格和档位核实前保持未开放。
+	...['mini', 'fast', 'standard'].map(tier => def(`ly2-videos-${tier}`, `龙幽·${{ mini: '轻量', fast: '快速', standard: '标准' }[tier]}`, 'video', 'longyou-video', [
+		{ key: 'duration', label: '时长', type: 'number', default: 15, min: 4, max: 15, step: 1, unit: 's' },
+		{ key: 'aspect_ratio', label: '宽高比', type: 'enum', options: ['16:9', '9:16', '1:1', '21:9', '4:3', '3:4'], default: '16:9' },
+		{ key: 'resolution', label: '分辨率', type: 'enum', options: ['480p', '720p', '1080p', '1440p', '2k'], default: '480p' },
+	], 150, {
+		channelId: CH_LONGYOU, upstreamModel: `videos-${tier}`, modeId: 'longyou-v2',
+		costField: 'duration', costPerUnit: 10, matLimits: { aud: 0 }, methods: ['omni'], enabled: false, shareScope: 'none',
+	})),
 	// ── 内部虚拟模型：第三方本地渠道（LibTV/即梦）手续费——echo 同步成功即扣 cost；hidden 不进 catalog，
 	//    客户端在第三方调用成功后按 id 请求一次完成扣费（管理端「模型」页可调价）。
 	def("fee-thirdparty", "第三方渠道手续费", "text", "echo", [], 5, { hidden: true }),
@@ -1410,14 +1429,16 @@ const MODEL_REFRESH_FIELDS: (keyof ModelDef)[] = [
 	"label", "capability", "protocol", "channelId", "upstreamModel", "routes", "params", "cost", "costField", "costPerUnit", "baseUrl", "apiKey", "methods", "officialAssets", "refVideoSecondsWeight",
 ];
 
+// 图片参考数量默认交给上游；后续管理员可通过 matLimits.img 显式收紧。
+for (const m of DEFAULT_MODELS) if (m.capability === 'image' && m.matLimits) delete m.matLimits.img;
 let store: Store = loadJson<Store>(FILE, { version: 0, models: [] });
 if (store.models.length === 0) {
-	store = { version: 1, seedVersion: MODELS_SEED_VERSION, models: DEFAULT_MODELS, deletedSeedIds: [] };
+	store = { version: 1, seedVersion: MODELS_SEED_VERSION, models: DEFAULT_MODELS, deletedSeedIds: [], xingguangGenericVersion: 1 };
 	saveJson(FILE, store);
 } else {
 	if (!store.deletedSeedIds) store.deletedSeedIds = [];
+	let changed = compactXingguangModels(store);
 	const tomb = new Set(store.deletedSeedIds);
-	let changed = false;
 
 	// ① 退役清理：每次启动强制删除 RETIRED_IDS（不依赖 seedVersion，避免历史竞态导致残留卡死）
 	const before = store.models.length;
@@ -1442,6 +1463,17 @@ if (store.models.length === 0) {
 		if (tomb.has(d.id) || RETIRED.has(d.id)) continue;
 		if (!store.models.some((m) => m.id === d.id)) {
 			store.models.push(d);
+			changed = true;
+		}
+	}
+
+	// 用户确认龙幽 Seedance 2.0 时长为4–15秒；只修复本次错误的无上限种子形态。
+	for (const id of ['ly2-videos-mini', 'ly2-videos-fast', 'ly2-videos-standard']) {
+		const m = store.models.find(x => x.id === id);
+		const duration = m?.params.find(p => p.key === 'duration');
+		if (m?.protocol === 'longyou-video' && duration?.type === 'number' && duration.min === 1 && duration.max === undefined) {
+			duration.min = 4;
+			duration.max = 15;
 			changed = true;
 		}
 	}
@@ -1741,6 +1773,11 @@ if (store.models.length === 0) {
 		}
 		store.seedanceVariantsFamilyVersion = 1; changed = true;
 	}
+	if ((store.textReasoningVersion ?? 0) < 1) {
+		for (const model of store.models) addTextReasoningFields(model);
+		store.textReasoningVersion = 1;
+		changed = true;
+	}
 	if (changed) persist();
 }
 
@@ -1778,6 +1815,13 @@ export function clearModeFromModels(modeId: string): void {
 		}
 	}
 	if (changed) persist();
+}
+
+// 只迁移一次，后续启动不得覆盖管理员实测后填写的限制。
+if (!(store as Store & { imageRefLimitsVersion?: number }).imageRefLimitsVersion) {
+  for (const m of store.models) if (m.capability === 'image' && m.matLimits) delete m.matLimits.img;
+  (store as Store & { imageRefLimitsVersion?: number }).imageRefLimitsVersion = 1;
+  persist();
 }
 
 function persist(bump = true): void {
@@ -1865,9 +1909,15 @@ export function modelAllowedForAgent(m: ModelDef, agentId?: string): boolean {
 }
 
 export function createModel(input: Partial<ModelDef> & Pick<ModelDef, "id" | "label" | "capability" | "protocol">): ModelDef {
+	if (input.saveToOss !== undefined && typeof input.saveToOss !== "boolean") throw new Error("是否保存 OSS 必须为布尔值");
 	const now = new Date().toISOString();
 	const m: ModelDef = {
 		id: input.id.trim(),
+		materialPolicy: validateMaterialPolicy(input.materialPolicy),
+		imageMaterialMode: validateImageMaterialMode(input.imageMaterialMode),
+    minVisualMaterials: input.minVisualMaterials,
+		saveToOss: input.saveToOss ?? true,
+    imageSizeMap: validateImageSizeMap(input.imageSizeMap),
 		label: input.label,
 		capability: input.capability,
 		protocol: input.protocol,
@@ -1904,16 +1954,25 @@ export function createModel(input: Partial<ModelDef> & Pick<ModelDef, "id" | "la
 		createdAt: now,
 		updatedAt: now,
 	};
+	addTextReasoningFields(m);
 	const idx = store.models.findIndex((x) => x.id === m.id);
 	if (idx >= 0) store.models[idx] = m;
 	else store.models.push(m);
 	persist();
+	notifyAvailabilityConfigChange({resetModelId:m.id});
 	return m;
 }
 
 export function updateModel(id: string, patch: Partial<Omit<ModelDef, "id" | "createdAt">>): ModelDef | undefined {
+  if ('localFailureRefund' in patch && typeof patch.localFailureRefund !== 'boolean') throw new Error('失败退款必须为布尔值');
+  if ('materialPolicy' in patch) patch.materialPolicy = validateMaterialPolicy(patch.materialPolicy);
+  if ('enabled' in patch && typeof patch.enabled !== 'boolean') throw new Error('模型启用状态必须为布尔值');
+	if ('imageSizeMap' in patch) patch.imageSizeMap = validateImageSizeMap(patch.imageSizeMap);
+	if ('imageMaterialMode' in patch) patch.imageMaterialMode = validateImageMaterialMode(patch.imageMaterialMode);
+	if ("saveToOss" in patch && typeof patch.saveToOss !== "boolean") throw new Error("是否保存 OSS 必须为布尔值");
 	const m = getModelDef(id);
 	if (!m) return undefined;
+	validateModelMaterialPolicy({ ...m, ...patch });
 	if ('tokenPricing' in patch) {
     if ((patch.capability ?? m.capability) !== 'text' || (patch.hidden ?? m.hidden)) throw new Error('仅文本生成模型支持 token 计费');
     patch.tokenPricing = validateTextPricing(patch.tokenPricing);
@@ -1932,6 +1991,7 @@ export function updateModel(id: string, patch: Partial<Omit<ModelDef, "id" | "cr
 	if ("shareAgentIds" in patch) m.shareAgentIds = m.shareAgentIds?.length ? m.shareAgentIds : undefined;
 	if ("shareGroupIds" in patch) m.shareGroupIds = m.shareGroupIds?.length ? m.shareGroupIds : undefined;
 	persist();
+	notifyAvailabilityConfigChange();
 	return m;
 }
 
@@ -1974,9 +2034,13 @@ export function resolveModelCost(
 	if (m.costField) {
 		const perUnit = ovRule?.costPerUnit ?? override?.costPerUnit ?? route?.costPerUnit ?? m.costPerUnit ?? 0;
 		const unit = Math.max(0, Number(p[m.costField]) || 0);
-		if (perUnit > 0 && unit > 0) return m.capability === "text" ? scale(perUnit * unit) : Math.round(perUnit * unit);
+		if (perUnit >= 0 && unit > 0) return m.capability === "text" ? scale(perUnit * unit) : Math.round(perUnit * unit);
 	}
-	return scale(ovRule?.cost ?? override?.cost ?? route?.cost ?? m.cost);
+	const baseCost=ovRule?.cost ?? override?.cost ?? route?.cost ?? m.cost;
+	if(m.id.startsWith('route:')&&m.capability==='video'&&m.routes?.length&&m.refVideoSecondsWeight&&Number(p.duration)>0&&Number(p.__refVideoBillingSeconds)>0){
+		return Math.round(baseCost*(1+m.refVideoSecondsWeight*Number(p.__refVideoBillingSeconds)/Number(p.duration)));
+	}
+	return scale(baseCost);
 }
 
 export function deleteModel(id: string): boolean {
@@ -1984,12 +2048,19 @@ export function deleteModel(id: string): boolean {
 	store.models = store.models.filter((m) => m.id !== id);
 	if (store.models.length !== before) {
 		// 内置模型记墓碑，重启后不再补种（使删除可持久）
-		if (BUILTIN_IDS.has(id)) {
+		if (BUILTIN_IDS.has(id) || ['off-me2.0','off-we2.0','off-we2.0-fast','off-we2.0-mini'].includes(id)) {
 			if (!store.deletedSeedIds) store.deletedSeedIds = [];
 			if (!store.deletedSeedIds.includes(id)) store.deletedSeedIds.push(id);
 		}
 		persist();
+		notifyAvailabilityConfigChange({resetModelId:id});
 		return true;
 	}
 	return false;
+}
+
+function validateImageMaterialMode(value: unknown): "direct" | "url" | undefined {
+ if(value===undefined)return undefined;
+ if(value!=="direct"&&value!=="url")throw new Error("图片素材请求方式无效");
+ return value;
 }

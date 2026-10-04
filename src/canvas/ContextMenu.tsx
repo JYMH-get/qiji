@@ -39,11 +39,14 @@ import { useCanvasStore } from "@/store/canvasStore";
 import { useLibraryStore } from "@/store/libraryStore";
 import { useReactFlow } from "@xyflow/react";
 import { dispatchCommand } from "@/command/dispatch";
+import { isNodeRunBusy, isRunnableNode } from "@/command/nodeRunEligibility";
+import { runSelectedNodes } from "./runSelection";
 import { listPlugins, getPlugin } from "@/nodes/pluginRegistry";
 import { makeNode } from "./nodeFactory";
 import { copyToClipboard, splitEdgesForCopy } from "@/lib/clipboard";
 import { copyNodesImageToSystemClipboard } from "@/canvas/copyImage";
 import type { NodeType } from "@/types";
+import { selectedResults, downloadSelectedResults } from './downloadSelected';
 
 /**
  * 画布右键菜单（第87轮精简）：
@@ -59,13 +62,15 @@ export function ContextMenu() {
   const stackDrawerNodeId = useUiStore((s) => s.stackDrawerNodeId);
 
   const nodesMap = useCanvasStore((s) => s.nodes);
+  const runStatus = useCanvasStore((s) => menu?.nodeId ? s.runtime[menu.nodeId]?.status : undefined);
 
   const { screenToFlowPosition } = useReactFlow();
 
   // 多选「一键增加预设」子菜单开合
   const [presetSub, setPresetSub] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<string | null>(null);
 
-  if (!menu) return null;
+  if (!menu) return downloadProgress ? <div role="status" className="Qiji-panel fixed bottom-6 left-1/2 z-[10401] -translate-x-1/2 rounded-xl px-4 py-3 text-sm text-foreground shadow-xl">{downloadProgress}</div> : null;
 
   const nodeId = menu.nodeId;
   const node = nodeId ? nodesMap[nodeId] : null;
@@ -100,7 +105,7 @@ export function ContextMenu() {
 
   const onRun = () => {
     if (nodeId) {
-      dispatchCommand({ type: "run", nodeId });
+      runSelectedNodes([nodeId]);
       close();
     }
   };
@@ -125,9 +130,7 @@ export function ContextMenu() {
   };
 
   const onDeleteSelected = () => {
-    selectedNodeIds.forEach((id) => {
-      dispatchCommand({ type: "deleteNode", id });
-    });
+    dispatchCommand({ type: "deleteElements", nodeIds: selectedNodeIds });
     close();
   };
 
@@ -195,6 +198,20 @@ export function ContextMenu() {
   };
   // 多选中有结果资产的节点数（决定入口显示与计数）
   const shareableSelected = selectedNodeIds.filter((id) => !!nodesMap[id]?.data.resultAssetId).length;
+  const downloadableSelected = selectedResults(selectedNodeIds, nodesMap, useLibraryStore.getState().assets);
+  const onDownloadSelected = async () => {
+    if (downloadProgress) return;
+    const items = downloadableSelected;
+    const skipped = selectedNodeIds.length - items.length;
+    setDownloadProgress('正在选择下载目录…');
+    close();
+    try {
+      const result = await downloadSelectedResults(items, (done, total) => setDownloadProgress(`批量下载 ${done}/${total}`));
+      if (result) alert(`批量下载完成：成功 ${result.ok}，失败 ${result.failures.length}${skipped ? `，无结果跳过 ${skipped}` : ''}。${result.failures.length ? '\n' + result.failures.join('\n') : ''}`);
+    } catch (error) {
+      alert(`批量下载失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally { setDownloadProgress(null); }
+  };
 
   // 二次解析：对节点已存的结果文本重新解析，只补建缺漏的子节点（不重跑模型、不动已有节点）。
   // 智能推理/智能拆分/资产拆分节点有结果时可用——流式竞态漏裂变的行（如尾卡只出了文本节点）由此救回。
@@ -386,6 +403,15 @@ export function ContextMenu() {
               </button>
             )}
             <button
+              onClick={() => void onDownloadSelected()}
+              disabled={!downloadableSelected.length || !!downloadProgress}
+              title="将选中节点的当前结果保存到同一文件夹"
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-secondary cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Download className="h-3.5 w-3.5 text-sky-400" />
+              批量下载（{downloadableSelected.length}）
+            </button>
+            <button
               onClick={onGroup}
               className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-secondary cursor-pointer transition-colors"
             >
@@ -426,7 +452,7 @@ export function ContextMenu() {
             <button
               onClick={() => {
                 const ids = selectedEdgeIds.length > 1 ? selectedEdgeIds : [menu.edgeId!];
-                ids.forEach((id) => dispatchCommand({ type: "disconnect", edgeId: id }));
+                dispatchCommand({ type: "deleteElements", edgeIds: ids });
                 close();
               }}
               className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-destructive hover:bg-secondary cursor-pointer transition-colors"
@@ -448,13 +474,14 @@ export function ContextMenu() {
               </button>
             ) : (
               <>
-                <button
+                {isRunnableNode(node, node ? getPlugin(node.type) : undefined) && <button
                   onClick={onRun}
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-secondary cursor-pointer transition-colors"
+                  disabled={isNodeRunBusy(runStatus, node)}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-secondary cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-default"
                 >
                   <Play className="h-3.5 w-3.5" />
-                  运行节点
-                </button>
+                  {isNodeRunBusy(runStatus, node) ? "运行中…" : "运行节点"}
+                </button>}
                 {node?.parentId && (
                   <>
                     <button

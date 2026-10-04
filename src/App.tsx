@@ -6,6 +6,8 @@ import { useDirectorStore } from "@/store/directorStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useSettingsStore } from "@/store/settingsStore";
 import { useCanvasStore } from "@/store/canvasStore";
+import { startCanvasAutoSave } from "@/services/canvasAutoSave";
+import { startClientDiagnostics } from "@/services/clientDiagnostics";
 import { useUiStore } from "@/store/uiStore";
 import { dispatchCommand } from "@/command/dispatch";
 import { registerCanvasHandlers } from "@/command/registerCanvasHandlers";
@@ -25,6 +27,7 @@ import AssetCheckModal from "@/components/AssetCheckModal";
 import SharedPickModal from "@/components/SharedPickModal";
 import ConfirmModal from "@/components/ConfirmModal";
 import { TaskRecoveryNotice } from "@/components/TaskRecoveryNotice";
+import { ClientUpdateNotice } from "@/components/ClientUpdateNotice";
 
 /** 图片涂鸦编辑器：konva 体积不小，lazy 到首次唤起才加载（无会话时零成本） */
 const AnnotationEditorLazy = lazy(() => import("@/components/AnnotationEditor"));
@@ -164,6 +167,7 @@ registerCanvasHandlers();
 // 不再自动订阅——避免自动投影悄悄覆盖用户在画布的进度。
 
 export default function App() {
+	useEffect(() => startClientDiagnostics(), []);
 	const loggedIn = useConnectionStore((s) => s.loggedIn);
 	const [checking, setChecking] = useState(true);
 	const initedRef = useRef(false);
@@ -282,7 +286,7 @@ export default function App() {
 				const key = e.key.toLowerCase();
 				if (key === "s") {
 					e.preventDefault();
-					useProjectStore.getState().save(true);
+					useProjectStore.getState().save(true, true);
 				} else if (key === "o") {
 					e.preventDefault();
 					useProjectStore.getState().open();
@@ -365,28 +369,8 @@ export default function App() {
 		return () => clearInterval(hb);
 	}, [loggedIn]);
 
-	// ──── Debounced auto-save: canvas 变化 → 标记 dirty → debounce 3s → save ────
-	const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-	useEffect(() => {
-		const unsubscribe = useCanvasStore.subscribe(() => {
-			const { isProjectLoading, savePath } = useProjectStore.getState();
-			// 仅在有已保存路径且不在加载阶段时触发自动保存
-			if (isProjectLoading || !savePath) return;
-
-			useProjectStore.getState().markDirty();
-
-			if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
-			autoSaveTimer.current = setTimeout(() => {
-				useProjectStore.getState().save();
-			}, 3000);
-		});
-
-		return () => {
-			unsubscribe();
-			if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
-		};
-	}, []);
+	// Only durable canvas changes enter the shared 30-second save window.
+	useEffect(startCanvasAutoSave, []);
 
 	const settingsOpen = useUiStore((s) => s.settingsOpen);
 	const personalCenterOpen = useUiStore((s) => s.personalCenterOpen);
@@ -404,7 +388,7 @@ export default function App() {
 	}
 
 	if (!loggedIn) {
-		return <LoginPage onLoggedIn={() => { /* setSession 已在登录页触发，loggedIn 翻转即进入应用 */ }} />;
+		return <><ClientUpdateNotice /><LoginPage onLoggedIn={() => { /* setSession 已在登录页触发，loggedIn 翻转即进入应用 */ }} /></>;
 	}
 
 	// 弹出窗口：只渲染对应助手（复用上面的启动流程：连接 / catalog / 自动加载项目），不渲染主界面。
@@ -431,6 +415,7 @@ export default function App() {
 				<SharedPickModal />
 				<ConfirmModal />
 				<TaskRecoveryNotice />
+				<ClientUpdateNotice />
 				{settingsOpen && <SettingsModal />}
 				{personalCenterOpen && <PersonalCenter />}
 				{toolboxOpen && <ToolboxModal />}

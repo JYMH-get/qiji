@@ -31,8 +31,12 @@ export function thirdPartyFeeCredits(): number {
 const FEE_MODEL_ID = "fee-thirdparty";
 
 /** 提交第三方前的余额软校验（登录态才有余额可查；不足抛错拒单） */
-export function precheckThirdPartyFee(): void {
+export async function precheckThirdPartyFee(): Promise<void> {
 	const u = useConnectionStore.getState().user;
+	if (u?.team?.paymentSource === 'team') {
+		await managedClient.precheckThirdPartyFee();
+		return;
+	}
 	const fee = thirdPartyFeeCredits();
 	if (u && u.credits < fee) {
 		throw new Error(`Qiji 积分不足：调用第三方渠道需 ${fee} 积分手续费（当前余额 ${u.credits}）`);

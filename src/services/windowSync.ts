@@ -111,6 +111,9 @@ export async function initWindowSync(): Promise<void> {
 
 /** 广播一条同步消息给其它窗口 */
 export function broadcastSync(msg: SyncMsg): void {
+	// New peers introduce themselves with hello and receive a full snapshot.
+	// With no same-project peer, serializing project/media payloads serves no purpose.
+	if (msg.type !== "hello" && !getPeers().some(p => p.projectPath === msg.projectPath)) return;
 	sendFn?.(envelope(msg));
 }
 

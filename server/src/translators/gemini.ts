@@ -1,12 +1,14 @@
+import { resolveEditRefs } from './openai.ts';
+import { serializeGeminiImageRequest } from './imageWireDiagnostics.ts';
+import { geminiGenerationConfig, geminiRequestOptions } from './geminiImageParams.ts';
 /**
  * Gemini 原生图像翻译器（generateContent，含图像模态）。
  *
  * 网关用 Authorization: Bearer 鉴权（非官方 ?key=）。模型名在 URL path 里。
- * 请求体按网关文档（第88轮对齐，修"无法垫图"）：
- *  - parts 用 **snake_case** `inline_data/mime_type`（官方两种命名都收，聚合网关只认文档写法——
- *    此前发 camelCase `inlineData` 被网关忽略，垫图等于没发）；文本在前、垫图在后；
+ * 请求体按 AISC 当前 Gemini 对接文档：
+ *  - 直传 parts 用 `inlineData/mimeType`；文本在前、垫图在后；
  *  - **全部垫图**都发（此前只取第一张，多图垫图全丢）；
- *  - generationConfig.imageConfig 的 aspectRatio/imageSize 由管理端按公共比例/分辨率转换后传入。
+ *  - 显式 generationConfig 原样保留，仅从公共比例/分辨率补齐缺失的 imageConfig 字段。
  * 响应从 candidates[].content.parts[].inlineData / inline_data 取 base64 图像字节（两种命名都兼容）。
  */
 import { buildPrompt } from "./prompt.ts";
@@ -14,49 +16,7 @@ import { maskToken } from "../store/logs.ts";
 import type { ImageResult, OnUpstream } from "./openai.ts";
 import type { Upstream } from "./upstream.ts";
 import type { GenerateRequest } from "../contract.ts";
-import { getAsset, getAssetBytes } from "../store/assets.ts";
 
-type InlinePart = { inline_data: { mime_type: string; data: string } };
-
-/** 取单张垫图字节 → inline_data part；取不到返回 null（跳过该图，不整单失败） */
-async function imagePart(ref: { id?: string; url?: string }): Promise<InlinePart | null> {
-	// 优先按 id：内存字节(未配 OSS) → 否则取该资产的 OSS 直链
-	if (ref.id) {
-		const bytes = getAssetBytes(ref.id);
-		const rec = getAsset(ref.id);
-		if (bytes) return { inline_data: { mime_type: rec?.contentType || "image/png", data: bytes.toString("base64") } };
-		if (rec?.url) {
-			try {
-				const r = await fetch(rec.url, { signal: AbortSignal.timeout(60000) });
-				if (r.ok) {
-					const buf = Buffer.from(await r.arrayBuffer());
-					return { inline_data: { mime_type: r.headers.get("content-type") || rec.contentType || "image/png", data: buf.toString("base64") } };
-				}
-			} catch { /* 取不到则跳过该图 */ }
-		}
-	}
-	if (ref.url) {
-		try {
-			const r = await fetch(ref.url, { signal: AbortSignal.timeout(60000) });
-			if (r.ok) {
-				const buf = Buffer.from(await r.arrayBuffer());
-				return { inline_data: { mime_type: r.headers.get("content-type") || "image/png", data: buf.toString("base64") } };
-			}
-		} catch { /* 取不到则跳过该图 */ }
-	}
-	return null;
-}
-
-/** 全部垫图 → inline_data parts（保序，供 @ImageN 对齐；单图失败跳过不拖累整单） */
-async function refImageParts(req: GenerateRequest): Promise<InlinePart[]> {
-	const refs = req.inputs?.images ?? [];
-	const out: InlinePart[] = [];
-	for (const ref of refs) {
-		const p = await imagePart(ref);
-		if (p) out.push(p);
-	}
-	return out;
-}
 
 /** 从客户端 size（如 "2048x1152"）推导 Gemini imageConfig 的 aspectRatio + imageSize */
 function imageConfigFromParams(params?: Record<string, unknown>): { aspectRatio?: string; imageSize?: string } {
@@ -85,27 +45,26 @@ export async function translateGeminiImage(req: GenerateRequest, up: Upstream, o
 	const prompt = buildPrompt(req);
 	const url = `${up.baseUrl}/v1beta/models/${encodeURIComponent(up.upstreamModel)}:generateContent`;
 	// 按网关文档：文本在前、垫图在后；全部垫图都发（图生图/多图参考）
-	const imgParts = await refImageParts(req);
+	const resolved=await resolveEditRefs(req,up.imageMaterialMode??'direct');
+ if(resolved.missing.length)return {ok:false,error:resolved.missing.join('、')};
+ const imgParts=up.imageMaterialMode==='url'?resolved.refs.map(r=>({file_data:{mime_type:'image/png',file_uri:r.url}})):await Promise.all(resolved.refs.map(async r=>({inlineData:{mimeType:r.bytes!.blob.type||'image/png',data:Buffer.from(await r.bytes!.blob.arrayBuffer()).toString('base64')}})));
 	const reqParts: unknown[] = [{ text: prompt }, ...imgParts];
 	const imgCfg = imageConfigFromParams(req.params as Record<string, unknown> | undefined);
 	const body: Record<string, unknown> = {
 		contents: [{ role: "user", parts: reqParts }],
-		generationConfig: {
-			responseModalities: ["TEXT", "IMAGE"],
-			...(imgCfg.aspectRatio || imgCfg.imageSize
-				? { imageConfig: { ...(imgCfg.aspectRatio ? { aspectRatio: imgCfg.aspectRatio } : {}), ...(imgCfg.imageSize ? { imageSize: imgCfg.imageSize } : {}) } }
-				: {}),
-		},
+		...geminiRequestOptions(req.params),
+		generationConfig: geminiGenerationConfig(req.params, imgCfg, ["TEXT", "IMAGE"]),
 	};
 
-	onUpstream?.({ request: { url, method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${maskToken(up.apiKey)}` }, refImages: imgParts.length, prompt, generationConfig: body.generationConfig } });
+	const wire = serializeGeminiImageRequest(body);
+	onUpstream?.({ request: { url, method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${maskToken(up.apiKey)}` }, refImages: imgParts.length, prompt, generationConfig: body.generationConfig, wire: wire.diagnostics } });
 
 	let resp: Response;
 	try {
 		resp = await fetch(url, {
 			method: "POST",
 			headers: { "Content-Type": "application/json", Authorization: `Bearer ${up.apiKey}` },
-			body: JSON.stringify(body),
+			body: wire.bodyText,
 			signal: AbortSignal.timeout(60 * 60 * 1000), // 图像生成超时 1 小时
 		});
 	} catch (err) {

@@ -1,3 +1,5 @@
+import { AccelerationMaterialStatus } from '@/components/AccelerationMaterialStatus';
+import { supportsOfficialMaterials } from "@/services/materialPolicy";
 /**
  * RtcMaterialStrip —— 实时剪辑右栏「垫图区」素材条（ShotMaterialStrip 的轻量增强版）。
  * 与资产模式同一套数据与操作（shotMaterialOps：增删/排序/图例同步），另加：
@@ -20,7 +22,7 @@ export function RtcMaterialStrip({ episodeId, shotId, identityEnabled }: { episo
 	const materials = shot?.materials ?? [];
 	const projectVideoModel = useEffectiveModelKey("video");
 	const activeVideoModel = shot?.overrides?.videoModelKey || projectVideoModel;
-	const supportsIdentity = useCatalogStore((s) => !!s.catalog?.models.find((m) => m.id === activeVideoModel)?.officialAssets);
+	const supportsIdentity = useCatalogStore((s) => supportsOfficialMaterials(s.catalog?.models.find((m) => m.id === activeVideoModel)));
 	const showIdentity = identityEnabled ?? supportsIdentity;
 	const fileRef = useRef<HTMLInputElement>(null);
 	const dragMat = useRef<string | null>(null); // 内部重排来源素材 id
@@ -98,8 +100,9 @@ export function RtcMaterialStrip({ episodeId, shotId, identityEnabled }: { episo
 							className="hidden group-hover:flex"
 							style={{ position: "absolute", top: 0, right: 0, width: 15, height: 15, alignItems: "center", justifyContent: "center", fontSize: 10, color: "#fff", background: "rgba(0,0,0,0.6)", borderBottomLeftRadius: 4, border: "none", cursor: "pointer", lineHeight: 1 }}
 						>✕</button>
-						{showIdentity && md === "image" && (
-							<IdentityAssetToggle active={identity} onToggle={() => setShotMaterialIdentity(episodeId, shotId, m.id, !identity)} />
+						<AccelerationMaterialStatus modelId={activeVideoModel} kind={md} material={{ id: useProjectStore.getState().blobByUri(m.uri)?.id, url: m.uri, name: m.name }} />
+						{showIdentity && (
+							<IdentityAssetToggle kind={md} modelId={activeVideoModel} material={{ id: useProjectStore.getState().blobByUri(m.uri)?.id, url: m.uri, name: m.name }} active={identity} onToggle={() => setShotMaterialIdentity(episodeId, shotId, m.id, !identity)} />
 						)}
 					</div>
 				);

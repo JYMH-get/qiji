@@ -22,6 +22,8 @@
 export type LedgerStatus = "pending" | "done" | "orphaned";
 
 export interface LedgerResult {
+	/** 生成时参数快照，随跨分集投递保留。 */
+	resultMeta?: NonNullable<import("@/types").NodeData["resultMetaByAssetId"]>[string];
 	/** 服务端资产 id（有则「id 是真理」，投递时按它下载/登记三元映射） */
 	assetId?: string;
 	/** 媒体结果公网直链（图/视频/音频） */
@@ -30,6 +32,7 @@ export interface LedgerResult {
 	text?: string;
 	/** 服务端未转存的原始时效直链（meta.rehosted=false）——投递时需客户端接力转存 OSS（第158轮） */
 	rawLink?: boolean;
+	saveToOss?: boolean;
 }
 
 export interface LedgerEntry {
@@ -38,6 +41,8 @@ export interface LedgerEntry {
 	adapterKey: string;
 	/** 项目身份=项目文件绝对路径（项目无稳定 id，savePath 即身份；""=提交时项目尚未落盘） */
 	projectPath: string;
+	/** 未落盘聊天请求仅可回到提交时的内存项目实例。 */
+	projectInstanceId?: string;
 	projectName: string;
 	/** 画布身份=分集 id（resolveCanvasKey 语义：项目至少一集，激活画布恒有 key） */
 	canvasKey: string;
@@ -99,6 +104,12 @@ export function sanitizeLedger(raw: unknown, now: number = Date.now()): LedgerEn
 			if (str(r.url)) result.url = str(r.url);
 			if (str(r.text)) result.text = str(r.text).slice(0, LEDGER_TEXT_CAP);
 			if (r.rawLink === true) result.rawLink = true;
+			if (r.saveToOss === false) result.saveToOss = false;
+			if (r.resultMeta && typeof r.resultMeta === "object") {
+				const m = r.resultMeta as Record<string, unknown>;
+				result.resultMeta = { model: str(m.model), aspect: str(m.aspect), prompt: str(m.prompt),
+					createdAt: str(m.createdAt), duration: typeof m.duration === "number" || typeof m.duration === "string" ? m.duration : undefined };
+			}
 		}
 		// done/orphaned 但没有任何结果载荷=无从投递也无从通知，直接丢弃
 		if (status !== "pending" && (!result || (!result.url && !result.text && !result.assetId))) continue;
@@ -107,6 +118,7 @@ export function sanitizeLedger(raw: unknown, now: number = Date.now()): LedgerEn
 			taskId,
 			adapterKey,
 			projectPath: str(e.projectPath),
+			projectInstanceId: str(e.projectInstanceId) || undefined,
 			projectName: str(e.projectName),
 			canvasKey: str(e.canvasKey),
 			nodeId,

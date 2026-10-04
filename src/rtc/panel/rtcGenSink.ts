@@ -218,6 +218,7 @@ export async function persistGenAsset(args: {
 	resultUri: string;
 	assetId?: string;
 	rawLink?: boolean;
+	saveToOss?: boolean;
 	kind: "video" | "image" | "audio";
 	label: string;
 	owner: string;
@@ -231,12 +232,12 @@ export async function persistGenAsset(args: {
 		let blob: AssetBlob | null = known?.localUri ? known : null;
 		if (!blob) {
 			const dl = rawLink ? (kind === "video" ? { attempts: 2, timeoutSecs: 120 } : { attempts: 3, timeoutSecs: 30 }) : undefined;
-			blob = await saveRemoteAsset(args.assetId || `rtc-${Date.now()}`, resultUri, dl);
-			if (blob && rawLink) {
+			blob = await saveRemoteAsset(args.assetId || `rtc-${Date.now()}`, resultUri, { ...dl, keepRemoteUrl: args.saveToOss !== false });
+			if (blob && rawLink && args.saveToOss !== false) {
 				const prefix = kind === "video" ? "video" : kind === "audio" ? "audio" : "TP";
 				blob = await uploadBlobToOss(blob, label, prefix);
 			}
-			if (!blob && /^https?:\/\//i.test(resultUri)) {
+			if (args.saveToOss !== false && !blob && /^https?:\/\//i.test(resultUri)) {
 				const { managedClient } = await import("@/services/managedClient");
 				const re = await managedClient.rehost(resultUri, undefined, label);
 				if (re?.url) blob = await saveRemoteAsset(re.id, re.url);

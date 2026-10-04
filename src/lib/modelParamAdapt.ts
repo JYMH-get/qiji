@@ -14,7 +14,7 @@
 
 import { getNodeSpec } from "@/nodes/nodeSpecs";
 import { useCatalogStore } from "@/store/catalogStore";
-import { imageResolutionOptions, clampImageResolution } from "@/lib/genParams";
+import { imageResolutionOptions, clampImageResolution, nativeImageSchema } from "@/lib/genParams";
 
 /** 结构化最小声明：兼容 contract.ParamField 与 adapters/types.ParamField 两处定义 */
 export interface ParamFieldLike {
@@ -45,6 +45,7 @@ export function schemaForNodeModel(
 	const cm = useCatalogStore.getState().catalog?.models.find((m) => m.id === modelKey);
 	const cap = spec?.capability;
 	if (cap === "image") {
+		if (nativeImageSchema(cm?.params)) return cm!.params as ParamFieldLike[];
 		const res = imageResolutionOptions(cm);
 		return specParams.map((f) => (f.key === "resolution" && f.type === "enum"
 			? { ...f, options: res.map((r) => r.v), default: clampImageResolution(f.default, res) }

@@ -1,5 +1,5 @@
 /**
- * 会员体系（第246轮）——单档会员：会员卡兑换码开通（仅源站签发，渠道商不参与）。
+ * 单档会员：源站与各渠道商共用方案、签卡、核销实现，权益按签发方隔离。
  *
  * 权益（用户定稿）：
  *  - 开通即到账算力（积分）：核销会员卡当场 grantCredits；
@@ -44,6 +44,7 @@ export interface MembershipPlan {
 
 export interface MembershipCard {
 	code: string; // mc-xxxxxxxxxxxxxxxx
+	agentId?: string;
 	/** 签发时冻结的规格 */
 	planName: string;
 	days: number;
@@ -60,6 +61,7 @@ export interface MembershipCard {
 interface Db {
 	plan: MembershipPlan;
 	cards: MembershipCard[];
+	agentPlans: Record<string, MembershipPlan>;
 }
 
 const DEFAULT_PLAN: MembershipPlan = {
@@ -78,6 +80,7 @@ const loaded = loadJson<Partial<Db>>(FILE, {});
 const db: Db = {
 	plan: normPlan({ ...DEFAULT_PLAN, ...(loaded.plan ?? {}) }),
 	cards: Array.isArray(loaded.cards) ? (loaded.cards as MembershipCard[]) : [],
+	agentPlans: Object.fromEntries(Object.entries(loaded.agentPlans ?? {}).map(([id, plan]) => [id, normPlan(plan)])),
 };
 
 function persist(): void {
@@ -119,23 +122,26 @@ function normPlan(p: Partial<MembershipPlan>): MembershipPlan {
 }
 
 /** 某模型的会员折扣覆盖（planBilling 用）：未单独设置返回 undefined=按会员基础折扣 */
-export function membershipModelDiscountOf(modelId: string): number | undefined {
-	const n = db.plan.modelDiscounts[modelId];
+export function membershipModelDiscountOf(modelId: string, agentId?: string): number | undefined {
+	const n = getMembershipPlan(agentId).modelDiscounts[modelId];
 	return typeof n === "number" ? n : undefined;
 }
 
-export function getMembershipPlan(): MembershipPlan {
-	return { ...db.plan, modelDiscounts: { ...db.plan.modelDiscounts } };
+export function getMembershipPlan(agentId?: string): MembershipPlan {
+	const plan = agentId ? db.agentPlans[agentId] ?? DEFAULT_PLAN : db.plan;
+	return { ...plan, modelDiscounts: { ...plan.modelDiscounts } };
 }
 
-export function setMembershipPlan(patch: Partial<MembershipPlan>): MembershipPlan {
-	db.plan = normPlan({ ...db.plan, ...patch });
+export function setMembershipPlan(patch: Partial<MembershipPlan>, agentId?: string): MembershipPlan {
+	const plan = normPlan({ ...getMembershipPlan(agentId), ...patch });
+	if (agentId) db.agentPlans[agentId] = plan;
+	else db.plan = plan;
 	persist();
-	return getMembershipPlan();
+	return getMembershipPlan(agentId);
 }
 
-export function listMembershipCards(): MembershipCard[] {
-	return [...db.cards].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+export function listMembershipCards(agentId?: string): MembershipCard[] {
+	return db.cards.filter(c => (c.agentId || undefined) === (agentId || undefined)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 export function getMembershipCard(code: string): MembershipCard | undefined {
@@ -143,14 +149,15 @@ export function getMembershipCard(code: string): MembershipCard | undefined {
 }
 
 /** 批量签发（上限 200/次，与团队码/扩容卡同尺）。规格从当前方案冻结进卡 */
-export function createMembershipCards(count: number, note?: string): MembershipCard[] {
+export function createMembershipCards(count: number, note?: string, agentId?: string): MembershipCard[] {
 	const n = Math.max(1, Math.min(200, Math.floor(count) || 1));
 	const now = new Date().toISOString();
-	const p = db.plan;
+	const p = getMembershipPlan(agentId);
 	const made: MembershipCard[] = [];
 	for (let i = 0; i < n; i++) {
 		made.push({
 			code: "mc-" + randomBytes(8).toString("hex"),
+			agentId: agentId || undefined,
 			planName: p.name,
 			days: p.days,
 			credits: p.credits,
@@ -165,9 +172,11 @@ export function createMembershipCards(count: number, note?: string): MembershipC
 }
 
 /** 核销。幂等性：已核销的卡再次核销明确报错（不重复授予） */
-export function useMembershipCard(code: string, userId: string, userName: string): { ok: true; card: MembershipCard } | { ok: false; error: string } {
+export function useMembershipCard(code: string, userId: string, userName: string, userAgentId?: string): { ok: true; card: MembershipCard } | { ok: false; error: string } {
 	const c = db.cards.find((x) => x.code === code.trim());
 	if (!c) return { ok: false, error: "会员卡不存在" };
+	if ((c.agentId || undefined) !== (userAgentId || undefined)) return { ok: false, error: "该会员卡不适用于当前账号" };
+	if (!getMembershipPlan(userAgentId).enabled) return { ok: false, error: "会员暂未开放" };
 	if (c.usedBy) return { ok: false, error: "该会员卡已被使用" };
 	c.usedBy = userId;
 	c.usedByName = userName || undefined;
@@ -177,9 +186,10 @@ export function useMembershipCard(code: string, userId: string, userName: string
 }
 
 /** 作废：未核销的可删（无退回，与激活码/扩容卡同规则）；已核销的留档不可删 */
-export function deleteMembershipCard(code: string): { ok: boolean; error?: string } {
+export function deleteMembershipCard(code: string, agentId?: string): { ok: boolean; error?: string } {
 	const c = db.cards.find((x) => x.code === code);
 	if (!c) return { ok: false, error: "会员卡不存在" };
+	if ((c.agentId || undefined) !== (agentId || undefined)) return { ok: false, error: "无权操作该会员卡" };
 	if (c.usedBy) return { ok: false, error: "该卡已被使用，留档不可删除" };
 	db.cards = db.cards.filter((x) => x.code !== code);
 	persist();

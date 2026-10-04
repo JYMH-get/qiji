@@ -11,6 +11,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { loadJson, saveJson } from "./db.ts";
+import { publicPromptNote } from '../publicPromptNote.ts';
 import { audienceChain, audienceGroupId, PLATFORM_AUDIENCE } from "./agents.ts";
 import { INFERENCE_FORMATS, selectInferenceOutputTemplate } from '../inferenceComposition.ts';
 import type { Capability, Purpose } from "../contract.ts";
@@ -42,6 +43,7 @@ export interface TemplateDef {
 	/** 独立输出格式的请求时长档位，不能从创作模板反推。 */
 	outputDurationLimit?: 15 | 30;
 	name: string;
+	publicNote?: string;
 	capability: Capability;
 	/** 用途；画风等"预设类"模板可无 purpose（不可执行，仅作配置项） */
 	purpose?: Purpose;
@@ -695,6 +697,7 @@ export function createTemplate(
 		body: "",
 		...input,
 		id: input.id.trim(),
+		publicNote: publicPromptNote(input.publicNote),
 	});
 	const idx = store.templates.findIndex((x) => x.id === t.id);
 	if (idx >= 0) store.templates[idx] = t;
@@ -709,6 +712,7 @@ export function updateTemplate(
 ): TemplateDef | undefined {
 	const t = getTemplateDef(id);
 	if (!t) return undefined;
+	if ('publicNote' in patch) patch = { ...patch, publicNote: publicPromptNote(patch.publicNote) };
 	Object.assign(t, patch, { updatedAt: new Date().toISOString() });
 	// 开放范围清单归一（第176轮）：空数组=未设（undefined），两清单同尺（与 models.updateModel 同款）
 	if ("shareAgentIds" in patch) t.shareAgentIds = t.shareAgentIds?.length ? t.shareAgentIds : undefined;

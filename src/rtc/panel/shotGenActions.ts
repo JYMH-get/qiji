@@ -1,3 +1,5 @@
+import { getDualModeFeature } from '@/store/connectionStore';
+import { supportsOfficialMaterials } from "@/services/materialPolicy";
 /**
  * shotGenActions —— 实时剪辑右栏/舞台对「分镜占位符」的三个 AI 动作：
  *   推理提示词（单镜） / 生成故事板（生图） / 生成视频。
@@ -33,7 +35,7 @@ import { armPlaceholderSwap } from "./placeholderSwap";
 
 /** 项目是否图视同源模式（故事板/视频共用 unifiedPrompt） */
 export function isSameSource(): boolean {
-	return !!useProjectStore.getState().mediaSettings?.imgVideoSameSource;
+	return (!getDualModeFeature() || (!!useProjectStore.getState().mediaSettings?.imgVideoSameSource));
 }
 
 /** 实时取最新分镜（组件传入的 shot 可能是陈旧快照） */
@@ -168,7 +170,8 @@ export async function genShotVideo(episodeId: string, shotId: string, opts?: { s
 			const u = await ensurePublicUrl(m.uri, { name: m.name });
 			if (!u) { alert(`素材「${m.name}」无法取得公网直链（原文件失效或网络异常），请重新上传该素材或删除后重试。`); return false; }
 			const md = mediaOf(m);
-			const baseRef = { url: u, name: m.name, ...(m.assetId && !m.assetId.startsWith("LC-") ? { id: m.assetId } : {}) };
+			const fileId = useProjectStore.getState().blobByUri(m.uri)?.id;
+			const baseRef = { url: u, name: m.name, ...(fileId && !fileId.startsWith("LC-") ? { id: fileId } : {}) };
 			if (md === "video") videos.push(baseRef);
 			else if (md === "audio") audios.push(baseRef);
 			else {
@@ -183,7 +186,7 @@ export async function genShotVideo(episodeId: string, shotId: string, opts?: { s
 	if (videos.length) input.videos = videos;
 	if (audios.length) input.audios = audios;
 	const req = videoReqOptionsForKey(vModelKey);
-	const officialIdx = vModel?.officialAssets
+	const officialIdx = supportsOfficialMaterials(vModel)
 		? identityIndexesForMaterials(shot.materials, ov.officialAssetIndexes).filter((i) => i >= 0 && i < images.length)
 		: [];
 	const pendingId = startShotGeneration({

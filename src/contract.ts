@@ -69,8 +69,12 @@ export interface AssetRef {
   url?: string;
   /** 资产名字（人读，便于上游 @tag 引用与日志追踪；id 为真理、url 为公网直链） */
   name?: string;
-  /** 本次引用用途：identity=走人像/虚拟人素材库；reference=普通参考（角色图片由客户端缺省 identity）。 */
+  /** 历史引用用途；official-assets 线路对全部图片、视频、音频使用素材库，reference 或未标记均不跳过。 */
   usage?: "reference" | "identity";
+  /** 本次官方生成使用的已准备素材库 ID；仅随请求携带，不写回项目资产。 */
+  officialAssetId?: string;
+  /** 官方素材准备时的类型；仅请求副本使用，未提供时兼容图片。 */
+  officialAssetType?: 'Image' | 'Video' | 'Audio';
   /** 依赖某个尚未完成的任务的产物 */
   fromTask?: string;
   /** 取上游产物的哪一部分（如视频尾帧 / 末2秒） */
@@ -99,6 +103,7 @@ export interface UsedPromptPreset {
 }
 
 export interface GenerateRequest {
+  materialPolicyKey?: string;
   purpose: Purpose;
   /** 逻辑模型 id（来自 catalog），如 "gpt-5.5" / "Image-2" */
   model: string;
@@ -210,6 +215,8 @@ export interface AssetUploadResult {
 // ============================================================
 
 export interface ParamField {
+  /** 管理端图片请求对应表轴；未设置时兼容既有对应表。 */
+  inImageSizeMap?: boolean;
   key: string;
   label: string;
   type: "text" | "textarea" | "enum" | "number" | "boolean";
@@ -219,6 +226,25 @@ export interface ParamField {
   max?: number;
   step?: number;
   unit?: string;
+}
+
+export interface MaterialPolicy {
+  kind: 'url' | 'nyxen' | 'official-assets';
+  library?: 'sd' | 'me' | 'we';
+  groupRequired?: boolean;
+  /** Opaque preparation identity; contains no upstream credentials. */
+  scopeKey?: string;
+}
+
+export interface MaterialPrepareResponse {
+  status: 'Active' | 'Processing' | 'Failed';
+  /** 官方素材准备完成后返回的上游 ID；客户端仅在会话内缓存，并随生成请求提交。 */
+  assetId?: string;
+  /** Inspect found no usable binding; the client can now show its uploading phase. */
+  uploadRequired?: boolean;
+  error?: string;
+  checkedAt: number;
+  scopeKey: string;
 }
 
 export interface CatalogModel {
@@ -235,8 +261,9 @@ export interface CatalogModel {
   familyId?: string;
   /** 支持的生成「方法」（第131轮，视频模型）：omni=全能参考 / frames=首尾帧；缺省=仅全能参考 */
   methods?: string[];
-  /** 支持上游人像素材库：用户在图片素材卡上逐项选择，服务端完成素材验证与 asset:// 转换。 */
+  /** 兼容旧目录的官方素材库能力；客户端默认准备全部图片、视频、音频并携带 ID，服务端校验后转换 asset://，优先遵循 materialPolicy。 */
   officialAssets?: boolean;
+  materialPolicy?: MaterialPolicy;
   /** 参考视频按秒计费折算系数（第140轮）：计费秒数 = duration + 系数 × Σceil(每条参考视频秒)。
    *  缺省/0=不计费。服务端探测时长并实扣；本字段供客户端预估展示（预估以服务端实扣为准） */
   refVideoSecondsWeight?: number;
@@ -249,7 +276,8 @@ export interface CatalogModel {
   note?: string;
   params: ParamField[];  // 该模型在面板里暴露的参数表单
   tokenPricing?: TextTokenPricing;
-  cost: number;          // 基准积分（固定/起步价）
+  cost?: number;         // 基准积分；文本推理服务不向客户端下发模型价格
+  pricingHidden?: boolean;
   /** 按字段计费：参数键（如视频 "duration"）；扣费 = costPerUnit × 该字段值。空=按 cost 固定扣 */
   costField?: string;
   /** 每单位价（配合 costField）。路由可按档覆盖；客户端仅用于预估展示 */
@@ -258,7 +286,25 @@ export interface CatalogModel {
   costRules?: { when: Record<string, string>; cost?: number; costPerUnit?: number }[];
 }
 
+export interface SuccessRateSnapshot {
+  since:number; until:number; successRate:number|null; validSamples:number; hasRequests:boolean;
+  insufficientSamples?:boolean; completedRequests?:number; method?:'interval';
+  source?:'self-test'|'correction';
+  editedAt?:number;
+}
+export interface RoutePriceAvailabilityRow {
+  id:string; name:string; familyId:string; familyName:string; capability:Capability;
+  requests:number; success:number; failed:number; running:number; successRate:number|null; trackingSince:number;
+  history:SuccessRateSnapshot[];
+  pricing?:Pick<CatalogModel,'cost'|'costField'|'costPerUnit'|'costRules'|'tokenPricing'|'params'|'refVideoSecondsWeight'>;
+  discountPercent?:number;
+}
+export interface RoutePriceAvailability {
+  since:number; until:number; historyWindowMs:number; rows:RoutePriceAvailabilityRow[];
+}
+
 export interface CatalogTemplate {
+	publicNote?: string;
   id: string;            // 模板 id（提交时用 templateId 引用）
   aliases?: string[];    // 正文合并后保留的旧模板引用
   outputDurationLimit?: 15 | 30; // 输出格式档位，与创作方案无关
@@ -289,6 +335,7 @@ export interface CatalogTemplate {
  * 客户端以「预设胶囊」`【预设:id】` 插入提示词，提交时展开成正文。
  */
 export interface CatalogPreset {
+	publicNote?: string;
   id: string;
   name: string;
   /** 分组："画风"（新建项目画风选择器 + 画风前缀）/ "预设方案"（出图预设胶囊）/ 其它自由分组 */
@@ -357,7 +404,7 @@ export interface Catalog {
   /** 模式注册表投影（第131轮）：id→显示名，客户端模型下拉按模式分组折叠（「源头」级）用 */
   modes?: { id: string; name: string }[];
   /** 家族注册表投影（第163轮）：id→显示名（有序），客户端「家族」一级下拉与排序用 */
-  families?: { id: string; name: string; capability?: "video" | "image" }[];
+  families?: { id: string; name: string; capability?: Capability }[];
   templates: CatalogTemplate[];
   /** 预设清单（第174轮独立实体）：画风/预设方案/前后缀 全文下发；旧服务端无此字段=客户端回退按模板分类取 */
   presets?: CatalogPreset[];
@@ -537,6 +584,7 @@ export const Endpoints = {
   membershipRedeem: "/v1/membership/redeem",
   catalog: "/v1/catalog",
   generate: "/v1/generate",
+  thirdPartyFeePrecheck: "/v1/fees/third-party/precheck",
   task: (taskId: string) => `/v1/tasks/${taskId}`,
   batch: "/v1/batch",
   batchState: (batchId: string) => `/v1/batch/${batchId}`,
@@ -549,8 +597,9 @@ export const Endpoints = {
   favorites: "/v1/favorites",
   favorite: (assetId: string) => `/v1/favorites/${assetId}`,
   favoriteFlags: "/v1/favorites/flags",
-  /** 扩容卡核销（P1）：个人卡→本人收藏配额；团队卡→团长核销到团队共享库配额 */
-  storageCodeRedeem: "/v1/storage-codes/redeem",
+  messages: "/v1/messages",
+  messagesRead: "/v1/messages/read",
+  teamPaymentSource: "/v1/team/payment-source",
   /** 缩略图直传（P1）：256px WebP → thumb/ 前缀 */
   assetThumb: (id: string) => `/v1/assets/${id}/thumb`,
   assetThumbComplete: (id: string) => `/v1/assets/${id}/thumb/complete`,
@@ -596,6 +645,9 @@ export interface SessionTeamInfo {
   memberCount: number;
   /** 共享积分模式下的团队池余额（=团长余额）；分发模式不下发 */
   poolCredits?: number;
+  personalCredits?: number;
+  teamCredits?: number;
+  paymentSource?: 'team' | 'personal';
   /** 团队共享素材库 id（开团自动创建，资产助手「共享资产」自动可见） */
   sharedLibId?: string;
 }
@@ -606,6 +658,9 @@ export interface TeamMemberInfo {
   name: string;
   account?: string;
   credits: number;
+  personalCredits?: number;
+  teamCredits?: number;
+  paymentSource?: 'team' | 'personal';
   dailySpent: number;
   totalSpent: number;
   lastSeenAt?: string;
@@ -700,6 +755,31 @@ export interface UserConsumeStats {
 }
 
 /** 团队详情（GET /v1/team）：团长见全量（members），团员见概要 */
+export interface TeamUsageMetric {
+  quantity: number;
+  requests: number;
+  missing: number;
+  average: number | null;
+}
+export type TeamUsageProducts = Record<'text' | 'image' | 'video' | 'audio' | 'other', TeamUsageMetric>;
+export interface TeamUsageMember {
+  userId: string;
+  name: string;
+  role: string;
+  active: boolean;
+  total: number;
+  daily: number[];
+  products: TeamUsageProducts;
+}
+export interface TeamUsageReport {
+  generatedAt: string;
+  startAt: string;
+  timezone: string;
+  today: string;
+  dates: string[];
+  team: { id: string; name: string; total: number; daily: number[]; products: TeamUsageProducts; members: TeamUsageMember[] };
+}
+
 export interface TeamDetail extends SessionTeamInfo {
   /** 团队人数上限（含团长；生效值=本团覆盖 > 管理端全局默认） */
   memberLimit?: number;
@@ -712,6 +792,19 @@ export interface TeamDetail extends SessionTeamInfo {
   /** 已发出待接受的邀请（仅团长视角下发；可撤销） */
   pendingInvites?: { userId: string; name: string; account?: string; createdAt: string }[];
 }
+
+export interface UserMessage {
+  id: string;
+  createdAt: string;
+  issuer: 'source' | 'agent' | 'system';
+  issuerId?: string;
+  kind: 'notice' | 'announcement' | 'team-credit' | 'balance-warning' | 'system';
+  title: string;
+  body: string;
+  read: boolean;
+}
+
+export interface UserMessagePage { items: UserMessage[]; unread: number; total: number }
 
 // ── 共享素材库（第120轮）：三级 = 共享资产库 / 共享文件夹 / 文件夹内素材 ──
 /** 共享资产库（一级）：渠道商/源站创建、设加入密码；用户搜索+密码加入后才可见内容（渠道商区分） */
@@ -771,6 +864,8 @@ export interface UserLogDetail extends UserLogItem {
 
 /** 用户功能开关（服务端按用户控制客户端可用模式；字段缺省=开）。管理端用户表可编辑，随登录/心跳下发。 */
 export interface UserFeatures {
+  /** 双模推理：关闭后仅允许同源 */
+  dualMode?: boolean;
   /** 表格模式视频区：关闭时隐藏视频生成区与视频选择，剧本、五类资产及故事板生图仍开放 */
   assetMode?: boolean;
   /** 画布模式：/frame-canvas 节点编辑器 */
@@ -817,6 +912,7 @@ export interface SessionUser {
   catalogAudience?: string;
   /** 积分余额。⚠ 共享积分模式的团员这里=团队池余额（=团长余额），显示/预检与服务端实扣天然一致 */
   credits: number;
+  ownCredits?: number;
   /** 团队概要（第172轮；不在团队则缺省） */
   team?: SessionTeamInfo;
   /** 会员状态（第246轮；生效中才有） */

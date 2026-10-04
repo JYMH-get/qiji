@@ -6,7 +6,7 @@
  * removeUpstreamMaterial —— 删除上游连线素材（第97轮补充）：断开对应连线 + 提示词重编号。
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { renumberPromptAfterRemoval, removeUpstreamMaterial, removeNodeMaterial, listNodeMaterials, buildNodeLegend, setNodeMaterialUsage } from "./nodeMaterials";
+import { renumberPromptAfterRemoval, removeUpstreamMaterial, removeNodeMaterial, listNodeMaterials, buildNodeLegend, setNodeMaterialUsage, toggleNodeMaterialFromAsset, findPickedNodeMaterial } from "./nodeMaterials";
 import { useCanvasStore } from "@/store/canvasStore";
 import { useLibraryStore } from "@/store/libraryStore";
 import type { CanvasNode, NodeData } from "@/types";
@@ -48,6 +48,45 @@ const mkE = (id: string, source: string, target: string) =>
 	({ id, kind: "dataflow" as const, source, sourcePort: "out", target, targetPort: "in" });
 const mkA = (id: string, kind: string, name: string) =>
 	({ id, kind, name, uri: `mem://${id}`, serverAssetId: null, thumbnailUri: null, createdAt: "", deletedByUser: false, localPath: null });
+
+describe("资产库连续选择", () => {
+	beforeEach(() => useCanvasStore.setState({ nodes: { n: mkN("n") }, edges: {} }));
+	it("连续加入不同造型，重复点击仅取消对应素材并更新编号", () => {
+		const a = { id: "form-a", assetId: "role", url: "https://example.com/a.png", name: "造型A" };
+		const b = { id: "form-b", assetId: "role", url: "https://example.com/b.png", name: "造型B" };
+		toggleNodeMaterialFromAsset("n", a);
+		toggleNodeMaterialFromAsset("n", b);
+		expect(listNodeMaterials("n").map(m => m.id)).toEqual([a.id, b.id]);
+		expect(findPickedNodeMaterial("n", a)).toBeDefined();
+		toggleNodeMaterialFromAsset("n", a);
+		expect(findPickedNodeMaterial("n", a)).toBeUndefined();
+		expect(listNodeMaterials("n").map(m => [m.id, m.tag])).toEqual([[b.id, "@Image1"]]);
+		expect(buildNodeLegend("n")).not.toContain("造型A");
+	});
+	it("不同入口以同一地址识别既有素材，取消不会重复追加", () => {
+		const asset = { url: "https://example.com/shared.png", name: "共享" };
+		toggleNodeMaterialFromAsset("n", asset);
+		expect(findPickedNodeMaterial("n", { ...asset, id: "shared-id" })).toBeDefined();
+		toggleNodeMaterialFromAsset("n", { ...asset, id: "shared-id" });
+		expect(listNodeMaterials("n")).toHaveLength(0);
+	});
+});
+
+describe("图片素材排除音频", () => {
+	it("旧项目音频与上游声音均不进入图片素材、图例和提交枚举，视频仍保留", () => {
+		useLibraryStore.setState({ assets: { audio: mkA("audio", "audio", "角色声音") } as never });
+		const input = { images: [{ id: "picture", url: "https://example.com/a.png", name: "角色", assetId: "role" }], audios: [{ id: "voice", url: "https://example.com/a.mp3", voiceForAssetId: "role" }] };
+		useCanvasStore.setState({ nodes: {
+			up: { ...mkN("up", { resultAssetId: "audio" }), type: "audio.gen" },
+			img: mkN("img", { input }),
+			vid: { ...mkN("vid", { input }), type: "video.gen" },
+		}, edges: { a: mkE("a", "up", "img"), b: mkE("b", "up", "vid") } });
+		expect(listNodeMaterials("img").map(m => m.media)).toEqual(["image"]);
+		expect(buildNodeLegend("img")).not.toContain("@Audio");
+		expect(listNodeMaterials("vid").filter(m => m.media === "audio")).toHaveLength(2);
+		expect(buildNodeLegend("vid")).toContain("声音参考");
+	});
+});
 
 describe("removeUpstreamMaterial（删除上游连线素材）", () => {
 	beforeEach(() => {
@@ -98,7 +137,7 @@ describe("removeUpstreamMaterial（删除上游连线素材）", () => {
 			nodes: {
 				ui: mkN("ui", { resultAssetId: "I1" }),
 				ua: mkN("ua", { resultAssetId: "AU1" }),
-				t: mkN("t", { params: { prompt: "@Image1的声音参考@Audio1" } }),
+				t: { ...mkN("t", { params: { prompt: "@Image1的声音参考@Audio1" } }), type: "video.gen" },
 			},
 			edges: { e1: mkE("e1", "ui", "t"), e2: mkE("e2", "ua", "t") },
 		});

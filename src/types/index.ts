@@ -77,6 +77,11 @@ export interface NodeData {
 	 * （如 `asset:C01-...` / `episode:ep1` / `assetSplit`）。canvasProjection 据此幂等去重、就地更新。
 	 */
 	sourceRef?: string;
+	/** 上次同步的布局位置；选项改变时按列差移动，保留用户手动偏移。 */
+	projectionPosition?: { x: number; y: number };
+	projectionLayout?: { section: string; row: number; column: number };
+	/** 媒体默认等高；用户手动缩放后记住其高度，重载不复位。 */
+	mediaDisplayHeight?: number;
 	/** 投影归属分集 id（仅分集流水线节点带）：画布按「当前分集」筛选/清理投影节点，降低节点数与卡顿 */
 	episodeRef?: string;
 	/** 预留：脏传播版本号，当前不消费 */
@@ -136,6 +141,8 @@ export interface NodeRuntime {
 	queueTotal?: number;
 	/** 服务端阶段文案（无位次时顶替「生成中 X%」） */
 	stageText?: string;
+	/** 对话流式预览；成功终态才替换持久化回答。 */
+	partialText?: string;
 }
 
 /** 错峰自动模式配置（人机协作） */

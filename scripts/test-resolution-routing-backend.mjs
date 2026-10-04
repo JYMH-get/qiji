@@ -1,0 +1,13 @@
+import {mkdtempSync,mkdirSync,cpSync,symlinkSync,writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join,resolve} from 'node:path';
+import {spawnSync} from 'node:child_process';
+const root=resolve(import.meta.dirname,'..'),sandbox=mkdtempSync(join(tmpdir(),'qiji-resolution-routing-'));
+mkdirSync(join(sandbox,'server/scripts'),{recursive:true});mkdirSync(join(sandbox,'src'));
+for(const name of ['src','skills','package.json','tsconfig.json'])cpSync(join(root,'server',name),join(sandbox,'server',name),{recursive:true});
+cpSync(join(root,'src/contract.ts'),join(sandbox,'src/contract.ts'));
+cpSync(join(root,'server/scripts/smoke-longyou.mjs'),join(sandbox,'server/scripts/smoke-longyou.mjs'));
+symlinkSync(join(root,'server/node_modules'),join(sandbox,'server/node_modules'),'junction');
+writeFileSync(join(sandbox,'server/.qiji-longyou-sandbox'),'Isolated data and stub fetch; no .env or real data copied.');
+const result=spawnSync(process.execPath,['--import','tsx','scripts/smoke-longyou.mjs','full'],{cwd:join(sandbox,'server'),stdio:'inherit'});
+console.log('Isolated sandbox:',sandbox);process.exit(result.status??1);

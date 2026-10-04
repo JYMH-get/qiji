@@ -14,6 +14,9 @@ import { sanitizeAssetBlobs, mergeAssetBlob, blobMatchesUri } from "@/lib/blobSa
 import { collectLocalRefs, applyRefRewrites, fileNameOf } from "@/lib/importCopy";
 import { useSettingsStore } from "./settingsStore";
 import { isProjectWriter } from "@/services/windowSync";
+import { createProjectSaveQueue } from "./projectSaveQueue";
+import { enqueueProjectBackup, newCloudBackupId, readCloudBackupId } from "@/services/projectCloudBackup";
+import { recordClientDiagnostic, classifyClientDiagnosticError, type ClientDiagnosticEvent } from "@/services/clientDiagnostics";
 
 /** 多画布：每个分集 = 一块画布，key = 分集 id（无主画布；项目恒有≥1集）。 */
 /** 解析「激活分集 key」（画布与实时剪辑共用一把尺）：目标集无效/为 null 则回退第一集 */
@@ -61,7 +64,7 @@ export const DEFAULT_MEDIA_SETTINGS: MediaSettings = {
 };
 /** 新项目界面快照默认值：空（无历史位置，按各界面自身默认落地） */
 export const DEFAULT_UI_SNAPSHOT: UiSnapshot = {};
-import { initDebouncedSave, scheduleSave, notifySaved } from "./debouncedSave";
+import { initDebouncedSave, scheduleSave, notifySaved, flushScheduledSave, getSaveRevision, cancelAllSaves } from "./debouncedSave";
 import { stripHeavyRefs } from "@/lib/stripHeavyRefs";
 
 function isTauri(): boolean {
@@ -121,6 +124,7 @@ async function normalizeProjectAssets(project: QijiProject, assetsDir: string) {
   const cleanAssetsDir = assetsDir.replace(/\\/g, "/");
 
   if (project.files) {
+    project.files = { ...project.files };
     for (const key of Object.keys(project.files)) {
       const oldPath = project.files[key];
       if (oldPath) {
@@ -131,18 +135,26 @@ async function normalizeProjectAssets(project: QijiProject, assetsDir: string) {
   }
 
   if (project.commits) {
+    // The save document shares immutable store snapshots. Normalize only the disk copy.
+    project.commits = { ...project.commits };
+    const normalized = new WeakMap<object, import("./libraryStore").Asset>();
     for (const commitId of Object.keys(project.commits)) {
       const commit = project.commits[commitId];
       if (commit.assets) {
+        const assets = { ...commit.assets };
         for (const assetId of Object.keys(commit.assets)) {
           const asset = commit.assets[assetId];
           if (asset && asset.localPath) {
+            const cached = normalized.get(asset);
+            if (cached) { assets[assetId] = cached; continue; }
             const filename = asset.localPath.split(/[/\\]/).pop() || "";
             const newPath = `${cleanAssetsDir}/${filename}`;
-            asset.localPath = newPath;
-            asset.uri = convertFileSrc(newPath);
+            const copy = { ...asset, localPath: newPath, uri: convertFileSrc(newPath) };
+            normalized.set(asset, copy);
+            assets[assetId] = copy;
           }
         }
+        project.commits[commitId] = { ...commit, assets };
       }
     }
   }
@@ -212,6 +224,7 @@ async function importAsNewProject(srcPath: string): Promise<boolean> {
   applyRefRewrites(project, rewrites);
 
   project.name = projName;
+  project.cloudBackupId = newCloudBackupId();
   project.savedAt = new Date().toISOString();
   await writeTextFile(filePath, JSON.stringify(project));
 
@@ -242,6 +255,7 @@ export type AssetCat = "characters" | "scenes" | "items" | "organisms" | "crowds
 
 interface ProjectState {
   name: string;
+  cloudBackupId: string;
   savePath: string | null;
   isDirty: boolean;
   recentProjects: RecentProject[];
@@ -362,7 +376,8 @@ interface ProjectState {
   /** 切换激活画布到某分集（null=主画布）：快照当前画布→canvases，载入目标画布到 canvasStore（独立节点/连线/视口） */
   switchCanvas: (episodeId: string | null) => void;
 
-  save: (isManual?: boolean) => Promise<void>;
+  /** isManual also permits first save; createHistory is reserved for explicit user checkpoints. */
+  save: (isManual?: boolean, createHistory?: boolean) => Promise<void>;
   scheduleAutoSave: (tier?: "canvas" | "history" | "viewport") => void;
   saveAs: () => Promise<void>;
   newProject: () => void;
@@ -390,9 +405,13 @@ function saveRecent(projects: RecentProject[]) {
   localStorage.setItem(RECENT_KEY, JSON.stringify(projects));
 }
 
+const projectSaveQueue = createProjectSaveQueue();
+let diagnosticSaveSequence = Date.now();
+
 export const useProjectStore = create<ProjectState>((set, get) => ({
   name: "未命名项目",
   savePath: null,
+  cloudBackupId: newCloudBackupId(),
   isDirty: false,
   recentProjects: loadRecent(),
   isSaving: false,
@@ -568,6 +587,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (s.rtcEpisodeId === nextKey) return;
     set({ rtcEpisodeId: nextKey, isDirty: true }); // rtcEpisodeId 随项目持久化（重开恢复停留分集）
     get().scheduleAutoSave("canvas");
+    if (s.savePath && !s.isProjectLoading) void flushScheduledSave();
   },
   setProjectModelConfig: (config) => {
     set((s) => ({
@@ -581,6 +601,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     get().scheduleAutoSave("canvas");
   },
   setUiSnapshot: (patch) => {
+    const previous = get().uiSnapshot;
+    const switched = (patch.route !== undefined && previous?.route !== undefined && patch.route !== previous.route)
+      || (patch.video?.episodeId !== undefined && previous?.video?.episodeId !== undefined && patch.video.episodeId !== previous.video.episodeId);
     set((s) => {
       const cur = s.uiSnapshot || {};
       const next: UiSnapshot = { ...cur };
@@ -600,9 +623,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     });
     // 仅在项目已落盘时才去抖落盘：避免「未保存项目上的被动滚动/选择」凭空 mkdir 出幽灵项目文件夹。
     // （内存里的快照仍已更新，下次真正保存时会随项目一并写入。）
-    // 选择/滚动变更频繁——走最低优先级的 viewport 档去抖（500ms），UI 数据不入 commit hash，不污染历史。
+    // 选择/滚动变更频繁——合并到 30 秒自动保存窗口，UI 数据不入 commit hash，不污染历史。
     const s = get();
-    if (s.savePath && !s.isProjectLoading) s.scheduleAutoSave("viewport");
+    if (s.savePath && !s.isProjectLoading) {
+      s.scheduleAutoSave("viewport");
+      if (switched) void flushScheduledSave();
+    }
   },
 
   setEpisodes: (episodes) => {
@@ -694,19 +720,26 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     void import("@/nodes/pluginRegistry").then((m) => m.resumeCanvasNodeTasks()).catch(() => {});
     // 请求台账（第204轮）：画布环境变化 → 重新认领轮询 + 尝试投递缓存结果
     void import("@/store/requestLedgerStore").then((m) => m.onProjectContextChanged()).catch(() => {});
-    if (s.savePath) get().scheduleAutoSave("canvas");
+    if (s.savePath && !s.isProjectLoading) {
+      get().scheduleAutoSave("canvas");
+      void flushScheduledSave();
+    }
   },
 
-  save: async (isManual = false) => {
+  save: (isManual = false, createHistory = false) => projectSaveQueue.enqueue({
+    instance: get().projectInstanceId, manual: isManual, history: createHistory,
+  }, async (request) => {
     const s = get();
-    if (s.isSaving) return;
+    if (s.projectInstanceId !== request.instance || s.isProjectLoading) return;
+    const isManual = request.manual;
+    const createHistory = request.history;
     // 弹出窗口（助手独立窗口）为只读视图：不写项目文件，避免与主窗口互相覆盖。
     if (typeof window !== "undefined" && (window as unknown as { __QIJI_POPOUT__?: string }).__QIJI_POPOUT__) return;
     // 多窗口协同（第205轮）：**非写者窗口不写盘**——同项目开多个窗口时只有写者（最先开的窗口）
     // 落盘；状态已实时镜像到写者，双写=整文件互相覆盖（改造前多开丢数据的根源，勿回退）。
     // 手动保存转发给写者执行；单窗口/项目未落盘时 isProjectWriter 恒 true，行为与从前一致。
     if (s.savePath && !isProjectWriter()) {
-      if (isManual) void import("@/services/projectSync").then((m) => m.requestWriterSave()).catch(() => {});
+      if (isManual) void import("@/services/projectSync").then((m) => m.requestWriterSave(createHistory)).catch(() => {});
       set({ isDirty: false }); // 镜像已在写者手里，本窗口视为不脏（写者会替全体落盘）
       return;
     }
@@ -714,14 +747,27 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     // 避免后台去抖保存在「无项目」状态下凭空生成「未命名项目」幽灵文件夹。
     // 新项目的首次落盘一律走显式 save(true)（新建向导 / 手动保存）或 ensureProjectPath（出图/分析等）。
     if (!isManual && !s.savePath) return;
+    const saveRevision = getSaveRevision();
+    const canvas = useCanvasStore.getState();
+    const assets = useLibraryStore.getState().assets;
+    const isCurrent = () => get().projectInstanceId === s.projectInstanceId && !get().isProjectLoading;
+    const saveId = ++diagnosticSaveSequence;
+    const startedAt = performance.now();
+    const source = createHistory ? "manual" : isManual ? "checkpoint" : "autosave";
+    let stage: ClientDiagnosticEvent["stage"] = "snapshot";
+    const diagnostic = (event: ClientDiagnosticEvent) => recordClientDiagnostic({ saveId, source, ...event });
     set({ isSaving: true });
     try {
-      const canvas = useCanvasStore.getState();
+      await diagnostic({ kind: "save_start", stage, nodeCount: Object.keys(canvas.nodes).length,
+        edgeCount: Object.keys(canvas.edges).length, historyCount: Object.keys(useCommitStore.getState().commits).length,
+        pastCount: canvas.past.length, futureCount: canvas.future.length });
+      if (!isCurrent()) return;
       // 多画布：把当前活动画布快照写回 canvases[activeKey]，连同其它画布一起持久化
       const activeCanvasKey = resolveCanvasKey(s.canvasEpisodeId, s.episodes);
       const canvases: Record<string, CanvasData> = { ...s.canvases, [activeCanvasKey]: { nodes: canvas.nodes, edges: canvas.edges, groups: canvas.groups, viewport: canvas.viewport } };
-      const message = isManual ? "手动保存" : "自动保存";
-      const targetCommitId = await useCommitStore.getState().createCommit(message);
+      const message = createHistory ? "手动保存" : isManual ? "关键结果保存" : "自动保存";
+      const targetCommitId = await useCommitStore.getState().createCommit(message, { automatic: !createHistory, canvas, assets, isCurrent });
+      if (!isCurrent()) return;
       const commits = useCommitStore.getState().commits;
 
       if (isTauri()) {
@@ -735,6 +781,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             await mkdir(folderPath, { recursive: true });
           }
           savePath = filePath;
+          if (!isCurrent()) return;
           set({ savePath });
         }
 
@@ -748,6 +795,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           version: "2.0",
           savedAt: new Date().toISOString(),
           name: s.name,
+          cloudBackupId: s.cloudBackupId,
           nodes: canvas.nodes,
           edges: canvas.edges,
           groups: canvas.groups,
@@ -784,6 +832,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           rtcEpisodeId: s.rtcEpisodeId || undefined,
         };
 
+        stage = "normalize";
+        await diagnostic({ kind: "save_stage", stage });
+        if (!isCurrent()) return;
         await normalizeProjectAssets(projectData, assetsDir);
         // 剥离 genMeta/assetRefImages 里的 data:/blob: 重字节（垫图整段 base64 → 公网 url 或丢弃）：
         // 只作用于持久化副本，防 project.Qiji 膨胀到上百 MB（§7.1）。当前会话 store 保留原始 uri 不受影响。
@@ -797,7 +848,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         // 不再会把 project.Qiji 写成半截 JSON 导致项目永久打不开。
         // 紧凑序列化（无缩进）：pretty-print 让 stringify 更慢、文件大 ~40%，自动保存高频跑，
         // 这是主线程卡顿的直接成本（JSON.parse 两种格式都吃，无兼容问题）。
+        stage = "serialize";
+        await diagnostic({ kind: "save_stage", stage });
+        if (!isCurrent()) return;
+        const serializeStart = performance.now();
         const json = JSON.stringify(projectData);
+        await diagnostic({ kind: "save_serialized", stage, jsonChars: json.length,
+          serializeMs: performance.now() - serializeStart, historyCount: Object.keys(commits).length });
+        stage = "write";
+        await diagnostic({ kind: "save_stage", stage });
+        if (!isCurrent()) return;
+        const writeStart = performance.now();
         const tmpPath = savePath + ".tmp";
         const bakPath = savePath + ".bak";
         await writeTextFile(tmpPath, json);
@@ -819,7 +880,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         }
 
         // WebDAV 云端同步（异步，不阻塞本地保存）
-        maybeSyncToWebdav(projectData);
+        enqueueProjectBackup(s.cloudBackupId, json);
 
         // 引用上报（P1，节流 10 分钟）：自动保存很频繁，而保留策略按天算，报太密纯浪费
         void import("@/services/assetRefReport").then((m) => m.reportProjectAssetRefs()).catch(() => {});
@@ -831,14 +892,19 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           ? [entry, ...recent.filter((_, i) => i !== existing)]
           : [entry, ...recent];
         saveRecent(updated.slice(0, MAX_RECENT));
-        set({ recentProjects: updated.slice(0, MAX_RECENT), isDirty: false });
-        notifySaved();
-        useSettingsStore.getState().setLastOpenedProjectPath(savePath);
+        if (isCurrent()) {
+          set({ recentProjects: updated.slice(0, MAX_RECENT), isDirty: !notifySaved(saveRevision) });
+          useSettingsStore.getState().setLastOpenedProjectPath(savePath);
+        }
+        stage = "finish";
+        await diagnostic({ kind: "save_success", stage, durationMs: performance.now() - startedAt,
+          writeMs: performance.now() - writeStart, jsonChars: json.length });
       } else {
         const projectData: QijiProject = {
           version: "2.0",
           savedAt: new Date().toISOString(),
           name: s.name,
+          cloudBackupId: s.cloudBackupId,
           nodes: canvas.nodes,
           edges: canvas.edges,
           groups: canvas.groups,
@@ -879,22 +945,31 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           projectData.genMeta = slim.genMeta;
           projectData.assetRefImages = slim.assetRefImages;
         }
-        const blob = new Blob([JSON.stringify(projectData, null, 2)], { type: "application/json" });
+        stage = "serialize";
+        await diagnostic({ kind: "save_stage", stage });
+        if (!isCurrent()) return;
+        const serializeStart = performance.now();
+        const json = JSON.stringify(projectData);
+        await diagnostic({ kind: "save_serialized", stage, jsonChars: json.length, serializeMs: performance.now() - serializeStart });
+        const blob = new Blob([json], { type: "application/json" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
         a.download = `${s.name.replace(/[\\/:*?"<>|]/g, "_")}.Qiji`;
         a.click();
         URL.revokeObjectURL(url);
-        set({ isDirty: false });
-        notifySaved();
+        if (isCurrent()) set({ isDirty: !notifySaved(saveRevision) });
+        stage = "finish";
+        await diagnostic({ kind: "save_success", stage, durationMs: performance.now() - startedAt, jsonChars: json.length });
       }
     } catch (err) {
       console.error("Failed to save project:", err);
+      await diagnostic({ kind: "save_failed", stage, errorClass: classifyClientDiagnosticError(err), durationMs: performance.now() - startedAt });
+      if (get().projectInstanceId === s.projectInstanceId && s.savePath) scheduleSave();
     } finally {
       set({ isSaving: false });
     }
-  },
+  }),
 
   saveAs: async () => {
     if (isTauri()) {
@@ -904,10 +979,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
       if (path) {
         set({ savePath: path as string });
-        await get().save(true);
+        await get().save(true, true);
       }
     } else {
-      await get().save(true);
+      await get().save(true, true);
     }
   },
 
@@ -916,6 +991,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({
       name: "未命名项目",
       savePath: null,
+      cloudBackupId: newCloudBackupId(),
       isDirty: false,
       projectInstanceId: newInstanceId(),
       fileRefs: {},
@@ -1033,6 +1109,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   loadFromPath: async (path: string): Promise<boolean> => {
+    const previousInstance = get().projectInstanceId;
     set({ isProjectLoading: true });
     let recoveredFrom: ".tmp" | ".bak" | null = null;
     try {
@@ -1094,6 +1171,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       set({
         name: project.name || "未命名项目",
         savePath: path,
+        cloudBackupId: readCloudBackupId(project.cloudBackupId),
         projectInstanceId: newInstanceId(),
         fileRefs: project.files || {},
         isDirty: false,
@@ -1139,11 +1217,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const cleaned = sanitizeCanvas(activeCanvas.nodes || {}, activeCanvas.edges || {}, activeCanvas.groups || {});
       useCanvasStore.setState({ nodes: cleaned.nodes, edges: cleaned.edges, groups: cleaned.groups, viewport: activeCanvas.viewport || viewport, runtime: {}, past: [], future: [] });
 
-      if (headCommit?.assets && Object.keys(headCommit.assets).length > 0) {
-        useLibraryStore.setState({ assets: headCommit.assets });
-      } else if ((project as any).assets) {
-        useLibraryStore.setState({ assets: (project as any).assets });
-      }
+      // 空素材库也是当前项目的完整快照；只有缺少新字段才回退旧格式，不能沿用上一项目。
+      useLibraryStore.setState({ assets: headCommit?.assets ?? (project as any).assets ?? {} });
       // 项目资产自愈：先校验三元映射 localPath，缺失则按同一 id 从 OSS 恢复并改写项目死引用；
       // 再处理素材库旧 blob:/远程快照。串行保证 libraryHeal 看到的是已更新映射（均后台执行，不阻塞打开）。
       void import("@/services/projectAssetHeal")
@@ -1166,6 +1241,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         : [entry, ...recent];
       saveRecent(updated.slice(0, MAX_RECENT));
       set({ recentProjects: updated.slice(0, MAX_RECENT) });
+
+      // Hydration is complete. Recovery and resumed task checkpoints must be allowed to save.
+      set({ isProjectLoading: false });
 
       // 断连保护：项目加载后续跑上次未完成的在途生成（重新挂轮询 / 标失败可重试）。
       // 动态 import 规避 projectStore ↔ generationQueue 的循环引用。
@@ -1206,6 +1284,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       return false;
     } finally {
       set({ isProjectLoading: false });
+      // A failed open can have interrupted this project's save during a diagnostic/hash await.
+      // Keep its unsaved edits scheduled even though the earlier timer already fired.
+      if (get().projectInstanceId === previousInstance && get().isDirty && get().savePath) scheduleSave();
     }
   },
 
@@ -1222,6 +1303,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       version: "2.0",
       savedAt: new Date().toISOString(),
       name: s.name,
+      cloudBackupId: s.cloudBackupId,
       nodes: canvas.nodes,
       edges: canvas.edges,
       groups: canvas.groups,
@@ -1310,6 +1392,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           set({
             name: project.name || "导入项目",
             savePath: null,
+            cloudBackupId: newCloudBackupId(),
             projectInstanceId: newInstanceId(),
             fileRefs: project.files || {},
             isDirty: true,
@@ -1385,10 +1468,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const s = get();
     if (s.savePath) return s.savePath;
     const { folderPath, filePath } = await getNewProjectPath(s.name);
+    const assertCurrent = () => {
+      if (get().projectInstanceId !== s.projectInstanceId || get().isProjectLoading) throw new Error("项目已切换，请在当前项目重试");
+    };
+    assertCurrent();
     const { exists, mkdir } = await import("@tauri-apps/plugin-fs");
     if (!(await exists(folderPath))) {
+      assertCurrent();
       await mkdir(folderPath, { recursive: true });
     }
+    assertCurrent();
     set({ savePath: filePath });
     return filePath;
   },
@@ -1398,37 +1487,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 }));
 
-// 初始化三档去抖：绑定 save / markDirty
+// 初始化统一自动保存窗口：绑定 save / markDirty
 initDebouncedSave(
   () => useProjectStore.getState().save(),
   () => useProjectStore.getState().markDirty(),
 );
 
-// ─── WebDAV 云端同步（fire-and-forget，不阻塞本地保存） ───
-
-let _lastSyncTimer: ReturnType<typeof setTimeout> | null = null;
-
-function maybeSyncToWebdav(projectData: QijiProject) {
-  const settings = useSettingsStore.getState();
-  if (!settings.enableCloudSync || !settings.webdavUrl.trim()) return;
-
-  // 去抖 2s：短时间内多次保存只触发最后一次同步
-  if (_lastSyncTimer) clearTimeout(_lastSyncTimer);
-  _lastSyncTimer = setTimeout(async () => {
-    try {
-      const { uploadProjectFile } = await import("@/services/webdavSync");
-      const config = {
-        url: settings.webdavUrl,
-        directory: settings.webdavDirectory,
-        username: settings.webdavUsername,
-        password: settings.webdavPassword,
-      };
-      const projectName = (projectData.name || "untitled").replace(/[\\/:*?"<>|]/g, "_");
-      const projectFileName = `${projectName}.Qiji`;
-      await uploadProjectFile(config, projectFileName, JSON.stringify(projectData));
-      console.log(`[WebDAV] 项目 "${projectName}" 已同步`);
-    } catch (err) {
-      console.error("[WebDAV] 同步失败:", err);
-    }
-  }, 2000);
-}
+// Switching projects must cancel the old project's delayed save window.
+useProjectStore.subscribe((next, prev) => {
+  if (next.projectInstanceId !== prev.projectInstanceId) {
+    cancelAllSaves();
+    projectSaveQueue.cancelPending();
+  }
+});

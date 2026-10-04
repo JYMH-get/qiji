@@ -1,3 +1,4 @@
+import { getDualModeFeature } from '@/store/connectionStore';
 /**
  * canvasSpawn —— 节点「裂变」：把结构化结果转成一批子节点 + 连线。
  *
@@ -74,7 +75,7 @@ const CAT_GEN: Record<SpawnAssetCat, { purpose: string; idPrefix: string }> = {
 };
 
 /** 资产裂变节点的附加参数（purpose 决定管理端路由；idPrefix/assetName 决定资产编号与命名，与资产模式一致） */
-function assetGenParams(a: { cat: SpawnAssetCat; name: string; code?: string }): Record<string, unknown> {
+export function assetGenParams(a: { cat: SpawnAssetCat; name: string; code?: string }): Record<string, unknown> {
 	const gen = CAT_GEN[a.cat] ?? CAT_GEN.characters;
 	// assetCode：项目内人读编号（C01/C01A），供 二次解析/变体连主体 按编号回查节点
 	return { purpose: gen.purpose, idPrefix: gen.idPrefix, assetName: a.name, ...(a.code ? { assetCode: a.code } : {}) };
@@ -106,7 +107,7 @@ function nodeDurationFromCard(d?: number): number | undefined {
 function childInferenceParams(parent: CanvasNode, scope: 'single' | 'multi', unifiedFallback = false): Record<string, unknown> {
 	const params = parent.data.params;
 	const legacyOutput = params.inferenceOutput ?? params.purpose;
-	const unified = params.inferenceMode === 'unified' || params.inferenceMode !== 'storyboard'
+	const unified = !getDualModeFeature() || params.inferenceMode === 'unified' || params.inferenceMode !== 'storyboard'
 		&& (legacyOutput ? legacyOutput === 'storyboard.unified' || legacyOutput === 'storyboard.unifiedShot' : unifiedFallback);
 	const duration = canvasInferenceDuration(params);
 	const strategy = normalInferenceStrategy(
@@ -131,7 +132,7 @@ function isSplitRequest(parent: CanvasNode): boolean {
 	return p.inferenceScope === 'split' || (p.inferenceOutput ?? p.purpose) === 'storyboard.split';
 }
 function isUnifiedCard(parent: CanvasNode, card: InferCardLike): boolean {
-	return isSplitRequest(parent) ? parent.data.params.inferenceMode === 'unified' : !!card.unifiedPrompt;
+	return isSplitRequest(parent) ? !getDualModeFeature() || parent.data.params.inferenceMode === 'unified' : !!card.unifiedPrompt;
 }
 
 /**

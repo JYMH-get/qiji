@@ -16,48 +16,23 @@ describe("canvasProjection（资产模式↔画布全映射）", () => {
 	const nodes = () => Object.values(useCanvasStore.getState().nodes);
 	const byRef = (r: string) => nodes().find((n) => n.data.sourceRef === r);
 
-	it("资产不投影：同步不建资产节点，且清理历史残留的资产投影节点及其连线", () => {
-		useProjectStore.setState({
-			scriptText: "某段小说原文……",
-			characters: [{ id: "C01-1", name: "张起天", prompt: "出图提示词A", image: "" }],
-			scenes: [{ id: "S01-1", name: "山中木屋", prompt: "出图提示词B" }],
-			items: [], organisms: [], crowds: [], episodes: [],
-		} as any);
 
-		expect(syncCanvasFromProject()).toBe(true);
-		expect(byRef("script")?.type).toBe("text.seed");
-		// 资产不再投影
-		expect(byRef("assetSplit")).toBeFalsy();
-		expect(byRef("asset:C01-1")).toBeFalsy();
-		expect(byRef("asset:S01-1")).toBeFalsy();
+    it("默认不发资产、全文或分集节点，清理历史投影时保留手建节点", () => {
+        useProjectStore.setState({ scriptText: "全文", characters: [{ id: "C1", name: "甲", prompt: "" }] } as any);
+        expect(syncCanvasFromProject()).toBe(false);
+        const old = (ref?: string) => ({ id: ref ?? "manual", type: "text.seed", x: 0, y: 0, w: 100, h: 100,
+            parentId: null, parentScriptId: null, data: { sourceRef: ref, params: {}, input: {} } });
+        useCanvasStore.setState({ nodes: {
+            script: old("script"), episodeSplit: old("episodeSplit"), assetSplit: old("assetSplit"),
+            "asset:C1": old("asset:C1"), manual: old(),
+        } as any, edges: { old: { id: "old", source: "assetSplit", target: "asset:C1" } } as any });
+        expect(syncCanvasFromProject()).toBe(true);
+        expect(nodes().map(n => n.id)).toEqual(["manual"]);
+        expect(Object.keys(useCanvasStore.getState().edges)).toHaveLength(0);
+        expect(syncCanvasFromProject()).toBe(false);
+    });
 
-		// 历史残留清理：预置旧版投影产生的资产节点+连线 → 下次同步被移除，非资产节点保留
-		const scriptId = byRef("script")!.id;
-		useCanvasStore.setState({
-			nodes: {
-				...useCanvasStore.getState().nodes,
-				"old-split": { id: "old-split", type: "asset.split", x: 0, y: 0, w: 100, h: 100, data: { sourceRef: "assetSplit", params: {}, input: {} } } as any,
-				"old-img": { id: "old-img", type: "image.gen", x: 0, y: 0, w: 100, h: 100, data: { sourceRef: "asset:C01-1", params: {}, input: {} } } as any,
-			},
-			edges: {
-				...useCanvasStore.getState().edges,
-				"old-e": { id: "old-e", kind: "dataflow", source: "old-split", sourcePort: "out", target: "old-img", targetPort: "in" } as any,
-			},
-		});
-		expect(syncCanvasFromProject()).toBe(true);
-		const ns = useCanvasStore.getState().nodes;
-		expect(ns["old-split"]).toBeFalsy();
-		expect(ns["old-img"]).toBeFalsy();
-		expect(useCanvasStore.getState().edges["old-e"]).toBeFalsy();
-		expect(byRef("script")?.id).toBe(scriptId); // 非资产投影节点不受影响
-
-		// 幂等：重复投影不新增节点
-		const count = Object.keys(useCanvasStore.getState().nodes).length;
-		syncCanvasFromProject();
-		expect(Object.keys(useCanvasStore.getState().nodes).length).toBe(count);
-	});
-
-	it("剧集分集 + 智能推理 + 故事板/视频 → 全流水线节点（全文→剧集→分镜）", () => {
+	it("四类流水线节点与素材身份，不再发送全文和分集", () => {
 		useProjectStore.setState({
 			scriptText: "原文",
 			characters: [], scenes: [], items: [], organisms: [], crowds: [],
@@ -75,7 +50,8 @@ describe("canvasProjection（资产模式↔画布全映射）", () => {
 		} as any);
 
 		expect(syncCanvasFromProject()).toBe(true);
-		expect(byRef("episodeSplit")?.type).toBe("episode.split");
+		expect(byRef("episodeSplit")).toBeUndefined();
+		expect(byRef("script")).toBeUndefined();
 		// 每集「智能推理」节点 = 剧集分集的下游（承接本集原文），非与之平级
 		expect(byRef("episode:ep1")?.type).toBe("smart.infer");
 		expect(byRef("episode:ep1")?.data.resultText).toContain("本集内容");
@@ -100,13 +76,13 @@ describe("canvasProjection（资产模式↔画布全映射）", () => {
 		// 流水线连线：分镜文本 → 故事板图 → 视频
 		const edges = Object.values(useCanvasStore.getState().edges);
 		// 链路：剧集分集 → 每集智能推理 → 分镜文本 → 故事板图 → 视频
-		expect(edges.some((e) => e.source === byRef("episodeSplit")!.id && e.target === byRef("episode:ep1")!.id)).toBe(true);
+
 		expect(edges.some((e) => e.source === byRef("episode:ep1")!.id && e.target === byRef("shot:sh1")!.id)).toBe(true);
 		expect(edges.some((e) => e.source === byRef("shot:sh1")!.id && e.target === byRef("shotSb:sh1")!.id)).toBe(true);
 		expect(edges.some((e) => e.source === byRef("shotSb:sh1")!.id && e.target === byRef("shotVid:sh1")!.id)).toBe(true);
 	});
 
-	it("图视同源投影：原文→同源提示词节点→图片+视频并联（图/视频不内置提示词）；切回双结果清理同源节点", () => {
+	it("同源正文内置图和视频，保留并联；双模恢复串联", () => {
 		useProjectStore.setState({
 			scriptText: "原文",
 			characters: [], scenes: [], items: [], organisms: [], crowds: [],
@@ -133,23 +109,14 @@ describe("canvasProjection（资产模式↔画布全映射）", () => {
 		expect(byRef("shot:sh1")?.data.params.inferenceDurationLimit).toBe(30);
 		expect(byRef("episode:ep1")?.data.params.inferenceDurationPreset).toBe('4-30');
 		expect(byRef("shot:sh1")?.data.params.inferenceDurationPreset).toBe('4-30');
-		// 同源提示词独立节点承载（唯一提示词来源）
-		const uni = byRef("shotUni:sh1")!;
-		expect(uni.type).toBe("text.seed");
-		expect(uni.data.title).toBe("分镜1同源提示词");
-		expect(uni.data.params.prompt).toBe("同源提示词甲");
-		// 图片/视频不内置提示词（运行时取上游同源节点文本）
-		expect(byRef("shotSb:sh1")?.data.title).toBe("分镜1图片");
-		expect(byRef("shotSb:sh1")?.data.params.prompt).toBe("");
-		expect(byRef("shotVid:sh1")?.data.params.prompt).toBe("");
-		// 链路：原文→同源；图片与视频并联接同源节点
-		const edges = () => Object.values(useCanvasStore.getState().edges);
-		expect(edges().some((e) => e.source === byRef("shot:sh1")!.id && e.target === uni.id)).toBe(true);
-		expect(edges().some((e) => e.source === uni.id && e.target === byRef("shotSb:sh1")!.id)).toBe(true);
-		expect(edges().some((e) => e.source === uni.id && e.target === byRef("shotVid:sh1")!.id)).toBe(true);
-		// 无 图→视频 串联边、无 原文→图/原文→视频 直连边
-		expect(edges().some((e) => e.source === byRef("shotSb:sh1")!.id && e.target === byRef("shotVid:sh1")!.id)).toBe(false);
-		expect(edges().some((e) => e.source === byRef("shot:sh1")!.id && e.target === byRef("shotSb:sh1")!.id)).toBe(false);
+
+        expect(byRef("shotUni:sh1")).toBeUndefined();
+        expect(byRef("shotSb:sh1")?.data.params.prompt).toBe("同源提示词甲");
+        expect(byRef("shotVid:sh1")?.data.params.prompt).toBe("同源提示词甲");
+        const edges = () => Object.values(useCanvasStore.getState().edges);
+        expect(edges().some(e => e.source === byRef("shot:sh1")!.id && e.target === byRef("shotSb:sh1")!.id)).toBe(true);
+        expect(edges().some(e => e.source === byRef("shot:sh1")!.id && e.target === byRef("shotVid:sh1")!.id)).toBe(true);
+        expect(edges().some(e => e.source === byRef("shotSb:sh1")!.id && e.target === byRef("shotVid:sh1")!.id)).toBe(false);
 
 		// 关掉图视同源再同步 → 同源节点及其边清理，恢复 原文→故事板→视频 串联
 		useProjectStore.setState({

@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "2.0.0"
+version = "2.0.20"
 description = "A Tauri App"
 authors = ["you"]
 license = ""
@@ -16,6 +16,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.6.2", features = [] }
+
+[features]
+diagnostics-smoke = []
 
 [dependencies]
 serde_json = "1.0"
@@ -34,9 +37,15 @@ tiny_http = "0.12"
 # json/multipart → ComfyUI 直连（comfy_http_json / comfy_upload_file：ComfyUI 默认不带 CORS 头，走原生收发）。
 reqwest = { version = "0.13", default-features = false, features = ["native-tls", "stream", "json", "multipart"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+zip = { version = "4.6.1", default-features = false }
 
 # 仅 Windows：访问 WebView2 控制器，在 release 关闭 devtools + 浏览器加速键（F12/刷新/打印）。
 # 版本对齐 wry 已在用的 webview2-com 0.38 / windows 0.61（见 Cargo.lock），避免拉入重复版本。
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.38"
-windows = "0.61"
+windows-version = "0.1"
+windows = { version = "0.61", features = ["Win32_System_Diagnostics_ToolHelp", "Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_Storage_FileSystem"] }
+
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-process = "2"
+tauri-plugin-updater = "2"

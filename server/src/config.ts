@@ -54,7 +54,11 @@ const gatewayBaseUrl = strip(process.env.GATEWAY_BASE_URL ?? "https://sub.g-aisc
 const gatewayApiKey = process.env.GATEWAY_API_KEY ?? "";
 
 export const config = {
+  zongheng: { baseUrl: strip(process.env.ZONGHENG_BASE_URL ?? 'https://cnd-coo-new.pages.dev/v1'), apiKey: process.env.ZONGHENG_API_KEY ?? '' },
+  xingguang: { baseUrl: strip(process.env.XINGGUANG_BASE_URL ?? 'https://xingapi.top/v1'), apiKey: process.env.XINGGUANG_API_KEY ?? '' },
 	port: Number(process.env.PORT ?? 8787),
+	/** 生产快照的本机测试副本：不恢复历史任务，不启动维护/实例池后台循环。 */
+	testSnapshot: process.env.QIJI_TEST_SNAPSHOT === "1",
 	/** 节点角色（P3 渠道商独立部署）：source=源站（缺省，现行为）；relay=渠道节点——
 	 *  本地只保留用户体系（注册/积分/团队/日志），生成与素材全部转发源站，凭 nodeKey 计费到商积分池。 */
 	role: (process.env.NODE_ROLE === "relay" ? "relay" : "source") as "source" | "relay",
@@ -139,11 +143,6 @@ export const config = {
 		baseUrl: strip(process.env.SKYLEE_BASE_URL ?? "https://api.808relay.com"),
 		apiKey: process.env.SKYLEE_API_KEY ?? "",
 	},
-	// 简梦H（ZhengAPI zhengapi.top）图片渠道（第154轮；同步单请求，Bearer 鉴权，见 translators/jmh.ts）
-	jmh: {
-		baseUrl: strip(process.env.JMH_BASE_URL ?? "https://zhengapi.top"),
-		apiKey: process.env.JMH_API_KEY ?? "",
-	},
 	// 简梦T（llm.chre3.com：sd2-c8）视频渠道（第160轮；异步 submit+poll，Bearer 鉴权，见 translators/jmt.ts）。
 	// ⚠ Base URL 填根域不带 /v1（翻译器自拼 /v1/videos）。
 	jmt: {
@@ -210,6 +209,11 @@ export const config = {
 	// autodl（autodl.art·ComfyUI 工作流平台）视频渠道（第234轮；异步 submit+poll，见 translators/autodl.ts）。
 	// ⚠ 鉴权=Authorization 原样 Token（**不带 Bearer 前缀**，控制台「令牌管理」创建、分组选 ComfyUI）；
 	//    Base URL 填根域（翻译器自拼 /api/v1/comfyui/comfyui_workflow/{workflow_id} 与 /result/{task_id}）。
+	xiha888: { baseUrl: strip(process.env.XIHA888_BASE_URL ?? "https://api.lk888.ai"), apiKey: process.env.XIHA888_API_KEY ?? "" },
+	longyou: {
+		baseUrl: strip(process.env.LONGYOU_BASE_URL ?? "https://api.hjmie.cc.cd/v1"),
+		apiKey: process.env.LONGYOU_API_KEY ?? "",
+	},
 	autodl: {
 		baseUrl: strip(process.env.AUTODL_BASE_URL ?? "https://autodl.art"),
 		apiKey: process.env.AUTODL_API_KEY ?? "",

@@ -15,12 +15,14 @@
 import { loadJson, saveJson, genId } from "./db.ts";
 import { clearFamilyFromModels } from "./models.ts";
 import { SEEDANCE_ROUTE_FAMILIES } from '../contract.ts';
+import type { Capability } from '../contract.ts';
+import { isModelCapability } from '../modelCategory.ts';
 
 export interface Family {
 	id: string; // 稳定标识（小写 kebab；创建后不可改）
 	name: string; // 显示名
-	/** 家族所属能力（video/image）：管理端模型页家族下拉按能力过滤用；缺省=不限 */
-	capability?: "video" | "image";
+	/** 家族所属的具体能力；处理能力在管理端统一归入“其他”。缺省=不限。 */
+	capability?: Capability;
 	order: number; // 排序（客户端一级下拉按此序；第165轮起管理端卡片可拖动重排）
 	/** 全局开关（第165轮）：false=停用——客户端一级筛选不再显示该家族、其模型归入「其他」分组
 	 *（纯展示：模型仍可用，不参与门禁/计费——关渠道仍用「模式」）；缺省(undefined)=启用 */
@@ -35,6 +37,8 @@ interface Store {
 	seedVersion?: number;
 	seedance25Version?: number;
 	seedanceVariantsVersion?: number;
+	yaliImageFamiliesVersion?: number;
+	zonghengWanVersion?: number;
 	families: Family[];
 }
 
@@ -66,6 +70,18 @@ const DEFAULT_FAMILIES: Family[] = [
 ];
 
 let store: Store = loadJson<Store>(FILE, { version: 0, families: [] });
+// 文档只确认 Wan，不从渠道型号推断 Wan 版本；只补一次且保留管理员配置。
+if (!store.zonghengWanVersion) {
+	if (!store.families.some(f => f.id === 'fam-wan')) store.families.push(fam('fam-wan', 'Wan', 'video', store.families.reduce((n, f) => Math.max(n, f.order), 0) + 1));
+	store.zonghengWanVersion = 1;
+	store.version++; saveJson(FILE, store);
+}
+if (!store.yaliImageFamiliesVersion) {
+	for (const [id,name] of [['fam-nano-banana','Nano Banana'],['fam-nano-banana-pro','Nano Banana Pro'],['fam-nano-banana-2','Nano Banana 2'],['fam-grok-image','Grok Image'],['fam-seedream-5-pro','Seedream 5.0 Pro']]) {
+		if (!store.families.some(f=>f.id===id))store.families.push(fam(id,name,'image',store.families.reduce((n,f)=>Math.max(n,f.order),0)+1));
+	}
+	store.yaliImageFamiliesVersion=1;store.version++;saveJson(FILE,store);
+}
 if (!store.seedanceVariantsVersion) {
 	for (const [i, f] of SEEDANCE_ROUTE_FAMILIES.slice(2).entries()) {
 		if (!store.families.some(existing => existing.id === f.id)) store.families.push(fam(f.id, f.name, 'video', (store.families.find(f => f.id === 'fam-seedance')?.order ?? 1) + (i + 1) / 10));
@@ -116,7 +132,9 @@ export function createFamily(input: { id?: string; name: string; capability?: st
 	if (!name) return { ok: false, error: "家族名不能为空" };
 	const id = normId(input.id || name) || genId("fam");
 	if (store.families.some((f) => f.id === id)) return { ok: false, error: "该家族 id 已存在" };
-	const capability = input.capability === "video" || input.capability === "image" ? input.capability : undefined;
+	if (input.capability && !isModelCapability(input.capability)) return { ok: false, error: "家族能力类型错误" };
+	const capability = isModelCapability(input.capability) ? input.capability : undefined;
+	if (store.families.some(f => f.name.trim().toLowerCase() === name.toLowerCase() && f.capability === capability)) return { ok: false, error: "同类型的家族名称已存在，请使用已有家族并核对渠道模型的家族归属" };
 	const order = store.families.reduce((mx, f) => Math.max(mx, f.order), 0) + 1;
 	const family: Family = { id, name, capability, order, createdAt: now(), updatedAt: now() };
 	store.families.push(family);
@@ -127,13 +145,15 @@ export function createFamily(input: { id?: string; name: string; capability?: st
 export function updateFamily(id: string, patch: { name?: string; order?: number; capability?: string; enabled?: boolean }): { ok: boolean; error?: string; family?: Family } {
 	const f = getFamily(id);
 	if (!f) return { ok: false, error: "家族不存在" };
+	if (patch.capability && !isModelCapability(patch.capability)) return { ok: false, error: "家族能力类型错误" };
+	if ((patch.name !== undefined || patch.capability !== undefined) && store.families.some(other => other.id !== id && other.name.trim().toLowerCase() === (patch.name ?? f.name).trim().toLowerCase() && other.capability === (patch.capability ?? f.capability))) return { ok: false, error: "同类型的家族名称已存在" };
 	if (patch.name !== undefined) {
 		const nm = patch.name.trim();
 		if (!nm) return { ok: false, error: "家族名不能为空" };
 		f.name = nm;
 	}
 	if (patch.order !== undefined) f.order = Number(patch.order) || f.order;
-	if (patch.capability !== undefined) f.capability = patch.capability === "video" || patch.capability === "image" ? patch.capability : undefined;
+	if (patch.capability !== undefined) f.capability = isModelCapability(patch.capability) ? patch.capability : undefined;
 	if (patch.enabled !== undefined) f.enabled = !!patch.enabled;
 	f.updatedAt = now();
 	persist();

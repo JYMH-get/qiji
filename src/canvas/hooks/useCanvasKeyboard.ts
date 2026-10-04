@@ -7,6 +7,7 @@ import { getPlugin } from "@/nodes/pluginRegistry";
 import { useLightboxStore } from "@/store/lightboxStore";
 import { usePromptModalStore } from "@/store/promptModalStore";
 import { dispatchCommand } from "@/command/dispatch";
+import { runSelectedNodes } from "@/canvas/runSelection";
 import { copyToClipboard, splitEdgesForCopy } from "@/lib/clipboard";
 import { pasteInternalNodes } from "@/canvas/pasteInternal";
 import { copyNodesImageToSystemClipboard } from "@/canvas/copyImage";
@@ -87,12 +88,7 @@ export function useCanvasKeyboard() {
         const edgeIds = ui.selectedEdgeIds;
         if (ids.length === 0 && edgeIds.length === 0) return;
         e.preventDefault();
-        ids.forEach((id) => dispatchCommand({ type: "deleteNode", id }));
-        // 删节点会级联删边——只断开仍存在的选中连线
-        const edgesNow = useCanvasStore.getState().edges;
-        edgeIds.forEach((id) => {
-          if (edgesNow[id]) dispatchCommand({ type: "disconnect", edgeId: id });
-        });
+        dispatchCommand({ type: "deleteElements", nodeIds: ids, edgeIds });
         ui.setSelection([]);
         ui.setEdgeSelection([]);
         ui.setActiveNodeId(null);
@@ -227,11 +223,9 @@ export function useCanvasKeyboard() {
           // 运行选中节点（多选=全部启动）；无选中则运行面板聚焦节点
           const ui = useUiStore.getState();
           const ids = ui.selectedNodeIds.length > 0 ? ui.selectedNodeIds : ui.activeNodeId ? [ui.activeNodeId] : [];
-          const st = useCanvasStore.getState();
-          const runnable = ids.filter((id) => st.nodes[id] && st.nodes[id].type !== "group");
-          if (runnable.length > 0) {
+          if (ids.length > 0) {
             e.preventDefault();
-            runnable.forEach((id) => dispatchCommand({ type: "run", nodeId: id }));
+            runSelectedNodes(ids);
           }
           return;
         }

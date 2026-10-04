@@ -1,0 +1,12 @@
+import {mkdtempSync,mkdirSync,cpSync,symlinkSync,writeFileSync,readFileSync,readdirSync} from 'node:fs';
+import {tmpdir} from 'node:os';import {join,resolve} from 'node:path';import {spawnSync} from 'node:child_process';import {createHash} from 'node:crypto';import assert from 'node:assert/strict';
+const root=resolve(import.meta.dirname,'..'),sb=mkdtempSync(join(tmpdir(),'qiji-yali-'));
+mkdirSync(join(sb,'server/scripts'),{recursive:true});mkdirSync(join(sb,'src'));mkdirSync(join(sb,'server/data'));
+for(const name of ['src','skills','package.json','tsconfig.json'])cpSync(join(root,'server',name),join(sb,'server',name),{recursive:true});
+cpSync(join(root,'src/contract.ts'),join(sb,'src/contract.ts'));cpSync(join(root,'server/scripts/smoke-yali-update.mjs'),join(sb,'server/scripts/smoke-yali-update.mjs'));
+for(const name of readdirSync(join(root,'server/data')).filter(n=>n.endsWith('.json')))cpSync(join(root,'server/data',name),join(sb,'server/data',name));
+const original=JSON.parse(readFileSync(join(sb,'server/data/models.json'),'utf8')).models;writeFileSync(join(sb,'server/before-models.json'),JSON.stringify(original.filter(m=>!m.id.startsWith('yali-v2-')).map(m=>{if(m.capability==='image'&&m.matLimits)delete m.matLimits.img;return m;})));
+symlinkSync(join(root,'server/node_modules'),join(sb,'server/node_modules'),'junction');writeFileSync(join(sb,'server/.yali-sandbox'),'isolated, fetch stubbed, no .env');
+const run=phase=>{const r=spawnSync(process.execPath,['--import','tsx','scripts/smoke-yali-update.mjs',phase],{cwd:join(sb,'server'),stdio:'inherit'});assert.equal(r.status,0,phase);};
+const hashes=()=>Object.fromEntries(readdirSync(join(sb,'server/data')).filter(n=>n.endsWith('.json')).sort().map(n=>[n,createHash('sha256').update(readFileSync(join(sb,'server/data',n))).digest('hex')]));
+run('seed');const before=hashes();run('seed');assert.deepEqual(hashes(),before);console.log('YALI_SECOND_START_UNCHANGED',Object.keys(before).length);run('full');run('manual-limit');console.log('SANDBOX',sb);

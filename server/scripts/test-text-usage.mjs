@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import { normalizeTextUsage } from '../src/textPricing.ts';
+const raw = { prompt_tokens:7248, completion_tokens:1418, total_tokens:14032, completion_tokens_details:{reasoning_tokens:5366} };
+assert.deepEqual(normalizeTextUsage(raw), {source:'upstream',inputTokens:7248,outputTokens:6784,totalTokens:14032,reasoningTokens:5366});
+assert.equal(raw.completion_tokens,1418);
+assert.equal(normalizeTextUsage({...raw,completion_tokens:6784}).outputTokens,6784);
+assert.equal(normalizeTextUsage({...raw,total_tokens:14031}),undefined);
+assert.equal(normalizeTextUsage({...raw,total_tokens:undefined}),undefined);
+for(const bad of [-1,1.5,NaN,Infinity,'5366']) assert.equal(normalizeTextUsage({...raw,completion_tokens_details:{reasoning_tokens:bad}}),undefined);
+assert.equal(normalizeTextUsage({prompt_tokens:1,completion_tokens:9,total_tokens:12,completion_tokens_details:{reasoning_tokens:2}}).outputTokens,11);
+assert.equal(normalizeTextUsage({prompt_tokens:1,completion_tokens:9,total_tokens:10,completion_tokens_details:{reasoning_tokens:2}}).outputTokens,9);
+assert.equal(normalizeTextUsage({prompt_tokens:0,completion_tokens:0}).totalTokens,0);
+assert.equal(normalizeTextUsage({prompt_tokens:5}),undefined);
+assert.equal(normalizeTextUsage({prompt_tokens:5,completion_tokens:2,prompt_tokens_details:{cached_tokens:6}}),undefined);
+assert.equal(normalizeTextUsage({input_tokens:5,output_tokens:4,cache_read_input_tokens:10,cache_creation_input_tokens:3},'anthropic').inputTokens,18);
+assert.equal(normalizeTextUsage({prompt_tokens:Number.MAX_SAFE_INTEGER,completion_tokens:1}),undefined);
+console.log('PASS text usage: split/inclusive reasoning, invalid counts, cache, Anthropic, zero, overflow');

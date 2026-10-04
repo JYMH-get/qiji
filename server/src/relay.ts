@@ -23,8 +23,8 @@ import type { TaskState } from './contract.ts';
  */
 import { config } from "./config.ts";
 import { loadJson, saveJson } from "./store/db.ts";
-import { settle, type Charged } from "./store/credits.ts";
-import { getUser, userCredits, type User } from "./store/users.ts";
+import { settle, type Charged, type UserWalletRef } from "./store/credits.ts";
+import { getUser, userCredits, userTeamWallet, type User } from "./store/users.ts";
 import { finishLog } from "./store/logs.ts";
 import type { Catalog } from "./contract.ts";
 
@@ -66,8 +66,8 @@ export async function relayCatalog(): Promise<Catalog | null> {
 	const now = Date.now();
 	if (cachedCatalog && now - catalogFetchedAt < CATALOG_TTL_MS) return cachedCatalog;
 	try {
-		const since = cachedCatalog ? `?since=${encodeURIComponent(cachedCatalog.version)}` : "";
-		const res = await sourceFetch(`/v1/catalog${since}`);
+		const since = cachedCatalog ? `&since=${encodeURIComponent(cachedCatalog.version)}` : "";
+		const res = await sourceFetch(`/v1/catalog?pricing=retail${since}`);
 		if (res.status === 304) {
 			catalogFetchedAt = now;
 			return cachedCatalog;
@@ -100,7 +100,7 @@ export function estimateCostFromCatalog(cat: Catalog | null, model: string, para
 	if (cm.costField) {
 		const perUnit = rule?.costPerUnit ?? cm.costPerUnit ?? 0;
 		const unit = Math.max(0, Number(p[cm.costField]) || 0);
-		if (perUnit > 0 && unit > 0) return Math.round(perUnit * unit);
+		if (perUnit >= 0 && unit > 0) return Math.round(perUnit * unit);
 	}
 	return rule?.cost ?? cm.cost ?? 0;
 }
@@ -112,23 +112,23 @@ export function estimateCostFromCatalog(cat: Catalog | null, model: string, para
  * 余额被并发吃穿的极端窗口：扣到多少算多少（差额=节点坏账，告警留痕）——
  * 源站池已实扣，本地不能因扣不动而把请求作废。
  */
-export function chargeLocalMirror(payer: User, statsUserId: string, amount: number, ref?: string): { charged: Charged | null; shortfall: number } {
+export function chargeLocalMirror(payer: User, statsUserId: string, amount: number, ref?: string, userWallet?: UserWalletRef): { charged: Charged | null; shortfall: number } {
 	if (amount <= 0) return { charged: null, shortfall: 0 };
-	const r = settle({ reason: "generate", ref, payerId: payer.id, statsUserId, userAmount: amount, agents: [] });
+	const r = settle({ reason: "generate", ref, payerId: payer.id, statsUserId, userAmount: amount, userWallet, agents: [] });
 	if (r.ok) return { charged: r.charged, shortfall: 0 };
-	const balance = Math.max(0, userCredits(payer.id) ?? 0);
+	const balance = Math.max(0, userWallet ? userTeamWallet(payer.id,userWallet.teamId)?.balance ?? 0 : userCredits(payer.id) ?? 0);
 	const partial = Math.min(amount, balance);
 	if (partial > 0) {
-		const r2 = settle({ reason: "generate", ref, payerId: payer.id, statsUserId, userAmount: partial, agents: [] });
+		const r2 = settle({ reason: "generate", ref, payerId: payer.id, statsUserId, userAmount: partial, userWallet, agents: [] });
 		if (r2.ok) return { charged: r2.charged, shortfall: amount - partial };
 	}
 	return { charged: null, shortfall: amount };
 }
 
 /** 退本地用户（异步任务失败镜像退款；金额按台账记录原路退） */
-export function refundLocalMirror(payerId: string, statsUserId: string, amount: number, ref?: string): void {
+export function refundLocalMirror(payerId: string, statsUserId: string, amount: number, ref?: string, userWallet?: UserWalletRef): void {
 	if (amount <= 0) return;
-	settle({ reason: "refund", ref, payerId, statsUserId, userAmount: -amount, agents: [] });
+	settle({ reason: "refund", ref, payerId, statsUserId, userAmount: -amount, userWallet, agents: [] });
 }
 
 // ── 异步任务台账：taskId → 本地扣款记录（退款/清扫依据；随盘防重启丢） ──────
@@ -138,6 +138,7 @@ interface LedgerEntry {
 	u: string;
 	/** 实际扣款人（团队共享=团长；缺省=u） */
 	p?: string;
+	wallet?: UserWalletRef;
 	/** 本地实扣金额（=源站回传 cost，可能因本地余额吃穿而少扣——差额已在扣款时告警） */
 	c: number;
 	/** 本地请求日志 id（终态收尾用） */
@@ -168,13 +169,13 @@ export function ledgerSettleTerminal(taskId: string, status: "success" | "failed
 	if (!e || e.done) return;
 	e.done = true;
 	if (status === "failed") {
-		refundLocalMirror(e.p ?? e.u, e.u, e.c, taskId);
+		refundLocalMirror(e.p ?? e.u, e.u, e.c, taskId, e.wallet);
 		if (e.log) finishLog(e.log, { status: "failed", error: opts?.error ? `${opts.error}（已退回 ${e.c} 积分）` : `生成失败（已退回 ${e.c} 积分）` });
 	} else {
     const result=opts?.response as TaskState['result'];
     if(result?.billing?.status==='settled') {
       const final=result.billing.cost;
-      const r=settle({reason:'text-token-mirror',idempotencyKey:'text-mirror:'+taskId,ref:e.log,payerId:e.p??e.u,statsUserId:e.u,userAmount:final-e.c,agents:[]});
+      const r=settle({reason:'text-token-mirror',idempotencyKey:'text-mirror:'+taskId,ref:e.log,payerId:e.p??e.u,statsUserId:e.u,userAmount:final-e.c,userWallet:e.wallet,agents:[]});
       if(!r.ok){e.done=false;throw new Error(r.error);}
       e.c=final;if(e.log) updateTextBillingLog(e.log,result.billing,result.usage);
     }

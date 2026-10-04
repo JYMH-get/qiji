@@ -1,0 +1,463 @@
+// Run only in the isolated mirror created by scripts/test-official-materials.ps1.
+import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+assert.ok(existsSync(new URL('../.qiji-official-materials-sandbox', import.meta.url)), 'Isolated official-materials sandbox required');
+let checks = 0;
+const eq = (actual, expected, message) => { assert.deepEqual(actual, expected, message); checks++; };
+const ok = (value, message) => { assert.ok(value, message); checks++; };
+const response = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
+const calls = [], records = new Map();
+let initialStatus = 'Processing', queryError, createError, generationError, sequence = 0;
+globalThis.fetch = async (url, init = {}) => {
+  const u = new URL(String(url));
+  assert.ok(u.hostname.endsWith('.materials.test'), 'No real upstream calls');
+  const action = u.pathname.split('/').at(-1), body = JSON.parse(init.body ?? '{}');
+  calls.push({ action, body, host: u.host, authorization: new Headers(init.headers).get('authorization') });
+  await new Promise(resolve => setTimeout(resolve, 1));
+  if (action === 'CreateAssetGroup') return response({ Id: `group-${++sequence}` });
+  if (action === 'CreateAsset') {
+    if (createError) return createError;
+    const id = `asset-${++sequence}`; records.set(id, { Id: id, Status: initialStatus });
+    return response({ Id: id, Status: 'Active' });
+  }
+  if (action === 'GetAsset') {
+    if (queryError) return queryError.clone();
+    return records.has(body.Id) ? response(records.get(body.Id)) : response({ Error: { Code: 'NotFound.asset_id', Message: 'Asset missing' } }, 404);
+  }
+  if (action === 'generations') return generationError?.clone() ?? response({ id: 'generated-fixture' });
+  throw new Error(`Unexpected fixture action ${action}`);
+};
+const { prepareOfficialMaterial, officialIdentityUrl } = await import('../src/officialMaterials.ts');
+const { materialPolicyForModel } = await import('../src/materialPolicy.ts');
+const { createAsset, runWithAssetOwner } = await import('../src/store/assets.ts');
+const { getModelDef, updateModel, createModel } = await import('../src/store/models.ts');
+const { updateChannel, createChannel } = await import('../src/store/channels.ts');
+const { db, closeSqlite } = await import('../src/store/sqlite.ts');
+const { flushPendingSaves } = await import('../src/store/db.ts');
+const { submitOfficialVideo } = await import('../src/translators/official.ts');
+const { putOfficialAssetBinding } = await import('../src/store/officialAssets.ts');
+const { createHash } = await import('node:crypto');
+const digest = s => createHash('sha256').update(s).digest('hex');
+const up = { baseUrl: 'https://official.materials.test', apiKey: 'fixture-only-key', upstreamModel: 'sd-video-v2' };
+updateChannel('ch-official', { enabled: true, baseUrl: up.baseUrl, apiKey: up.apiKey });
+updateModel('off-sd2.0', { enabled: true, upstreamModel: up.upstreamModel, baseUrl: up.baseUrl, apiKey: up.apiKey, materialPolicy: { kind: 'official-assets', library: 'sd', groupRequired: true } });
+const model = getModelDef('off-sd2.0');
+assert.ok(model);
+const withOwner = fn => runWithAssetOwner({ userId: 'materials-owner' }, fn);
+const makeRef = async (content = 'image-fixture') => {
+  const record = await createAsset(Buffer.from(content), 'image/png', 'image', { owner: { userId: 'asset-creator' }, saveToOss: false });
+  return { id: record.id, url: `https://files.materials.test/${record.id}.png`, usage: 'identity' };
+};
+const count = action => calls.filter(c => c.action === action).length;
+const nextReviewDay = () => db.prepare('UPDATE official_asset_bindings SET updated_at=?').run(Date.now() - 86400000);
+const lastAssetId = () => calls.filter(c => c.action === 'GetAsset').at(-1).body.Id;
+if (process.argv[2] === 'restart') {
+  const stored = db.prepare("SELECT * FROM official_asset_bindings WHERE user_id='materials-owner' AND upstream_model='library:sd:group' AND source_key LIKE 'sha:%' ORDER BY created_at LIMIT 1").get();
+  assert.ok(stored, 'binding persisted from first process');
+  const rec = db.prepare('SELECT id FROM assets WHERE sha256=? LIMIT 1').get(stored.source_key.slice(4));
+  const ref = { id: rec.id, url: `https://files.materials.test/${rec.id}.png`, usage: 'identity' };
+  records.set(stored.asset_id, { Id: stored.asset_id, Status: 'Active' });
+  eq((await withOwner(() => prepareOfficialMaterial(ref, model, up))).status, 'Active', 'restart queries persisted binding');
+  eq((await withOwner(() => prepareOfficialMaterial(ref, model, up))).status, 'Active', 'restart later reuse also queries');
+  eq(count('CreateAsset'), 0, 'restart never reuploads valid binding');
+  eq(count('GetAsset'), 1, 'restart queries Processing once, then reuses today certified Active');
+  await flushPendingSaves(); closeSqlite();
+  console.log(JSON.stringify({ ok: true, checks, phase: 'restart', network: 'stub-only' }));
+  process.exit(0);
+}
+let app;
+try {
+  eq(model.matLimits, undefined, 'new official models do not seed speculative material-count limits');
+  const ref = await makeRef();
+  let state = await withOwner(() => prepareOfficialMaterial(ref, model, up));
+  eq(state.status, 'Processing', 'Create response Active never bypasses GetAsset Processing');
+  eq(count('CreateAssetGroup'), 1, 'sd material creates group');
+  eq(count('CreateAsset'), 1, 'one image create');
+  eq(state.assetId, undefined, 'Processing ID is not returned for generation');
+  eq(state.scopeKey, materialPolicyForModel(model).scopeKey, 'UI scope key matches catalog policy');
+  ok(calls.find(c => c.action === 'CreateAsset').body.GroupId, 'sd CreateAsset uses GroupId');
+  const originalId = lastAssetId();
+  records.set(originalId, { Id: originalId, Status: 'Active' });
+  state = await withOwner(() => prepareOfficialMaterial(ref, model, up));
+  eq(state.status, 'Active', 'Processing transitions to Active by query');
+  eq(state.assetId, originalId, 'certified ID is returned to client');
+  ref.officialAssetId = state.assetId;
+  eq(count('CreateAsset'), 1, 'status polling does not create again');
+  let before = count('GetAsset');
+  await withOwner(() => prepareOfficialMaterial(ref, model, up));
+  eq(count('GetAsset'), before, 'same-day Active is reused without GetAsset');
+  before = count('GetAsset');
+  await withOwner(() => Promise.all(Array.from({ length: 6 }, () => prepareOfficialMaterial(ref, model, up))));
+  eq(count('GetAsset'), before, 'concurrent same-day uses need no upstream check');
+  await withOwner(() => prepareOfficialMaterial({ ...ref }, model, up));
+  eq(count('GetAsset'), before, 'later same-day placement reuses certification');
+  const sameContent = await makeRef();
+  await withOwner(() => prepareOfficialMaterial(sameContent, model, up));
+  eq(lastAssetId(), originalId, 'same bytes under another Qiji ID reuse upstream ID');
+  eq(count('CreateAsset'), 1, 'content dedup prevents duplicate upstream uploads');
+  before = count('CreateAsset');
+  await withOwner(() => prepareOfficialMaterial(ref, { ...model, channelId: 'cloned-logical-channel' }, up));
+  eq(count('CreateAsset'), before, 'cloned logical channel with same upstream account reuses ID');
+  eq(lastAssetId(), originalId, 'shared account reuse keeps exact ID after Get');
+  records.set(originalId, { Id: originalId, Status: 'Processing' });
+  before = count('GetAsset');
+  eq(await withOwner(() => officialIdentityUrl(ref, model, up)), `asset://${originalId}`, 'green submit directly reuses server-certified ID');
+  eq(count('GetAsset'), before, 'green submit has no recheck');
+  nextReviewDay();
+  eq((await withOwner(() => prepareOfficialMaterial(ref, model, up))).status, 'Processing', 'first next-day placement reviews again');
+  await assert.rejects(withOwner(() => officialIdentityUrl(ref, model, up)), /预处理/); checks++;
+  records.set(originalId, { Id: originalId, Status: 'Failed', Error: { Code: 'FaceMismatch', Message: 'face mismatch' } });
+  state = await withOwner(() => prepareOfficialMaterial(ref, model, up));
+  eq(state.status, 'Failed', 'failed state surfaced'); ok(state.error.includes('真人脸'), 'failed reason retained');
+  eq(count('CreateAsset'), 1, 'failure is not silently recreated');
+  initialStatus = 'Active';
+  await withOwner(() => prepareOfficialMaterial(ref, model, up, { retry: true }));
+  eq(count('CreateAsset'), 2, 'explicit failed retry recreates after a fresh Get');
+  let currentId = lastAssetId(); records.delete(currentId); nextReviewDay();
+  await withOwner(() => prepareOfficialMaterial(ref, model, up));
+  eq(count('CreateAsset'), 3, 'explicit expired NotFound recreates');
+  before = count('CreateAsset'); queryError = response({ message: 'gateway missing' }, 404);
+  await assert.rejects(withOwner(() => prepareOfficialMaterial(ref, model, up, { retry: true })), /gateway missing/); checks++;
+  eq(count('CreateAsset'), before, 'unknown 404 never triggers duplicate upload');
+  queryError = response({ error: { message: 'busy' } }, 503);
+  await assert.rejects(withOwner(() => prepareOfficialMaterial(ref, model, up, { retry: true })), /暂时异常/); checks++;
+  eq(count('CreateAsset'), before, 'transient lookup failure never recreates');
+  queryError = response({ Id: 'wrong-asset-id', Status: 'Active' });
+  await assert.rejects(withOwner(() => prepareOfficialMaterial(ref, model, up, { retry: true })), /不匹配/); checks++;
+  queryError = response({});
+  await assert.rejects(withOwner(() => prepareOfficialMaterial(ref, model, up, { retry: true })), /无法识别/); checks++;
+  queryError = undefined;
+  for (const library of ['me', 'we']) {
+    const branchModel = { ...model, id: `fixture-${library}`, materialPolicy: { kind: 'official-assets', library, groupRequired: false }, upstreamModel: `${library}-video-v2` };
+    const groups = count('CreateAssetGroup');
+    await withOwner(() => prepareOfficialMaterial(ref, branchModel, { ...up, upstreamModel: branchModel.upstreamModel }));
+    eq(count('CreateAssetGroup'), groups, `${library} never calls group APIs`);
+    ok(!('GroupId' in calls.filter(c => c.action === 'CreateAsset').at(-1).body), `${library} never sends GroupId`);
+    ok(lastAssetId() !== originalId, `${library} IDs isolated from sd`);
+    const sameLibraryModel = { ...branchModel, upstreamModel: `${library}-video-v2-fast` };
+    before = count('CreateAsset');
+    await withOwner(() => prepareOfficialMaterial(ref, sameLibraryModel, { ...up, upstreamModel: sameLibraryModel.upstreamModel }));
+    eq(count('CreateAsset'), before, `${library} same library variant reuses after Get`);
+  }
+  before = count('CreateAsset');
+  await runWithAssetOwner({ userId: 'other-user' }, () => prepareOfficialMaterial(ref, model, up));
+  eq(count('CreateAsset'), before, 'another Qiji user reuses the same upstream account/library binding');
+  before = count('CreateAsset');
+  await withOwner(() => prepareOfficialMaterial(ref, { ...model, apiKey: 'other-key' }, { ...up, apiKey: 'other-key' }));
+  eq(count('CreateAsset'), before + 1, 'credential change isolates bindings');
+  before = count('CreateAsset');
+  await withOwner(() => prepareOfficialMaterial(ref, { ...model, baseUrl: 'https://other.materials.test' }, { ...up, baseUrl: 'https://other.materials.test' }));
+  eq(count('CreateAsset'), before + 1, 'gateway change isolates bindings');
+  const bigRef = await makeRef('large-fixture');
+  db.prepare('UPDATE assets SET size_bytes=? WHERE id=?').run(13.28 * 1024 * 1024, bigRef.id);
+  before = count('CreateAsset');
+  eq((await withOwner(() => prepareOfficialMaterial(bigRef, model, up))).status, 'Active', '13.28MB image is accepted when upstream accepts it');
+  eq(count('CreateAsset'), before + 1, 'large image reaches CreateAsset without a local size cap');
+  const upstreamRejectedRef = await makeRef('upstream-large-rejection');
+  createError = response({ Error: { Code: 'FileSizeTooLarge', Message: 'upstream size rejection fixture' } }, 400);
+  before = count('CreateAsset');
+  await assert.rejects(withOwner(() => prepareOfficialMaterial(upstreamRejectedRef, model, up)), /upstream size rejection fixture/); checks++;
+  eq(count('CreateAsset'), before + 1, 'size errors come from the upstream response');
+  createError = undefined;
+  await assert.rejects(withOwner(() => prepareOfficialMaterial(ref, model, { ...up, upstreamModel: 'we-video-v2' })), /重定向/); checks++;
+  const legacyRef = await makeRef('legacy-fixture');
+  const legacyRecord = db.prepare('SELECT sha256 FROM assets WHERE id=?').get(legacyRef.id);
+  putOfficialAssetBinding({ userId: 'materials-owner', channelId: 'ch-official', credentialHash: digest(up.apiKey), upstreamModel: up.upstreamModel, sourceKey: `id:${legacyRef.id}:sha:${legacyRecord.sha256}`, sourceUrlHash: digest(legacyRef.url), assetType: 'Image', groupId: 'legacy-group', assetId: 'legacy-asset', status: 'Active' });
+  records.set('legacy-asset', { Id: 'legacy-asset', Status: 'Active' });
+  before = count('CreateAsset');
+  await withOwner(() => prepareOfficialMaterial(legacyRef, model, up));
+  eq(lastAssetId(), 'legacy-asset', 'strict legacy scope migrates using a fresh Get');
+  eq(count('CreateAsset'), before, 'valid legacy binding does not reupload');
+  ref.officialAssetId = (await withOwner(() => prepareOfficialMaterial(ref, model, up))).assetId;
+  const mediaRefs = {};
+  for (const [assetType, type, mime] of [['Video', 'video', 'video/mp4'], ['Audio', 'audio', 'audio/mpeg']]) {
+    const rec = await createAsset(Buffer.from(`${type}-fixture`), mime, type, { owner: { userId: 'media-user' }, saveToOss: false });
+    db.prepare('UPDATE assets SET size_bytes=? WHERE id=?').run(12 * 1024 * 1024, rec.id);
+    const mediaRef = { id: rec.id, url: `https://files.materials.test/${type}`, officialAssetType: assetType };
+    const prepared = await withOwner(() => prepareOfficialMaterial(mediaRef, model, up));
+    eq(prepared.status, 'Active', `${type} size is decided by upstream`);
+    mediaRef.officialAssetId = prepared.assetId;
+    eq(calls.filter(c => c.action === 'CreateAsset').at(-1).body.AssetType, assetType, `${type} creates the correct AssetType`);
+    mediaRefs[type] = mediaRef;
+  }
+  const generateRequest = { model: model.id, purpose: 'video.generate', clientTaskId: 'fixture', promptOverride: 'A person smiles', inputs: { images: [ref] }, params: { duration: 5, resolution: '720p', aspect_ratio: '16:9' } };
+  let result = await withOwner(() => submitOfficialVideo(generateRequest, up));
+  ok(result.ok, 'generation accepts freshly checked Active ID');
+  const generation = calls.filter(c => c.action === 'generations').at(-1);
+  ok(generation.body.content.some(c => c.image_url?.url.startsWith('asset://')), 'only server supplies asset URL');
+  const activeId = generation.body.content.find(c => c.image_url?.url.startsWith('asset://')).image_url.url.slice(8);
+  // The client prepares every image and submits the exact certified ID.
+  // Generation validates scope/status only, without creating or polling materials.
+  const plainRef = { ...(await makeRef('ordinary-scene')), usage: 'reference' };
+  const unmarkedRef = { ...(await makeRef('unmarked-object')), usage: undefined };
+  const storyRef = await makeRef('storyboard');
+  const storyUrl = storyRef.url;
+  plainRef.officialAssetId = (await withOwner(() => prepareOfficialMaterial(plainRef, model, up))).assetId;
+  unmarkedRef.officialAssetId = (await withOwner(() => prepareOfficialMaterial(unmarkedRef, model, up))).assetId;
+  const firstFrameAssetId = (await withOwner(() => prepareOfficialMaterial(storyRef, model, up))).assetId;
+  const allImagesRequest = { ...generateRequest, inputs: { images: [plainRef, unmarkedRef, ref], videos: [mediaRefs.video], audios: [mediaRefs.audio] }, params: { ...generateRequest.params, officialAssetIndexes: [], firstFrameUrl: storyUrl, firstFrameAssetId } };
+  const originalRequest = JSON.stringify(allImagesRequest);
+  const preparationCalls = () => calls.filter(c => c.action !== 'generations').length;
+  const preparedCallCount = preparationCalls();
+  result = await withOwner(() => submitOfficialVideo(allImagesRequest, up));
+  ok(result.ok, 'all official images use client-prepared IDs despite empty legacy selection');
+  eq(preparationCalls(), preparedCallCount, 'generation never creates or queries materials');
+  let sentContent = calls.filter(c => c.action === 'generations').at(-1).body.content;
+  let sentImages = sentContent.filter(c => c.type === 'image_url');
+  eq(sentImages.length, 4, 'storyboard follows all three reference images');
+  ok(sentImages.every(c => c.image_url.url.startsWith('asset://')), 'ordinary, unmarked and storyboard images never leak original URL');
+  eq(sentImages[2].image_url.url, `asset://${activeId}`, 'existing checked image keeps its original position');
+  eq(sentContent.find(c => c.type === 'video_url').video_url.url, `asset://${mediaRefs.video.officialAssetId}`, 'video uses client-prepared ID');
+  eq(sentContent.find(c => c.type === 'audio_url').audio_url.url, `asset://${mediaRefs.audio.officialAssetId}`, 'audio uses client-prepared ID');
+  eq(JSON.stringify(allImagesRequest), originalRequest, 'conversion never mutates request references or parameters');
+  const plainAssetUrl = sentImages[0].image_url.url;
+  const storyAssetUrl = sentImages[3].image_url.url;
+  const frameRequest = { ...generateRequest, inputs: { images: [plainRef] }, params: { ...generateRequest.params, method: 'frames', firstFrameUrl: storyUrl, firstFrameAssetId } };
+  result = await withOwner(() => submitOfficialVideo(frameRequest, up));
+  ok(result.ok, 'storyboard and ordinary reference both convert in frames mode');
+  sentImages = calls.filter(c => c.action === 'generations').at(-1).body.content.filter(c => c.type === 'image_url');
+  eq(sentImages.map(c => [c.role, c.image_url.url]), [['first_frame', storyAssetUrl], ['last_frame', plainAssetUrl]], 'frames preserve first/last ordering and certified IDs');
+  before = count('CreateAsset');
+  result = await withOwner(() => submitOfficialVideo({ ...frameRequest, inputs: { images: [plainRef, ref] }, params: { ...frameRequest.params, firstFrameUrl: plainRef.url, firstFrameAssetId: plainRef.officialAssetId } }, up));
+  ok(result.ok, 'frame URL duplicated in images is deduplicated before conversion');
+  eq(count('CreateAsset'), before, 'duplicate frame reuses ID-bound reference without extra URL binding');
+  result = await withOwner(() => submitOfficialVideo({ ...generateRequest, inputs: { images: [plainRef] }, params: { ...generateRequest.params, firstFrameUrl: plainRef.url } }, up));
+  ok(result.ok, 'duplicate storyboard accepted');
+  eq(calls.filter(c => c.action === 'generations').at(-1).body.content.filter(c => c.type === 'image_url').length, 1, 'storyboard does not duplicate same raw reference after conversion');
+  eq(preparationCalls(), preparedCallCount, 'all subsequent ID reuse and frame deduplication are read-only checks');
+  result = await withOwner(() => submitOfficialVideo({ ...generateRequest, inputs: { images: [{ officialAssetId: plainRef.officialAssetId }] } }, up));
+  ok(result.ok, 'certified ID alone is sufficient without original image URL');
+  result = await runWithAssetOwner({ userId: 'another-user' }, () => submitOfficialVideo(allImagesRequest, up));
+  ok(result.ok, 'another Qiji user can use a certified ID in the same upstream account/library');
+  const sameUrlRequest = { ...generateRequest, inputs: { images: [plainRef, { ...unmarkedRef, url: plainRef.url }] } };
+  result = await withOwner(() => submitOfficialVideo(sameUrlRequest, up));
+  ok(result.ok, 'different explicit image IDs sharing a cached URL are accepted');
+  eq(calls.filter(c => c.action === 'generations').at(-1).body.content.filter(c => c.type === 'image_url').map(c => c.image_url.url), [`asset://${plainRef.officialAssetId}`, `asset://${unmarkedRef.officialAssetId}`], 'each image preserves its exact client-provided ID even with identical URLs');
+  const noGeneration = count('generations');
+  const noPreparation = preparationCalls();
+  for (const invalidRef of [{ ...plainRef, officialAssetId: undefined }, { ...plainRef, officialAssetId: 'unknown-id' }]) {
+    result = await withOwner(() => submitOfficialVideo({ ...generateRequest, inputs: { images: [invalidRef] } }, up));
+    ok(!result.ok, 'missing or unverified ID is rejected');
+  }
+  result = await withOwner(() => submitOfficialVideo({ ...sameUrlRequest, inputs: { images: [plainRef, { ...unmarkedRef, url: plainRef.url, officialAssetId: 'unknown-second-image' }] } }, up));
+  ok(!result.ok, 'same URL never hides an invalid second image ID');
+  result = await withOwner(() => submitOfficialVideo(allImagesRequest, { ...up, apiKey: 'another-key' }));
+  ok(!result.ok, 'another upstream account cannot use a certified ID');
+  for (const library of ['me', 'we']) {
+    const branch = createModel({ ...model, id: `fixture-generation-${library}`, upstreamModel: `${library}-video-v2`, materialPolicy: { kind: 'official-assets', library, groupRequired: false } });
+    result = await withOwner(() => submitOfficialVideo({ ...allImagesRequest, model: branch.id }, { ...up, upstreamModel: branch.upstreamModel }));
+    ok(!result.ok, `${library} cannot use an sd image ID`);
+  }
+  eq(count('generations'), noGeneration, 'invalid scopes never reach generation');
+  eq(preparationCalls(), noPreparation, 'missing/invalid IDs never trigger server uploads or polling');
+  // Missing/untrusted IDs still fail; media compatibility is delegated to upstream.
+  for (const [group, kind, wrong] of [['videos', 'video', mediaRefs.audio], ['audios', 'audio', mediaRefs.video], ['images', 'image', mediaRefs.video]]) {
+    for (const officialAssetId of [undefined, 'unknown-media']) {
+      result = await withOwner(() => submitOfficialVideo({ ...generateRequest, inputs: { images: [ref], [group]: [{ url: `https://files.materials.test/${kind}`, officialAssetId, officialAssetType: kind === 'video' ? 'Video' : kind === 'audio' ? 'Audio' : 'Image' }] } }, up));
+      ok(!result.ok, `${kind} rejects missing or unknown ID`);
+    }
+  }
+  eq(count('generations'), noGeneration, 'invalid media ID does not generate');
+  eq(preparationCalls(), noPreparation, 'invalid media never causes server prepare or polling');
+  for (const [group, kind, otherType] of [['videos', 'video', mediaRefs.audio], ['audios', 'audio', mediaRefs.video], ['images', 'image', mediaRefs.video]]) {
+    generationError = response({ error: { message: 'upstream media type rejected fixture' } }, 400);
+    before = count('generations');
+    result = await withOwner(() => submitOfficialVideo({ ...generateRequest, inputs: { [group]: [otherType] } }, up));
+    ok(!result.ok && result.error.includes('upstream media type rejected fixture'), `${kind} surfaces the upstream type decision`);
+    eq(count('generations'), before + 1, `${kind} is submitted even if the local binding type differs`);
+    eq(calls.filter(c => c.action === 'generations').at(-1).body.content.find(c => c.type === `${kind}_url`)[`${kind}_url`].url, `asset://${otherType.officialAssetId}`, 'type mismatch does not rewrite or drop the reference');
+    generationError = undefined;
+  }
+  for (const kind of ['video', 'audio']) {
+    const group = `${kind}s`;
+    result = await runWithAssetOwner({ userId: 'different-qiji-user' }, () => submitOfficialVideo({ ...generateRequest, inputs: { images: [ref], [group]: [{ officialAssetId: mediaRefs[kind].officialAssetId }] } }, up));
+    ok(result.ok, `${kind} ID-only reference works across Qiji users`);
+    const source = mediaRefs[kind];
+    const beforeReuse = preparationCalls();
+    const reused = await runWithAssetOwner({ userId: 'different-qiji-user' }, () => prepareOfficialMaterial(source, model, up));
+    eq(reused.assetId, source.officialAssetId, `${kind} preparation shares certified ID across Qiji users`);
+    eq(preparationCalls(), beforeReuse, `${kind} shared preparation avoids duplicate upload/query`);
+    for (const status of ['Processing', 'Failed']) {
+      db.prepare('UPDATE official_asset_bindings SET status=? WHERE asset_id=?').run(status, source.officialAssetId);
+      const generations = count('generations');
+      result = await withOwner(() => submitOfficialVideo({ ...generateRequest, inputs: { images: [ref], [group]: [source] } }, up));
+      ok(!result.ok, `${kind} ${status} blocks generation`);
+      eq(count('generations'), generations, `${kind} ${status} sends no generation`);
+      eq(preparationCalls(), beforeReuse, `${kind} ${status} never triggers server polling`);
+    }
+    db.prepare('UPDATE official_asset_bindings SET status=? WHERE asset_id=?').run('Active', source.officialAssetId);
+  }
+  for (const library of ['me', 'we']) {
+    const branch = getModelDef(`fixture-generation-${library}`);
+    const branchUp = { ...up, upstreamModel: branch.upstreamModel };
+    const groupCalls = count('CreateAssetGroup');
+    const prepared = {};
+    for (const kind of ['video', 'audio']) {
+      const state = await withOwner(() => prepareOfficialMaterial(mediaRefs[kind], branch, branchUp));
+      ok(state.assetId !== mediaRefs[kind].officialAssetId, `${library} ${kind} ID belongs to its separate library`);
+      prepared[kind] = { ...mediaRefs[kind], officialAssetId: state.assetId };
+      ok(!('GroupId' in calls.filter(c => c.action === 'CreateAsset').at(-1).body), `${library} ${kind} omits group`);
+    }
+    eq(count('CreateAssetGroup'), groupCalls, `${library} media never creates groups`);
+    const preparation = preparationCalls();
+    result = await withOwner(() => submitOfficialVideo({ ...generateRequest, model: branch.id, inputs: { videos: [prepared.video], audios: [prepared.audio] } }, branchUp));
+    ok(result.ok, `${library} supports video/audio IDs in generation`);
+    eq(preparationCalls(), preparation, `${library} media generation does not prepare assets`);
+  }
+  const sharedUrl = 'https://files.materials.test/multiple-types';
+  const sameSourceIds = [];
+  for (const officialAssetType of ['Image', 'Video', 'Audio']) {
+    sameSourceIds.push((await withOwner(() => prepareOfficialMaterial({ url: sharedUrl, officialAssetType }, model, up))).assetId);
+  }
+  eq(new Set(sameSourceIds).size, 3, 'same URL has distinct type-scoped bindings');
+  const declaredAudio = { ...mediaRefs.video, officialAssetType: 'Audio' };
+  const acceptedAudio = await withOwner(() => prepareOfficialMaterial(declaredAudio, model, up));
+  eq(acceptedAudio.status, 'Active', 'ledger type does not veto declared audio accepted by upstream');
+  eq(calls.filter(c => c.action === 'CreateAsset').at(-1).body.AssetType, 'Audio', 'declared media type is still sent as requested');
+  for (const returnedType of ['Video', 'audio', 'AUDIO', 2]) {
+    records.set(acceptedAudio.assetId, { Id: acceptedAudio.assetId, Status: 'Active', AssetType: returnedType });
+    eq((await withOwner(() => prepareOfficialMaterial(declaredAudio, model, up, { retry: true }))).assetId, acceptedAudio.assetId, `successful GetAsset with type ${returnedType} retains its ID`);
+  }
+  records.set(acceptedAudio.assetId, { Id: acceptedAudio.assetId, Status: 'Failed', AssetType: 'Video', Error: { Code: 'TypeMismatch', Message: 'upstream actual type mismatch fixture' } });
+  const { inspectOfficialMaterial } = await import('../src/officialMaterials.ts');
+  const typeFailure = await withOwner(() => inspectOfficialMaterial(declaredAudio, model, up));
+  eq(typeFailure.status, 'Failed', 'real upstream type failure remains a failure');
+  ok(typeFailure.error.includes('upstream actual type mismatch fixture'), 'real upstream type error is retained');
+  const beforeTypeCheck = calls.length;
+  await assert.rejects(withOwner(() => prepareOfficialMaterial({ url: sharedUrl, officialAssetType: 'invalid' }, model, up)), /类型/); checks++;
+  eq(calls.length, beforeTypeCheck, 'invalid asset type rejects before upstream');
+  initialStatus = 'Failed';
+  const failedRef = { url: 'https://files.materials.test/failed-scene.png', usage: 'reference' };
+  await withOwner(() => prepareOfficialMaterial(failedRef, model, up));
+  failedRef.officialAssetId = lastAssetId();
+  before = count('generations');
+  result = await withOwner(() => submitOfficialVideo({ ...generateRequest, inputs: { images: [failedRef] } }, up));
+  ok(!result.ok, 'failed ordinary image blocks instead of URL fallback');
+  eq(count('generations'), before, 'failed ordinary image sends no generation');
+  initialStatus = 'Processing';
+  const pendingUrl = 'https://files.materials.test/pending-story.png';
+  await withOwner(() => prepareOfficialMaterial({ url: pendingUrl }, model, up));
+  result = await withOwner(() => submitOfficialVideo({ ...generateRequest, inputs: { images: [] }, params: { ...generateRequest.params, firstFrameUrl: pendingUrl, firstFrameAssetId: lastAssetId() } }, up));
+  ok(!result.ok && result.error.includes('预处理'), 'pending storyboard blocks generation');
+  eq(count('generations'), before, 'pending storyboard sends no generation');
+  initialStatus = 'Active';
+  result = await withOwner(() => submitOfficialVideo({ ...generateRequest, inputs: { images: [{ usage: 'reference' }] } }, up));
+  ok(!result.ok, 'ordinary image without source is not silently dropped');
+  eq(count('generations'), before, 'missing image sends no generation');
+  const urlModel = createModel({ ...model, id: 'fixture-official-url', materialPolicy: { kind: 'url' } });
+  before = count('CreateAsset');
+  result = await withOwner(() => submitOfficialVideo({ ...generateRequest, model: urlModel.id, inputs: { images: [plainRef] } }, up));
+  ok(result.ok, 'explicit URL policy remains supported');
+  eq(calls.filter(c => c.action === 'generations').at(-1).body.content.find(c => c.type === 'image_url').image_url.url, plainRef.url, 'URL policy does not opt into official asset library');
+  eq(count('CreateAsset'), before, 'URL policy never uploads ordinary references');
+  result = await withOwner(() => submitOfficialVideo({ ...generateRequest, model: urlModel.id, inputs: { videos: [{ url: mediaRefs.video.url }], audios: [{ url: mediaRefs.audio.url }] } }, up));
+  ok(result.ok, 'non-library policy retains ordinary video/audio support');
+  eq(calls.filter(c => c.action === 'generations').at(-1).body.content.filter(c => c.type !== 'text').map(c => c[c.type].url), [mediaRefs.video.url, mediaRefs.audio.url], 'URL policy leaves video/audio URLs unchanged');
+  const openModel = createModel({ ...model, id: 'fixture-official-open', matLimits: {} });
+  const openRequest = { ...generateRequest, model: openModel.id };
+  result = await withOwner(() => submitOfficialVideo({ ...openRequest, inputs: { images: Array(12).fill(plainRef), videos: Array(4).fill(mediaRefs.video), audios: Array(4).fill(mediaRefs.audio) } }, up));
+  ok(result.ok, 'unset limits allow more than historical 9/3/3 media counts');
+  let openContent = calls.filter(c => c.action === 'generations').at(-1).body.content;
+  eq(['image_url', 'video_url', 'audio_url'].map(type => openContent.filter(c => c.type === type).length), [12, 4, 4], 'all references reach upstream without clipping');
+  result = await withOwner(() => submitOfficialVideo({ ...openRequest, inputs: { audios: [mediaRefs.audio] } }, up));
+  ok(result.ok, 'audio-only input is decided by upstream');
+  result = await withOwner(() => submitOfficialVideo({ ...openRequest, params: { ...openRequest.params, method: 'frames' }, inputs: { images: [plainRef, unmarkedRef, ref], videos: [mediaRefs.video], audios: [mediaRefs.audio] } }, up));
+  ok(result.ok, 'extra frame references and audiovisual combination reach upstream');
+  openContent = calls.filter(c => c.action === 'generations').at(-1).body.content.filter(c => c.type !== 'text');
+  eq(openContent.map(c => c.role), ['first_frame', 'last_frame', 'reference_image', 'reference_video', 'reference_audio'], 'frame roles preserve all extra inputs and ordering');
+  result = await withOwner(() => submitOfficialVideo({ ...openRequest, params: { ...openRequest.params, method: 'frames' }, inputs: { images: [plainRef] } }, up));
+  ok(result.ok, 'one frame is submitted instead of an inferred two-image requirement');
+  updateModel(openModel.id, { matLimits: { img: 1 } });
+  before = count('generations');
+  result = await withOwner(() => submitOfficialVideo({ ...openRequest, inputs: { images: [plainRef, unmarkedRef] } }, up));
+  ok(!result.ok && result.error.includes('最多支持 1'), 'explicitly configured limit remains effective');
+  eq(count('generations'), before, 'manually configured limit prevents submission');
+  records.set(activeId, { Id: activeId, Status: 'Processing' });
+  before = count('GetAsset');
+  ok((await withOwner(() => submitOfficialVideo(generateRequest, up))).ok, 'same-day generation skips visible asset validation');
+  eq(count('GetAsset'), before, 'no GetAsset during certified generation');
+  nextReviewDay();
+  await withOwner(() => prepareOfficialMaterial(ref, model, up));
+  before = count('generations');
+  result = await withOwner(() => submitOfficialVideo(generateRequest, up));
+  ok(!result.ok && result.error.includes('预处理'), 'daily review marked Processing, so generation blocks');
+  eq(count('generations'), before, 'Processing prevents upstream generation');
+
+  // Public API authentication, route permissions and asynchronous failure refund.
+  const routing = await import('../src/autoRouting.ts');
+  const users = await import('../src/store/users.ts');
+  const tasks = await import('../src/store/tasks.ts');
+  const { config } = await import('../src/config.ts'); config.role = 'source';
+  const { registerRoutes } = await import('../src/routes.ts');
+  const { default: fastify } = await import('fastify'); app = fastify(); await registerRoutes(app);
+  const cfg = routing.routingConfig();
+  cfg.lines = [{ id: 'materials-fixture', name: '官方1', familyId: 'fam-seedance', modelVersion: '2.0', enabled: true, capability: 'video', cost: 100, members: [{ modelId: model.id, enabled: true, priority: 0, concurrencyWeight: 1, failureThreshold: 3, failureWindowSec: 300, cooldownSec: 300, defaults: {}, failureRetainPercent: 50 }] }];
+  routing.saveRoutingConfig(cfg);
+  const user = users.createUser({ name: 'material-api-fixture', credits: 10000, features: { assetMode: true } });
+  const headers = { authorization: `Bearer ${user.accessKey}` };
+  const apiRef = await makeRef('api-material-fixture');
+  const apiBody = { model: 'route:materials-fixture', asset: apiRef };
+  eq((await app.inject({ method: 'POST', url: '/v1/materials/prepare', payload: apiBody })).statusCode, 401, 'material API requires login');
+  const balance = user.credits;
+  before = count('CreateAsset');
+  let inspection = await app.inject({ method: 'POST', url: '/v1/materials/prepare', payload: { ...apiBody, action: 'inspect' }, headers });
+  eq(inspection.json().uploadRequired, true, 'missing binding inspection requests upload');
+  eq(count('CreateAsset'), before, 'gray inspection never uploads');
+  initialStatus = 'Processing';
+  let res = await app.inject({ method: 'POST', url: '/v1/materials/prepare', payload: apiBody, headers });
+  eq(res.statusCode, 200, 'authorized prepare works'); eq(res.json().status, 'Processing', 'API exposes current Processing');
+  ok(!JSON.stringify(res.json()).includes('asset-'), 'API does not expose upstream identity');
+  const apiAssetId = lastAssetId();
+  eq(user.credits, balance, 'prepare has no credit operation');
+  before = count('GetAsset');
+  inspection = await app.inject({ method: 'POST', url: '/v1/materials/prepare', payload: { ...apiBody, action: 'inspect' }, headers });
+  eq(count('GetAsset'), before + 1, 'placement inspects an existing binding even on the same day');
+  eq(inspection.json().uploadRequired, false, 'pending audit polls existing asset without duplicate upload');
+  ok(!('assetId' in inspection.json()), 'pending IDs cannot be submitted as certified');
+  records.set(apiAssetId, { Id: apiAssetId, Status: 'Active' });
+  inspection = await app.inject({ method: 'POST', url: '/v1/materials/prepare', payload: { ...apiBody, action: 'inspect' }, headers });
+  eq(inspection.json().assetId, apiAssetId, 'authenticated preparation returns certified ID to client');
+  records.set(apiAssetId, { Id: apiAssetId, Status: 'Processing' });
+  await app.inject({ method: 'POST', url: '/v1/materials/prepare', payload: { ...apiBody, action: 'inspect' }, headers });
+  users.updateUser(user.id, { features: { assetMode: true, modes: { 'route:materials-fixture': false } } });
+  eq((await app.inject({ method: 'POST', url: '/v1/materials/prepare', payload: apiBody, headers })).statusCode, 403, 'disabled user route blocks prepare');
+  users.updateUser(user.id, { features: { assetMode: true } });
+  eq((await app.inject({ method: 'POST', url: '/v1/materials/prepare', payload: { ...apiBody, model: model.id }, headers })).statusCode, 403, 'routing catalog denies raw models before preparation');
+  before = count('generations');
+  const beforeGenerationPreparation = preparationCalls();
+  res = await app.inject({ method: 'POST', url: '/v1/generate', payload: { ...generateRequest, model: apiBody.model, inputs: { images: [{ ...apiRef, officialAssetId: apiAssetId }] } }, headers });
+  eq(res.statusCode, 200, 'generation enters existing task flow');
+  const taskId = res.json().taskId; ok(taskId, 'task created by normal generate only');
+  for (let i = 0; i < 150 && tasks.getTaskState(taskId)?.status !== 'failed'; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  eq(tasks.getTaskState(taskId)?.status, 'failed', 'Processing fails before upstream generation');
+  eq(count('generations'), before, 'no upstream generation for invalid material');
+  eq(preparationCalls(), beforeGenerationPreparation, 'generation API only validates cached prepared ID');
+  eq(user.credits, balance, 'existing task failure refunds all precharged credits');
+
+  createChannel({ id: 'ch-official-clone', name: 'shared account fixture', enabled: true, baseUrl: up.baseUrl, apiKey: up.apiKey });
+  const second = createModel({ ...model, id: 'off-sd2.0-fixture-public', channelId: 'ch-official-clone', shareScope: 'all' });
+  const scopedConfig = routing.routingConfig();
+  const scopedLine = scopedConfig.lines.find(line => line.id === 'materials-fixture');
+  scopedLine.members.push({ ...scopedLine.members[0], modelId: second.id });
+  routing.saveRoutingConfig(scopedConfig);
+  updateModel(model.id, { shareScope: 'none' });
+  eq(routing.resolveLineMaterialModel(apiBody.model).id, model.id, 'private first model still defines material policy');
+  eq(routing.resolveLinePreparationModel(apiBody.model).id, second.id, 'preparation chooses allowed compatible model');
+  before = count('CreateAsset');
+  res = await app.inject({ method: 'POST', url: '/v1/materials/prepare', payload: apiBody, headers });
+  eq(res.statusCode, 200, 'allowed later candidate can prepare despite private first model');
+  eq(count('CreateAsset'), before, 'same-account allowed candidate reuses checked binding');
+  updateModel(second.id, { shareScope: 'none' });
+  eq((await app.inject({ method: 'POST', url: '/v1/materials/prepare', payload: apiBody, headers })).statusCode, 403, 'no allowed candidate cannot access material library');
+  updateModel(model.id, { shareScope: 'all' });
+  initialStatus = 'Active';
+  for (const asset of Object.values(mediaRefs)) {
+    before = count('CreateAsset');
+    const prepared = await app.inject({ method: 'POST', url: '/v1/materials/prepare', payload: { model: apiBody.model, asset }, headers });
+    eq(prepared.statusCode, 200, `${asset.officialAssetType} prepare API accepts typed media`);
+    eq(prepared.json().assetId, asset.officialAssetId, `${asset.officialAssetType} API returns existing cross-user ID`);
+    eq(count('CreateAsset'), before, `${asset.officialAssetType} API does not duplicate shared material`);
+  }
+  eq((await app.inject({ method: 'POST', url: '/v1/materials/prepare', payload: { ...apiBody, asset: { ...apiRef, officialAssetType: 'Document' } }, headers })).statusCode, 400, 'prepare API rejects invalid material type');
+  console.log(JSON.stringify({ ok: true, checks, network: 'stub-only', realGenerations: 0 }));
+} finally { await app?.close(); await flushPendingSaves(); closeSqlite(); }

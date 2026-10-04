@@ -18,6 +18,7 @@ import { listModes } from "./store/modes.ts";
 
 /** 内置翻译器错误前缀/上游品牌词（静态兜底；渠道显示名另行动态并入） */
 const BRAND_TOKENS = [
+	"纵横科技", "纵横", "Zongheng", "XingAPI", "星光", "LongXia",
 	"火山 MediaKit",
 	"火山引擎",
 	"AIStartLab",
@@ -65,6 +66,7 @@ const BRAND_TOKENS = [
 	"congchen",
 	// autodl（第234轮，autodl.art）：翻译器前缀「autodl」=模式对外名（占位符保护，改名后即开始被擦）；
 	// ComfyUI 是其平台技术名（工作流报错可能透出）——一并作品牌词擦除
+	"xiha888", "lk888", "龙幽", "longyou", "hjmie",
 	"autodl",
 	"ComfyUI",
 	// 奇迹云（第249轮，自建 autodl 实例池）：翻译器前缀「奇迹云」=模式对外名（占位符保护，改名后即开始被擦）
@@ -97,7 +99,7 @@ const BRAND_TOKENS = [
 
 /** 已知上游域（含成片 CDN）；出现在错误文案里一律隐藏（子域一并吞掉） */
 const HOST_TOKENS = [
-	"hjmie.cc.cd",
+	"lk888.ai", "hjmie.cc.cd",
 	"dimensio.cn",
 	"aixyzz.com",
 	"aistarslab.com",
@@ -124,6 +126,7 @@ const HOST_TOKENS = [
 	"yaliai.com", // Yali AI Studio API 域（第229轮；结果图直链 /v1/generated-images/ 同域）
 	"808relay.com", // Skylee API 域（第230轮；主入口 api. / 备用入口 api2. 同域，子域一并吞）
 	"congchen.top", // congge（聪宸）API 域（第233轮；图片结果图与视频成片若返回本站直链同域）
+	"cnd-coo-new.pages.dev", "xingapi.top",
 	"autodl.art", // autodl API 域（第234轮；成片 results[].url 若为本站直链同域）
 	// 奇迹云（第249轮）：实例服务域——ComfyUI 入口（service_6006_domain）落在这几个域下，
 	// 错误文案若透出实例地址一律隐藏（实例地址=渠道信息）

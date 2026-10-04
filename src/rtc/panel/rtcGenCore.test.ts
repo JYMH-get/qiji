@@ -208,18 +208,26 @@ describe("rtcGenCore · 自由占位生成参数", () => {
 		expect(p.aspect_ratio).toBe("16:9");
 	});
 
-	it("图片参数 = {aspect_ratio, resolution, quality}，分辨率按模型开放档收敛", () => {
+	it("图片参数保留 aspect 并补齐 aspect_ratio，显式分辨率不改档", () => {
 		expect(buildFreeImageParams({ imageAspect: "9:16", imageResolution: "1k", imageQuality: "medium" }, [{ v: "1k" }, { v: "2k" }])).toEqual({
+			aspect: "9:16",
 			aspect_ratio: "9:16",
 			resolution: "1k",
 			quality: "medium",
 		});
-		// 档不在开放集 → 回落第一档
+		// 显式档位不在开放集仍保持原值，交给服务端明确判定。
 		expect(buildFreeImageParams({ imageAspect: "16:9", imageResolution: "4k" }, [{ v: "2k" }])).toEqual({
+			aspect: "16:9",
 			aspect_ratio: "16:9",
-			resolution: "2k",
+			resolution: "4k",
 			quality: "high",
 		});
+	});
+	it("图片显式分辨率大小写原样保留，视频设置不混入图片参数", () => {
+		expect(buildFreeImageParams({ aspect: "9:16", resolution: "720p", imageResolution: "4K" }, [{ v: "2k" }]))
+			.toEqual({ aspect_ratio: "16:9", resolution: "4K", quality: "high" });
+		expect(buildFreeImageParams({ aspect: "9:16", resolution: "720p" }, [{ v: "1k" }]))
+			.toEqual({ aspect_ratio: "16:9", resolution: "1k", quality: "high" });
 	});
 
 	it("垫素材按模态分组且保序（对齐上游 @ImageN/@VideoN/@AudioN 编号）", () => {

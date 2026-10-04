@@ -1,3 +1,4 @@
+import { getDualModeFeature } from '@/store/connectionStore';
 /**
  * shotMaterialOps —— 分镜素材的增删（读最新 store，避免闭包过期），供视频界面与提示词放大弹窗共用。
  * 上传走 OSS（TP 临时资产）+ 本地副本显示；删除按 id 过滤。
@@ -84,7 +85,7 @@ export function setShotMaterialIdentity(epId: string, shotId: string, matId: str
  * shot.materials 传**更新后**的素材集；各提示词传旧值（applyLegend 会逐条合并，保留用户改过的说明）。
  */
 function syncShotLegend(shot: StoryboardShot, removed?: { media: MediaKind; n: number }): Partial<StoryboardShot> {
-	const sameSource = !!useProjectStore.getState().mediaSettings?.imgVideoSameSource;
+	const sameSource = (!getDualModeFeature() || (!!useProjectStore.getState().mediaSettings?.imgVideoSameSource));
 	const vp = shot.videoPrompt || "", sp = shot.storyboardPrompt || "", up = shot.unifiedPrompt || "";
 	// 当前模式的提示词：添加=始终补/更新图例，删除=仅当已有图例才重建；非当前模式：已有图例才跟随重建
 	const legFor = (text: string, active: boolean, imagesOnly: boolean): string =>

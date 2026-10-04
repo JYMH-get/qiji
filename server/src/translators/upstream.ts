@@ -10,17 +10,33 @@ import { matchRoute } from "../store/models.ts";
 import type { ModelDef } from "../store/models.ts";
 import { getChannel } from "../store/channels.ts";
 import type { GenerateRequest } from "../contract.ts";
+import { imageRoutingParams } from '../imageRouting.ts';
 
 export interface Upstream {
 	baseUrl: string;
 	apiKey: string;
 	upstreamModel: string;
+	imageMaterialMode?: 'direct' | 'url';
+	textReasoningDefaults?: Record<string, unknown>;
 }
 
 const strip = (u: string) => u.replace(/\/+$/, "");
 
+export function effectiveImageMaterialMode(m: ModelDef, upstreamModel = m.upstreamModel || m.id): 'direct' | 'url' | undefined {
+	return m.capability === 'image' ? m.imageMaterialMode ?? (m.protocol === 'gemini-image' || m.protocol === 'yali-image' && /gemini|banana/i.test(upstreamModel) ? 'direct' : 'url') : undefined;
+}
+
+/** 派发和渠道观测必须使用同一重定向结果。 */
+export function resolveUpstreamRoute(m: ModelDef, rawParams?: GenerateRequest['params']) {
+	// 图片计价和实际重定向共用只读档位视图；保留 size 等其他匹配条件及原请求值。
+	const params = m.capability === 'image'
+		? { ...rawParams, ...imageRoutingParams(rawParams ?? {}) }
+		: rawParams;
+	return matchRoute(m, params);
+}
+
 export function resolveUpstream(m: ModelDef, req?: GenerateRequest): Upstream {
-	const route = matchRoute(m, req?.params as Record<string, unknown> | undefined);
+	const route = resolveUpstreamRoute(m, req?.params);
 	const upstreamModel = route?.upstreamModel || m.upstreamModel || m.id;
 
 	// 渠道凭据：路由可改用另一渠道，否则用模型归属渠道
@@ -28,7 +44,7 @@ export function resolveUpstream(m: ModelDef, req?: GenerateRequest): Upstream {
 
 	// 默认渠道：简梦视频/火山 MediaKit/苏打水/星辰/画影/Dimensio/Aivide/简梦P 各走独立网关，其余走 g-aisc 聚合网关
 	const fallback =
-		m.protocol === "jianmeng-video"
+		(route?.channelId || m.channelId) === "ch-zongheng" || m.protocol === "zongheng-video" ? config.zongheng : m.protocol === "xingguang-video" ? config.xingguang : m.protocol === "xiha888-image" ? config.xiha888 : m.protocol === "longyou-video" ? config.longyou : m.protocol === "jianmeng-video"
 			? { baseUrl: config.jianmeng.baseUrl, apiKey: config.jianmeng.apiKey || config.gateway.apiKey }
 			: m.protocol === "volc-mediakit"
 				? { baseUrl: config.volc.baseUrl, apiKey: config.volc.apiKey }
@@ -48,8 +64,6 @@ export function resolveUpstream(m: ModelDef, req?: GenerateRequest): Upstream {
 											? { baseUrl: config.musem.baseUrl, apiKey: config.musem.apiKey }
 											: m.protocol === "jmz-video" || m.protocol === "jmz-image"
 												? { baseUrl: config.jmz.baseUrl, apiKey: config.jmz.apiKey }
-												: m.protocol === "jmh-image" || m.protocol === "jmh-video"
-													? { baseUrl: config.jmh.baseUrl, apiKey: config.jmh.apiKey }
 													: m.protocol === "jmt-video"
 														? { baseUrl: config.jmt.baseUrl, apiKey: config.jmt.apiKey }
 														: m.protocol === "jmf-video"
@@ -81,5 +95,8 @@ export function resolveUpstream(m: ModelDef, req?: GenerateRequest): Upstream {
 	const baseUrl = m.baseUrl || ch?.baseUrl || fallback.baseUrl;
 	const apiKey = m.apiKey || ch?.apiKey || fallback.apiKey;
 
-	return { baseUrl: strip(baseUrl), apiKey, upstreamModel };
+	const textReasoningDefaults = m.capability === 'text'
+		? Object.fromEntries(m.params.filter(field => ['thinkingMode', 'reasoning_effort'].includes(field.key) && field.default !== undefined).map(field => [field.key, field.default]))
+		: undefined;
+	return { baseUrl: strip(baseUrl), apiKey, upstreamModel, imageMaterialMode: effectiveImageMaterialMode(m, upstreamModel), textReasoningDefaults };
 }

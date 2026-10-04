@@ -1,0 +1,64 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+if(!process.cwd().includes('qiji-client-feedback-'))throw Error('Sandbox only');
+globalThis.fetch=async()=>{throw Error('No external network in feedback sandbox');};
+const users=await import('../src/store/users.ts'),agents=await import('../src/store/agents.ts');
+const templates=await import('../src/store/templates.ts'),presets=await import('../src/store/presets.ts');
+const settings=await import('../src/store/settings.ts');
+const {default:Fastify}=await import('fastify'),app=Fastify();
+await app.register((await import('../src/routes.ts')).registerRoutes);
+await app.register((await import('../src/routes/admin.ts')).registerAdminRoutes);
+await app.register((await import('../src/routes/agent.ts')).registerAgentRoutes);await app.ready();
+let checks=0;const eq=(a,b,label)=>{assert.deepEqual(a,b,label);checks++;};
+const h=token=>({authorization:'Bearer '+token,'x-device-id':'feedback-device'});
+const call=(method,url,payload,token)=>app.inject({method,url,headers:token?h(token):{},...(payload===undefined?{}:{payload})});
+if(process.argv.includes('restart')){
+  const saved=JSON.parse(fs.readFileSync('feedback-evidence.json','utf8'));
+  eq(users.getUser(saved.userId).name,'新的用户名','profile persists restart');
+  eq(templates.getTemplateDef('feedback-public').publicNote,'适合对话场景\n实例：人物走入房间。','template note persists restart');
+  eq(presets.getPresetDef('feedback-preset').publicNote,'明亮柔和的预期效果','preset note persists restart');
+  eq(templates.getTemplateDef('feedback-public').body,'PRIVATE_EXECUTABLE_BODY','body unchanged after restart');
+}else{
+  settings.setRegisterSettings({enabled:true,smtp:{host:'mail.invalid',user:'fixture',pass:'secret-fixture'},sms:{accessKeySecret:null}});
+  let response=await call('GET','/v1/registration-options');eq(response.statusCode,200,'registration options public');
+  eq(response.json(),{enabled:true,email:true,phone:false},'unconfigured SMS hidden');eq(response.headers['cache-control'],'no-store','no cached config');
+  settings.setRegisterSettings({sms:{accessKeyId:'fixture',accessKeySecret:'secret',signName:'fixture',templateCode:'fixture'}});
+  eq((await call('GET','/v1/registration-options')).json().phone,true,'SMS availability updates');
+  settings.setRegisterSettings({enabled:false,smtp:{pass:null},sms:{accessKeySecret:null}});
+  eq((await call('GET','/v1/registration-options')).json(),{enabled:false,email:false,phone:false},'closed registration has no exposed secrets');
+  settings.setRegisterSettings({enabled:true,smtp:{host:'mail.invalid',user:'fixture',pass:'secret-fixture'},sms:{accessKeySecret:null}});
+  const a=agents.createAgent({name:'甲渠道',account:'feedback-a',password:'fixture-pass',credits:100}).agent;
+  const b=agents.createAgent({name:'乙渠道',account:'feedback-b',password:'fixture-pass',credits:100}).agent;
+  const user=users.createUser({name:'旧用户名',credits:80,agentId:a.id});
+  users.bindAccount(user,'feedback@example.com','fixture-pass');
+  const other=users.createUser({name:'其他用户',credits:20,agentId:b.id});
+  const at=agents.createAgentSession(a.id),bt=agents.createAgentSession(b.id);
+  const protectedFields=()=>[user.id,user.credits,user.agentId,user.accessKey,user.account,user.passwordHash,other.name];
+  const before=protectedFields();
+  response=await call('PUT','/v1/profile',{name:'  新的用户名  '},user.accessKey);eq(response.statusCode,200,'self profile update');eq(response.json(),{id:user.id,name:'新的用户名'},'trimmed display name');eq(protectedFields(),before,'identity billing and other users unchanged');
+  for(const payload of [{name:''},{name:'x'.repeat(41)},{name:'换\n行'},{name:'入侵',id:other.id},{name:'入侵',credits:999},{name:123},[]])eq((await call('PUT','/v1/profile',payload,user.accessKey)).statusCode,400,'invalid profile rejected');
+  eq((await call('PUT','/v1/profile',{name:'unauthenticated'})).statusCode,401,'unauthenticated rejected');
+  eq((await call('GET','/v1/me',undefined,user.accessKey)).json().name,'新的用户名','me reflects rename');
+  templates.createTemplate({id:'feedback-public',name:'公开效果示例',capability:'text',purpose:'storyboard.unified',category:'推理提示词',body:'PRIVATE_EXECUTABLE_BODY',shareScope:'select',shareAgentIds:[a.id]});
+  presets.createPreset({id:'feedback-preset',name:'画风效果示例',category:'画风',body:'STYLE_BODY'});
+  for(const [url,note] of [['/admin-api/templates/feedback-public','适合对话场景\n实例：人物走入房间。'],['/admin-api/presets/feedback-preset','明亮柔和的预期效果']]){
+    response=await call('PUT',url,{publicNote:note},'admin-dev');eq(response.statusCode,200,'admin note saved');eq(response.json().publicNote,note,'note response');
+    eq((await call('PUT',url,{publicNote:123},'admin-dev')).statusCode,400,'invalid note rejected');
+  }
+  let shared=(await call('GET','/agent-api/shared-templates',undefined,at)).json().items.find(t=>t.id==='feedback-public');
+  eq(shared.publicNote,templates.getTemplateDef('feedback-public').publicNote,'merchant sees note');eq(shared.body,undefined,'merchant body remains hidden');eq(shared.bodyHidden,true,'hidden body flag');
+  eq((await call('GET','/agent-api/shared-templates',undefined,bt)).json().items.some(t=>t.id==='feedback-public'),false,'other merchant excluded');
+  eq((await call('PUT','/agent-api/templates/feedback-public',{publicNote:'overwrite'},at)).statusCode,404,'merchant cannot edit official note');
+  shared=(await call('GET','/agent-api/presets',undefined,at)).json().items.find(p=>p.id==='feedback-preset');eq(shared.publicNote,'明亮柔和的预期效果','style note public');eq(shared.body,undefined,'style body hidden from merchant');
+  let cat=(await call('GET','/v1/catalog',undefined,user.accessKey)).json();let item=cat.templates.find(t=>t.id==='feedback-public');
+  eq(item.publicNote,templates.getTemplateDef('feedback-public').publicNote,'client sees allowed note');eq(item.body,undefined,'client body hidden');eq(item.bodyPreview,undefined,'client body preview hidden');
+  eq(cat.presets.find(p=>p.id==='feedback-preset').publicNote,'明亮柔和的预期效果','client preset note');
+  eq((await call('GET','/v1/catalog',undefined,other.accessKey)).json().templates.some(t=>t.id==='feedback-public'),false,'client audience isolation');
+  eq(templates.getTemplateDef('feedback-public').body,'PRIVATE_EXECUTABLE_BODY','note edits do not alter execution');
+  const version=cat.version;await call('PUT','/admin-api/templates/feedback-public',{publicNote:''},'admin-dev');
+  cat=(await call('GET','/v1/catalog',undefined,user.accessKey)).json();eq(cat.templates.find(t=>t.id==='feedback-public').publicNote,undefined,'note clear');assert.notEqual(cat.version,version);checks++;
+  await call('PUT','/admin-api/templates/feedback-public',{publicNote:'适合对话场景\n实例：人物走入房间。'},'admin-dev');
+  fs.writeFileSync('feedback-evidence.json',JSON.stringify({userId:user.id}));
+}
+console.log(`Client feedback ${process.argv.includes('restart')?'restart':'integration'}: ${checks} checks passed; no external network.`);
+await app.close();

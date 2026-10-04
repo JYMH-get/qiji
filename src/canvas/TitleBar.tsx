@@ -9,11 +9,14 @@ import { useState, useRef, useEffect, useMemo } from "react";
 import { useProjectStore } from "@/store/projectStore";
 import { useCommitStore } from "@/store/commitStore";
 
-import { Minus, Square, X, Circle, History, Home, UserCircle } from "lucide-react";
+import { Minus, Square, X, Circle, History, Home, UserCircle, Activity } from "lucide-react";
 import { useLocation, useNavigate } from "react-router";
 import { useModeFeatures } from "@/store/connectionStore";
 import { useUiStore } from "@/store/uiStore";
 import logoMark from "@/assets/brand/logo-mark.png";
+import { ClientUpdateButton } from "@/components/ClientUpdateNotice";
+import { RouteAvailabilityModal } from "@/components/RouteAvailabilityModal";
+import { MessageCenterButton } from "@/components/MessagesSection";
 
 function isTauri(): boolean {
   return typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
@@ -25,6 +28,7 @@ async function tauriWindow() {
 }
 
 export function TitleBar() {
+  const [routeStatusOpen, setRouteStatusOpen] = useState(false);
   const name = useProjectStore((s) => s.name);
   const isDirty = useProjectStore((s) => s.isDirty);
   const isSaving = useProjectStore((s) => s.isSaving);
@@ -103,6 +107,7 @@ export function TitleBar() {
         });
         if (yes) {
           await useProjectStore.getState().save(true);
+          if (useProjectStore.getState().isDirty) throw new Error("保存尚未完成，请稍后重试关闭窗口。");
         }
       }
       await win.close();
@@ -197,7 +202,7 @@ export function TitleBar() {
                   <div className="Qiji-titlebar__dropdown-divider" />
                   <button
                     className="Qiji-titlebar__dropdown-item"
-                    onClick={() => { setMenuOpen(false); useProjectStore.getState().save(true); }}
+                    onClick={() => { setMenuOpen(false); useProjectStore.getState().save(true, true); }}
                   >
                     <span>保存</span>
                     <span className="Qiji-titlebar__dropdown-shortcut">Ctrl+S</span>
@@ -293,9 +298,11 @@ export function TitleBar() {
         )}
       </div>
 
-      {/* 窗口控制（仅 Tauri 显示） */}
-      {isTauri() && (
         <div className="Qiji-titlebar__controls">
+          <MessageCenterButton />
+          <button className="route-status__entry" onClick={() => setRouteStatusOpen(true)}><Activity size={13} />公告</button>
+          {isTauri() && <>
+          <ClientUpdateButton />
           <button
             onClick={handleMinimize}
             className="Qiji-titlebar__btn"
@@ -317,8 +324,9 @@ export function TitleBar() {
           >
             <X className="h-3 w-3" />
           </button>
+          </>}
         </div>
-      )}
+      {routeStatusOpen && <RouteAvailabilityModal onClose={() => setRouteStatusOpen(false)} />}
     </div>
   );
 }

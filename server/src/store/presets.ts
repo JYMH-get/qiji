@@ -13,6 +13,7 @@
  * 搬进本库并从模板库移除（templates.ts 种子已同步剔除，不会补种复活）；渠道商自营模板不动。
  */
 import { loadJson, saveJson } from "./db.ts";
+import { publicPromptNote } from '../publicPromptNote.ts';
 import { extractPlatformPresetTemplates } from "./templates.ts";
 
 /** 资产拆分自动附加的类别键（与客户端项目 store 五类字段名一致） */
@@ -21,7 +22,10 @@ export type SplitAttachCat = (typeof SPLIT_ATTACH_CATS)[number];
 
 export interface PresetDef {
 	id: string;
+	/** Empty means a shared official preset; private merchant presets are only served to that merchant's customers. */
+	agentId?: string;
 	name: string;
+	publicNote?: string;
 	/** 分组："画风"（新建项目画风选择器 + 画风前缀）/ "预设方案"（出图预设胶囊）/ 其它自由分组 */
 	category: string;
 	/** 完整正文（预设是正文片段，catalog 全文下发） */
@@ -148,11 +152,23 @@ export function presetsVersion(): number {
 }
 
 export function listPresets(): PresetDef[] {
-	return store.presets;
+	return store.presets.filter(p => !p.agentId);
 }
 
 export function listEnabledPresets(): PresetDef[] {
-	return store.presets.filter((p) => p.enabled);
+	return listEnabledPresetsForAgent();
+}
+
+export function listPresetsByAgent(agentId: string): PresetDef[] {
+	return store.presets.filter(p => p.agentId === agentId);
+}
+
+export function presetVisibleToAgent(p: PresetDef, agentId?: string): boolean {
+	return !p.agentId || p.agentId === agentId;
+}
+
+export function listEnabledPresetsForAgent(agentId?: string): PresetDef[] {
+	return store.presets.filter(p => p.enabled && presetVisibleToAgent(p, agentId));
 }
 
 export function getPresetDef(id: string): PresetDef | undefined {
@@ -173,6 +189,7 @@ export function createPreset(input: Partial<PresetDef> & Pick<PresetDef, "id" | 
 		body: "",
 		...input,
 		id: input.id.trim(),
+		publicNote: publicPromptNote(input.publicNote),
 		position: input.position === "suffix" ? "suffix" : "prefix",
 		autoAttach: normAutoAttach(input.autoAttach),
 	});
@@ -187,6 +204,7 @@ export function updatePreset(id: string, patch: Partial<Omit<PresetDef, "id" | "
 	const p = getPresetDef(id);
 	if (!p) return undefined;
 	const next = { ...patch } as Record<string, unknown>;
+	if ('publicNote' in next) next.publicNote = publicPromptNote(next.publicNote);
 	if ("position" in next) next.position = next.position === "suffix" ? "suffix" : "prefix";
 	if ("autoAttach" in next) next.autoAttach = normAutoAttach(next.autoAttach);
 	Object.assign(p, next, { updatedAt: new Date().toISOString() });

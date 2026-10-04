@@ -1,6 +1,7 @@
 param(
     [switch]$SkipTests,
-    [switch]$NoOpen
+    [switch]$NoOpen,
+    [ValidateSet('patch', 'minor', 'major')] [string]$VersionIncrement = 'patch'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,6 +11,7 @@ $buildStartedAt = Get-Date
 $embeddedNyxenUploadKey = 'sk_7f71fe98b2664f5fa1605e8a'
 $injectedEmbeddedNyxenKey = $false
 $scriptExitCode = 0
+$packageLock = $null
 $packageLogDir = Join-Path $projectRoot 'outputs\client-packaging'
 New-Item -ItemType Directory -Path $packageLogDir -Force | Out-Null
 $packageLog = Join-Path $packageLogDir ("package-" + $buildStartedAt.ToString('yyyyMMdd-HHmmss') + '.log')
@@ -42,8 +44,23 @@ function Invoke-Step {
 Set-Location -LiteralPath $projectRoot
 
 try {
+    try {
+        $packageLock = [System.IO.File]::Open((Join-Path $packageLogDir 'package.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
+    } catch {
+        throw '已有打包程序正在运行，请等待完成后再试。'
+    }
     Write-Host 'Qiji 可分享桌面应用打包' -ForegroundColor Green
     Write-Host "项目目录：$projectRoot"
+
+    $injectedSigningKey = $false
+    if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+        $qijiUpdaterKeyPath = Join-Path $env:USERPROFILE '.tauri\qiji-updater.key'
+        Assert-File -Path $qijiUpdaterKeyPath -Label '客户端更新签名私钥（请从安全备份恢复，禁止临时换新密钥）'
+        $env:TAURI_SIGNING_PRIVATE_KEY = $qijiUpdaterKeyPath
+        # 本机初始密钥无口令；显式空值避免 CLI 在非交互发布任务中等待 stdin。
+        if ($null -eq $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) { $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = '' }
+        $injectedSigningKey = $true
+    }
 
     Assert-File -Path (Join-Path $projectRoot 'package.json') -Label 'package.json'
     Assert-File -Path (Join-Path $projectRoot 'node_modules\@tauri-apps\cli\tauri.js') -Label 'Tauri CLI（请先运行 npm install）'
@@ -97,6 +114,15 @@ try {
     Write-Host "正式版服务器：$productionServerUrl"
 
     if (-not $SkipTests) {
+        Invoke-Step -Label '打包版本与说明测试' -Action { & node.exe --test scripts/client-release.test.mjs }
+    }
+
+    Invoke-Step -Label '同步递增客户端版本号' -Action {
+        & node.exe scripts/client-release.mjs bump $projectRoot $VersionIncrement
+    }
+    $tauriConfig = Get-Content -LiteralPath $tauriConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+
+    if (-not $SkipTests) {
         Invoke-Step -Label '客户端 TypeScript 检查' -Action { & npx.cmd tsc --noEmit }
         Invoke-Step -Label '客户端完整测试' -Action { & npx.cmd vitest run }
     } else {
@@ -132,10 +158,28 @@ try {
     }
 
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    Invoke-Step -Label '安装包与客户端内置公钥交叉验签' -Action {
+        & node.exe scripts/verify-client-update.mjs @($packages | ForEach-Object FullName)
+    }
     $shareDir = Join-Path $projectRoot "release\Qiji-$($tauriConfig.version)-$stamp"
     New-Item -ItemType Directory -Path $shareDir -Force | Out-Null
     foreach ($package in $packages) {
         Copy-Item -LiteralPath $package.FullName -Destination (Join-Path $shareDir $package.Name)
+        Assert-File -Path ($package.FullName + '.sig') -Label '本轮安装包更新签名'
+        Copy-Item -LiteralPath ($package.FullName + '.sig') -Destination (Join-Path $shareDir ($package.Name + '.sig'))
+    }
+
+    $updateExe = $packages | Where-Object Extension -eq '.exe' | Select-Object -First 1
+    [ordered]@{
+        version = $tauriConfig.version
+        filename = $updateExe.Name
+        signature = (Get-Content -LiteralPath ($updateExe.FullName + '.sig') -Raw).Trim()
+        sha256 = (Get-FileHash -LiteralPath $updateExe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        feedUrl = $tauriConfig.plugins.updater.endpoints[0]
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $shareDir 'update-release.json') -Encoding utf8
+
+    Invoke-Step -Label '生成本版本更新说明和推送步骤' -Action {
+        & node.exe scripts/client-release.mjs instructions $shareDir
     }
 
     $copiedPackages = @(Get-ChildItem -LiteralPath $shareDir -File | Sort-Object Name)
@@ -166,6 +210,8 @@ try {
     Write-Host "`n打包失败：$($_.Exception.Message)" -ForegroundColor Red
     $scriptExitCode = 1
 } finally {
+    if ($packageLock) { $packageLock.Dispose() }
+    if ($injectedSigningKey) { Remove-Item Env:TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue }
     if ($injectedEmbeddedNyxenKey) {
         Remove-Item Env:NYXEN_UPLOAD_KEY -ErrorAction SilentlyContinue
         Write-Host '当前打包进程中的专项密钥已清除。' -ForegroundColor DarkGray

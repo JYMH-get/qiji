@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+ familyFirstSelection,
+ modelForLine,
 	modelChannels,
 	buildModelSourceOptions,
 	sourceValueOf,
@@ -12,6 +14,38 @@ import {
 	CHANNEL_SOURCE_PREFIX,
 	QIJI_CHANNEL,
 } from "@/services/adapters/localChannels";
+
+describe('family-first selection',()=>{
+ const options=[
+  {id:'route:a-official',label:'A 官方',familyId:'a',modeId:'a-official',modeName:'官方'},
+  {id:'route:a-budget',label:'A 低价',familyId:'a',modeId:'a-budget',modeName:'低价'},
+  {id:'route:b-budget',label:'B 低价',familyId:'b',modeId:'b-budget',modeName:'低价'},
+  {id:'route:b-promo',label:'B 优惠',familyId:'b',modeId:'b-promo',modeName:'优惠'},
+  {id:'route:b-stable',label:'B 稳定',familyId:'b',modeId:'b-stable',modeName:'稳定'},
+ ];
+ const families=modelFamilies(options,['a','b']);
+ it('shows every family but limits line choices to the selected family',()=>{
+  const result=familyFirstSelection(families,'route:a-official');
+  expect(result.families.map(f=>f.familyId)).toEqual(['a','b']);
+  expect(result.channels.map(c=>c.channel)).toEqual(['官方','低价']);
+  expect(familyFirstSelection(families,'route:b-budget').channels.map(c=>c.channel)).toEqual(['低价','优惠','稳定']);
+ });
+ it('never jumps to another family when a requested line is unavailable',()=>{
+  expect(modelForLine('src:官方','route:a-budget',families)).toBe('route:a-official');
+  expect(modelForLine('src:优惠','route:a-budget',families)).toBe('');
+  expect(modelForLine('src:低价','route:b-promo',families)).toBe('route:b-budget');
+  expect(modelForLine('src:missing','route:b-promo',families)).toBe('');
+ });
+ it('family changes select a supported route while preserving existing selections',()=>{
+  expect(modelForFamily('b','route:a-official',families)).toBe('route:b-budget');
+  expect(modelForFamily('a','route:a-official',families)).toBe('route:a-official');
+ });
+ it('unavailable selections keep family choices without pretending a line is selected',()=>{
+  expect(familyFirstSelection(families,'removed').channels).toEqual([]);
+  expect(familyFirstSelection(families,'removed').families).toHaveLength(2);
+  expect(modelForLine('src:官方','removed',families)).toBe('');
+ });
+});
 import { LIBTV_CHANNEL, LIBTV_MODEL_CHOICES, LIBTV_MINIMAX_H3_KEY, MINIMAX_FAMILY_ID } from "@/services/adapters/libtvAdapter";
 
 const L0 = LIBTV_MODEL_CHOICES[0].id;

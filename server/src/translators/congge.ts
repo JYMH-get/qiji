@@ -178,7 +178,7 @@ export async function translateConggeImage(req: GenerateRequest, up: Upstream, o
 
 	if (refCount > 0) {
 		// 死链探活 → 按资产 id 回查台账当前直链自愈 → 明确报错（⚠ 一张都不许静默丢，第118轮规则）
-		const { refs, missing } = await resolveEditRefs(req);
+		const { refs, missing } = await resolveEditRefs(req,up.imageMaterialMode);
 		if (missing.length) {
 			return { ok: false, error: `垫图无法获取：${missing.join("、")}——直链已失效且台账无可用直链，请重新生成/上传该资产后再试` };
 		}

@@ -84,9 +84,11 @@ interface SessionUser {
 	/** 登录/心跳的目录归属标记；迁移保留 accessKey 时仍能触发目录刷新 */
 	catalogAudience?: string;
 	credits: number;
+	ownCredits?: number;
+	team?: import('@/contract').SessionTeamInfo;
 	/** 功能开关（服务端按用户下发；字段缺省=开）：控制可用模式，见 useModeFeatures；libtv/dreamina 见对应 hook；
 	 *  modes=动态视频模式门禁（第130轮，modeId→bool，缺省=开）：关=模型下拉隐藏该模式（服务端 403 亦拦） */
-	features?: { assetMode?: boolean; canvasMode?: boolean; editorMode?: boolean; libtv?: boolean; dreamina?: boolean; comfyui?: boolean; modes?: Record<string, boolean> };
+	features?: { dualMode?: boolean; assetMode?: boolean; canvasMode?: boolean; editorMode?: boolean; libtv?: boolean; dreamina?: boolean; comfyui?: boolean; modes?: Record<string, boolean> };
 }
 
 interface ConnectionState extends Persisted {
@@ -197,4 +199,12 @@ export function getComfyuiFeature(): boolean {
 /** hook：订阅 ComfyUI 直连入口开关（个人中心绑定区块 / 视频模型下拉的显隐依据之一） */
 export function useComfyuiFeature(): boolean {
 	return useConnectionStore((s) => s.user?.features?.comfyui !== false);
+}
+
+/** 双模权限缺省开启；关闭时只允许同源，不修改项目原有提示词。 */
+export function getDualModeFeature(): boolean {
+ return useConnectionStore.getState().user?.features?.dualMode !== false;
+}
+export function useDualModeFeature(): boolean {
+ return useConnectionStore(s => s.user?.features?.dualMode !== false);
 }

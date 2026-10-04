@@ -1,3 +1,4 @@
+import { supportsOfficialMaterials } from "@/services/materialPolicy";
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useReactFlow } from "@xyflow/react";
 import type { CSSProperties } from "react";
@@ -18,8 +19,11 @@ import { isCharacterProjectAsset } from "@/lib/projectAssets";
 import { matchNodeDraftAssets } from "@/lib/assetMatch";
 import { PromptExpandButton } from "@/components/PromptExpandButton";
 import { getChannelModelsForNodeType, resolveActiveModelKey, catalogFamilyOrder } from "@/services/adapters/channelAdapter";
-import { modelFamilies, familyOf, modelForFamily, modelForSource, channelOf, type FamilyGroup } from "@/services/adapters/localChannels";
+import { familyFirstSelection, modelForLine, modelFamilies, familyOf, modelForFamily, channelOf, type FamilyGroup } from "@/services/adapters/localChannels";
 import { useCatalogStore } from "@/store/catalogStore";
+import { useLibtvStore } from "@/store/libtvStore";
+import { useDreaminaStore } from "@/store/dreaminaStore";
+import { useConnectionStore } from "@/store/connectionStore";
 import { useSettingsStore } from "@/store/settingsStore";
 import { listPresetOptions, listPresetSchemes } from "@/lib/presetSchemes";
 import { estimateCost as estimateCreditCost } from "@/lib/genParams";
@@ -42,6 +46,7 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 
 	const [activePopoverKey, setActivePopoverKey] = useState<string | null>(null);
 	const promptRef = useRef<NodePromptEditorHandle>(null);
+	const expandRef = useRef<HTMLButtonElement>(null);
 	const [paramPanelExpanded, setParamPanelExpanded] = useState(false);
 	const wrapRef = useRef<HTMLDivElement>(null);
 	const { setViewport: rfSetViewport, getViewport: rfGetViewport } = useReactFlow();
@@ -73,16 +78,19 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 	}, [activePopoverKey, paramPanelExpanded, rfGetViewport, rfSetViewport]);
 
 	const catalog = useCatalogStore(s => s.catalog);
+	const libtvAuthed = useLibtvStore(s => s.authed);
+	const dreaminaAuthed = useDreaminaStore(s => s.authed);
+	const features = useConnectionStore(s => s.user?.features);
 	// 只显示视频预设；目录热更和视频自定义修改均立即刷新。
 	useSettingsStore((s) => s.customPresets);
 	const presetSchemes = listPresetSchemes("video");
-	const channelModelOptions = useMemo(() => getChannelModelsForNodeType(node?.type ?? "video"), [node, catalog]);
+	const channelModelOptions = useMemo(() => getChannelModelsForNodeType(node?.type ?? "video"), [node, catalog, libtvAuthed, dreaminaAuthed, features]);
 
 	// 视频模型三级折叠（第163轮）：家族（模型种类）→ 渠道/线路（模式名/LibTV/即梦）→ 模型（款式）。
-	// 家族=一级筛选（用户定「以模型为首要筛选」）；家族顺序按 catalog.families 下发序。
-	const srcFamilies = useMemo(
+	// 按 catalog.families 顺序显示家族，线路只显示当前家族支持项。
+	const allFamilies = useMemo(
 		() => modelFamilies(
-			channelModelOptions.map((o) => ({ id: o.id, label: o.modelName, modeId: o.modeId, modeName: o.modeName, familyId: o.familyId, familyName: o.familyName })),
+			channelModelOptions.map((o) => ({ id: o.id, label: o.modelName, modeId: o.modeId, modeName: o.modeName, familyId: o.familyId, familyName: o.familyName, lineName: o.lineName })),
 			catalogFamilyOrder(),
 		),
 		[channelModelOptions],
@@ -169,6 +177,8 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 	};
 
 	// 当前模型所属的 家族 / 渠道线路：家族 pill + 线路 pill + 「模型」pill 三级
+	const selection = familyFirstSelection(allFamilies,adapter?.key);
+	const srcFamilies=selection.families;
 	const famGrp = familyOf(adapter?.key, srcFamilies);
 	const famChannels = famGrp?.channels ?? [];
 	const srcCh = channelOf(adapter?.key, famChannels);
@@ -287,15 +297,15 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 					{/* 素材区（可编辑）：上游连线素材(前) + 自加素材(后)，＋/拖入/粘贴添加；最右为提示词放大按钮 */}
 					<NodeMaterialBay
 						nodeId={nodeId}
-						identityEnabled={!!catModel?.officialAssets}
+						identityModelId={catModel?.id} identityEnabled={supportsOfficialMaterials(catModel)}
 						identityIndexes={[...officialSel]}
 						onToggleIdentity={toggleOfficialImage}
-						rightAction={<PromptExpandButton title="编辑视频提示词" getValue={() => mapUpstreamText(prompt, upstreamTextSources(nodeId).map((source) => source.text))} onSave={(v) => setParam({ prompt: v })} placeholder="输入提示词…" getExtra={() => <NodeMaterialBay nodeId={nodeId} identityEnabled={!!catModel?.officialAssets} identityIndexes={[...officialSel]} onToggleIdentity={toggleOfficialImage} />} getMentions={() => getNodeMaterialItems(nodeId)} onImport={(cand) => importAssetToNode(nodeId, cand)} getPresets={() => listPresetOptions("video")} onMatchAssets={(draft) => matchNodeDraftAssets(nodeId, draft)} />}
+						rightAction={<PromptExpandButton buttonRef={expandRef} nodeId={nodeId} title="编辑视频提示词" getValue={() => mapUpstreamText(prompt, upstreamTextSources(nodeId).map((source) => source.text))} onSave={(v) => setParam({ prompt: v })} placeholder="输入提示词…" getExtra={(api) => <NodeMaterialBay promptApi={api} nodeId={nodeId} identityModelId={catModel?.id} identityEnabled={supportsOfficialMaterials(catModel)} identityIndexes={[...officialSel]} onToggleIdentity={toggleOfficialImage} />} getMentions={() => getNodeMaterialItems(nodeId)} onImport={(cand) => importAssetToNode(nodeId, cand)} getPresets={() => listPresetOptions("video")} onMatchAssets={(draft) => matchNodeDraftAssets(nodeId, draft)} />}
 					/>
 
 					{/* 提示词输入区（自适应高度，超出内部滚动，不撑高面板）*/}
 					<div className="min-w-0 relative mt-1">
-						<NodePromptEditor ref={promptRef} nodeId={nodeId} prompt={prompt} onChange={(v) => setParam({ prompt: v })} placeholder={mode?.inputHint ?? "输入提示词生成视频..."} />
+						<NodePromptEditor ref={promptRef} onExpand={() => expandRef.current?.click()} nodeId={nodeId} prompt={prompt} onChange={(v) => setParam({ prompt: v })} placeholder={mode?.inputHint ?? "输入提示词生成视频..."} />
 						
 					</div>
 				</div>
@@ -367,8 +377,8 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 							</AnimatePresence>
 						</div>
 
-						{/* 「渠道/线路」二级选择（家族 pill 旁）：家族内的源（模式名 / LibTV / 即梦） */}
-						{famGrp && famChannels.length > 0 && (
+						{/* 线路二级选择：仅显示当前家族线路 */}
+						{selection.channels.length > 0 && (
 							<div className="relative shrink-0">
 								<button
 									title="线路"
@@ -404,14 +414,14 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 											className="rounded-xl overflow-visible min-w-[180px] py-1"
 											onClick={(e) => e.stopPropagation()}
 										>
-											{famChannels.map((ch) => {
+											{selection.channels.map((ch) => {
 												const selected = srcCh?.channel === ch.channel;
 												return (
 													<button
 														key={ch.channel}
 														onClick={() => {
 															// 已在该线路 → 保持当前款式；否则取该线路默认款
-															switchModel(modelForSource(`src:${ch.channel}`, adapter?.key, famChannels));
+															switchModel(modelForLine(`src:${ch.channel}`, adapter?.key, allFamilies??[]));
 														}}
 														className={`flex items-center justify-between w-full px-3.5 py-2.5 text-xs transition-colors cursor-pointer text-left ${selected
 															? "bg-white/10 text-white font-medium"
@@ -429,7 +439,7 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 						)}
 
 						{/* 「模型」三级选择（线路 pill 旁）：线路内的具体款式（Seedance 2.0 / Fast / VIP…） */}
-						{srcCh && !adapter?.key.startsWith("route:") && (
+						{srcCh && !srcCh.modelAsLine && !adapter?.key.startsWith("route:") && (
 							<div className="relative shrink-0">
 								<button
 									onClick={(e) => {

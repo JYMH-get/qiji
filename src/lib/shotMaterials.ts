@@ -159,11 +159,7 @@ function legendSeparatorOf(text: string, marker: number): LegendSeparator {
  * buildLegend 恒在每条说明后写 `；`，所以说明中的普通逗号不会再被误判为资产边界；
  * 同时兼容旧项目的逗号分隔格式。
  */
-export function splitLegendPrompt(prompt: string): LegendPromptParts {
-    const text = prompt || "";
-    const marker = text.indexOf(LEGEND_START);
-    if (marker < 0) return { legend: "", body: text, entries: [] };
-
+function splitLegendBlock(text: string, marker: number): LegendPromptParts {
     const entries: LegendEntry[] = [];
     const separator = legendSeparatorOf(text, marker);
     let cursor = marker + LEGEND_START.length;
@@ -199,6 +195,29 @@ export function splitLegendPrompt(prompt: string): LegendPromptParts {
     const after = text.slice(bodyStart).trim();
     const body = before && after ? `${before}\n${after}` : before || after;
     return { legend: renderLegend(entries), body, entries };
+}
+
+/** 首段图例是当前素材说明；移除重复旧图例，避免其条目混进正文或在删除素材后留下残句。 */
+export function splitLegendPrompt(prompt: string): LegendPromptParts {
+    const text = prompt || "";
+    const marker = text.indexOf(LEGEND_START);
+    if (marker < 0) return { legend: "", body: text, entries: [] };
+
+    const first = splitLegendBlock(text, marker);
+    let body = first.body;
+    let next = body.indexOf(LEGEND_START);
+    while (next >= 0) {
+        let cursor = next + LEGEND_START.length;
+        while (body[cursor] === " " || body[cursor] === "\t") cursor++;
+        // 后续只移除实际图例条目，正文中单纯提到「【素材图例】」不能吞掉整行。
+        if (entryAt(body, cursor, legendSeparatorOf(body, next))) {
+            body = splitLegendBlock(body, next).body;
+            next = body.indexOf(LEGEND_START);
+        } else {
+            next = body.indexOf(LEGEND_START, cursor);
+        }
+    }
+    return { ...first, body };
 }
 
 /** 剥掉提示词里的旧「素材图例」条目，返回用户正文（含内联 @ 引用）。 */

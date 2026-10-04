@@ -1,3 +1,4 @@
+import { getDualModeFeature } from '@/store/connectionStore';
 /**
  * flowActions —— 实时剪辑「AI 生成」分步工作台的动作层。
  *
@@ -359,7 +360,7 @@ export async function smartInferEpisode(epId: string): Promise<FlowResult> {
 		return { ok: false, message: "" };
 	}
 	const ms = st.mediaSettings;
-	const sameSource = ms.imgVideoSameSource ?? false;
+	const sameSource = (!getDualModeFeature() || (ms.imgVideoSameSource ?? false));
 	useProjectStore.getState().setEpisodeShots(epId, []); // 覆盖：清空整集（流式边出边填）
 	const { SMART_INFER_MULTI_TPL, SMART_INFER_UNIFIED_TPL } = await import("@/lib/smartInferPrompts");
 	const { startInfer } = await import("@/services/inferRun");

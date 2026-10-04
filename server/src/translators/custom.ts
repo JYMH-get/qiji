@@ -1,3 +1,4 @@
+import { returnOriginalResult } from "./resultStorage.ts";
 /**
  * custom.ts —— 通用「翻译官」引擎：按自定义协议（store/protocols.ts）的数据配置执行上游调用。
  *
@@ -163,6 +164,7 @@ export async function runCustomImmediate(
 	const link = pickPath(r.data, proto.response.assetUrlPath);
 	if (typeof link !== "string" || !link) return { ok: false, error: `未从响应取到资产链接（assetUrlPath=${proto.response.assetUrlPath || "未配置"}）` };
 	try {
+		if (returnOriginalResult()) return { ok: true, url: link };
 		const dl = await fetch(link, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
 		if (!dl.ok) return { ok: false, error: `下载结果资产 HTTP ${dl.status}` };
 		const contentType = dl.headers.get("content-type") || "application/octet-stream";

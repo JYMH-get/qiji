@@ -14,6 +14,8 @@ import { useCatalogStore } from "@/store/catalogStore";
 import { useLibraryStore } from "@/store/libraryStore";
 import { useProjectStore } from "@/store/projectStore";
 import { dispatchCommand } from "@/command/dispatch";
+import { isRunnableNode } from "@/command/nodeRunEligibility";
+import { getPlugin } from "@/nodes/pluginRegistry";
 import { optLabel } from "@/components/VideoProcessModal";
 import MediaCompareModal from "@/components/MediaCompareModal";
 import { isProcessNodeParams } from "@/lib/sharedNodeParams";
@@ -74,7 +76,7 @@ export function ProcessInfoPanel({ nodeId }: { nodeId: string }) {
 	const params = node.data.params || {};
 	const purpose = typeof params.purpose === "string" ? params.purpose : "";
 	const title = PROC_TITLES[purpose] || String(params.procLabel || "处理结果");
-	const rerunnable = !!PROC_TITLES[purpose]; // resultOnly（本地产物）不可重跑
+	const rerunnable = !!PROC_TITLES[purpose] && isRunnableNode(node, getPlugin(node.type));
 	const running = runtime?.status === "running" || runtime?.status === "queued";
 
 	const catModel = rerunnable ? (catModels ?? []).find((m) => m.id === params.model) : undefined;

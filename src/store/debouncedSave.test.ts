@@ -4,15 +4,17 @@ import {
   scheduleSave,
   notifySaved,
   cancelAllSaves,
+  flushScheduledSave,
+  getSaveRevision,
 } from "./debouncedSave";
 
 /**
- * debouncedSave 单元测试：验证 2 分钟合并窗口、脏标记跳过、拖拽暂停、取消。
+ * debouncedSave 单元测试：验证 30 秒合并窗口、脏标记跳过、拖拽暂停、取消。
  */
 
-const AUTOSAVE_MS = 2 * 60 * 1000;
+const AUTOSAVE_MS = 30 * 1000;
 
-describe("debouncedSave（2 分钟自动保存窗口）", () => {
+describe("debouncedSave（30 秒自动保存窗口）", () => {
   let mockSave: ReturnType<typeof vi.fn>;
   let mockMarkDirty: ReturnType<typeof vi.fn>;
 
@@ -34,7 +36,7 @@ describe("debouncedSave（2 分钟自动保存窗口）", () => {
     expect(mockMarkDirty).toHaveBeenCalledTimes(1);
   });
 
-  it("2 分钟后才触发保存", async () => {
+  it("30 秒后才触发保存", async () => {
     scheduleSave("canvas");
     await vi.advanceTimersByTimeAsync(AUTOSAVE_MS - 1);
     expect(mockSave).not.toHaveBeenCalled();
@@ -45,16 +47,16 @@ describe("debouncedSave（2 分钟自动保存窗口）", () => {
 
   it("窗口内多次改动合并成一次保存", async () => {
     scheduleSave("canvas");
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     scheduleSave("history");
     scheduleSave("viewport");
     scheduleSave("canvas");
-    // 窗口从第一次改动起算，第一次调度后 2 分钟触发一次
-    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS - 60_000);
+    // 窗口从第一次改动起算，第一次调度后 30 秒触发一次
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS - 10_000);
     expect(mockSave).toHaveBeenCalledTimes(1);
   });
 
-  it("连续编辑最多每 2 分钟保存一次", async () => {
+  it("连续编辑最多每 30 秒保存一次", async () => {
     scheduleSave("canvas");
     await vi.advanceTimersByTimeAsync(AUTOSAVE_MS);
     expect(mockSave).toHaveBeenCalledTimes(1); // 第一窗口
@@ -92,5 +94,34 @@ describe("debouncedSave（2 分钟自动保存窗口）", () => {
     scheduleSave("canvas");
     scheduleSave("canvas");
     expect(mockMarkDirty).toHaveBeenCalledTimes(3);
+  });
+
+  it("切换提前保存一次，并取消旧窗口", async () => {
+    scheduleSave();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushScheduledSave();
+    expect(mockSave).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS);
+    expect(mockSave).toHaveBeenCalledTimes(1);
+  });
+
+  it("旧保存完成不能清除保存期间的新改动", async () => {
+    scheduleSave();
+    const savedRevision = getSaveRevision();
+    scheduleSave();
+    expect(notifySaved(savedRevision)).toBe(false);
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS);
+    expect(mockSave).toHaveBeenCalledTimes(1);
+  });
+
+  it("即时保存后新编辑重新计算完整30秒窗口", async () => {
+    scheduleSave();
+    await vi.advanceTimersByTimeAsync(29_000);
+    notifySaved();
+    scheduleSave();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mockSave).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(mockSave).toHaveBeenCalledTimes(1);
   });
 });

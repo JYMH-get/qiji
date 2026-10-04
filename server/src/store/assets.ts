@@ -354,18 +354,19 @@ export async function createAsset(
 	data: Buffer,
 	contentType: string,
 	type: Capability,
-	opts?: { prefix?: string; name?: string; owner?: AssetOwner },
+	opts?: { prefix?: string; name?: string; owner?: AssetOwner; saveToOss?: boolean },
 ): Promise<AssetRecord> {
 	const id = nextAssetId(opts?.prefix);
 	const profile = activeProfile();
 	const createdAt = new Date().toISOString();
 	const owner = opts?.owner ?? currentAssetOwner();
 	const sha = createHash("sha256").update(data).digest("hex");
-	const dup = isOssConfigured() ? findAssetBySha(sha) : undefined;
+	const useOss = opts?.saveToOss !== false && isOssConfigured();
+	const dup = useOss ? findAssetBySha(sha) : undefined;
 	const ossKey = dup ? dup.ossKey : keyFor(profile, { id, ext: extFor(contentType), type, createdAt, acct: acctSegmentOf(owner) });
 	let url = dup ? dup.url : "";
 	let uploaded = !!dup; // 去重命中=对象已在桶里
-	if (isOssConfigured() && !dup) {
+	if (useOss && !dup) {
 		try {
 			url = await ossPutWithRetry(ossKey, data, contentType, profile);
 			uploaded = true;
@@ -378,7 +379,7 @@ export async function createAsset(
 			pendingOssBytes += data.length;
 			console.warn(`[assets] ${id} 转存 OSS 失败（${msg}），已降级 /raw + 进补传队列（待补 ${pendingOss.size} 个 / ${(pendingOssBytes / 1024 / 1024).toFixed(1)}MB）`);
 		}
-	} else if (!isOssConfigured()) {
+	} else if (!useOss) {
 		memBytes.set(id, data); // 兜底：无 OSS 时留内存供 /raw
 	}
 	// 视频入库顺手解析时长（字节在手零额外开销；mp4/mov 之外解析不出=null 不落）——参考视频按秒计费的缓存

@@ -1,0 +1,10 @@
+import fs from 'node:fs';import assert from 'node:assert/strict';
+if(!import.meta.url.includes('qiji-usage-reports-'))throw Error('Sandbox only');
+globalThis.fetch=async()=>{throw Error('Sandbox no network')};
+const state=JSON.parse(fs.readFileSync(new URL('../data/usage-test-state.json',import.meta.url),'utf8'));
+const service=await import('../src/services/usageReports.ts');
+service.startUsageReports(false);
+const a=service.getUsageReport(state.a,30).companies[0];
+assert.equal(a.total,state.expected,'restart/replay must preserve deleted source logs and original ownership');
+assert.equal(service.getUsageReport(state.b,30).companies[0].total,25);
+service.stopUsageReports();console.log('Restart: persistent daily totals and replay deduplication passed');

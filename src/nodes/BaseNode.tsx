@@ -24,6 +24,7 @@ import { depthifyVideoNode } from "@/canvas/videoDepthify";
 import { viewAngleNode } from "@/canvas/viewAngleOp";
 import { panoramaNode, viewPanoramaNode } from "@/canvas/panoramaOp";
 import { isPanoramaNodeParams } from "@/lib/panoView";
+import { fitMediaNode, resizeMediaNode } from '@/canvas/mediaNodeSizing';
 
 import {
   Info,
@@ -152,20 +153,9 @@ export function BaseNode({
   const onResolutionChange = useCallback(
     (resStr: string, W: number, H: number) => {
       setResolution(resStr);
-      const node = useCanvasStore.getState().nodes[id];
-      if (node && W && H) {
-        const w = node.w ?? 240;
-        const h = node.h ?? 200;
-        const newH = Math.round(w * (H / W));
-        if (Math.abs(h - newH) > 2) {
-          // 自动贴合媒体比例是展示性调整，**不走结构命令**（不进撤销栈）：
-          // 否则 undo 恢复出未贴合的节点 → 图片 onLoad 又派发 resize → 把刚撤掉的状态
-          // 重新推回 past 并清空 future，撤销从此原地打转（解组/截帧节点必踩）。
-          useCanvasStore.getState().resizeNode(id, w, newH);
-        }
-      }
+      fitMediaNode(id, W, H, resultAssetId);
     },
-    [id],
+    [id, resultAssetId],
   );
 
   // 图片/视频/音频/上传节点有结果时，标题显示资产名/文件名（而非「生成图片节点」等类型名）；
@@ -437,14 +427,15 @@ export function BaseNode({
         {isActive && (
           <NodeResizer
             isVisible={true}
-            minWidth={200}
+            minWidth={resolution ? 40 : 200}
             minHeight={150}
             // 图片/视频结果（已上报分辨率→node 宽高已贴合媒体比例）缩放时锁定比例，避免拉伸变形
             keepAspectRatio={!!resolution}
             lineClassName="!border-[color:var(--node-accent)]"
             handleClassName="!bg-[color:var(--node-accent)]"
             onResize={(_, p) => {
-              useCanvasStore.getState().resizeNode(id, p.width, p.height);
+              if (resolution) resizeMediaNode(id, p.width, p.height);
+              else useCanvasStore.getState().resizeNode(id, p.width, p.height);
             }}
             onResizeEnd={(_, p) => {
               dispatchCommand({

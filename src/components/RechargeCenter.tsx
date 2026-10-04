@@ -5,7 +5,7 @@
  *  - 会员=单档，开通方式=**会员卡兑换码**（仅源站签发；真实支付未接入，支付位仅预留展示）；
  *  - 权益=开通即到账算力（积分）+ 会员期内生成计费折扣（折扣在服务端实扣时生效，
  *    客户端各处预估仍显示标准价——折后实扣 ≤ 预估，保守安全）；
- *  - 「兑换码」页签=统一入口，按前缀自动识别：mc-会员卡 / sc-扩容卡 / 其余=积分兑换码。
+ *  - 「兑换码」页签=统一入口，按前缀自动识别：mc-会员卡 / 其余=积分兑换码。
  */
 import { useEffect, useState } from "react";
 import { X, Crown, Coins, Gift, Loader2, CheckCircle, XCircle, Sparkles, BadgeCheck, CreditCard } from "lucide-react";
@@ -23,8 +23,7 @@ export function discountLabel(pct: number): string {
 type TabKey = "plan" | "credits" | "redeem";
 
 export function RechargeCenter({ open, onClose, onChanged }: { open: boolean; onClose: () => void; onChanged?: () => void }): React.ReactElement | null {
-	const credits = useConnectionStore((s) => s.user?.credits ?? 0);
-	const setCredits = useConnectionStore((s) => s.setCredits);
+	const credits = useConnectionStore((s) => s.user?.ownCredits ?? s.user?.credits ?? 0);
 
 	const [tab, setTab] = useState<TabKey>("plan");
 	const [plan, setPlan] = useState<MembershipPlanInfo | null>(null);
@@ -59,7 +58,6 @@ export function RechargeCenter({ open, onClose, onChanged }: { open: boolean; on
 	const redeemCard = async (code: string): Promise<{ ok: boolean; text: string }> => {
 		const r = await managedClient.redeemMembershipCard(code);
 		if (!r.ok) return { ok: false, text: r.error || "核销失败" };
-		if (typeof r.credits === "number") setCredits(r.credits);
 		if (r.membership) setMembership(r.membership);
 		onChanged?.();
 		const until = r.membership ? r.membership.expiresAt.slice(0, 10) : "";
@@ -70,21 +68,10 @@ export function RechargeCenter({ open, onClose, onChanged }: { open: boolean; on
 	const redeemCredits = async (code: string): Promise<{ ok: boolean; text: string }> => {
 		const r = await managedClient.redeem(code);
 		if (!r.ok) return { ok: false, text: r.error || "兑换失败" };
-		if (typeof r.credits === "number") setCredits(r.credits);
 		onChanged?.();
 		return { ok: true, text: `兑换成功，到账 ${r.added ?? 0} 积分` };
 	};
 
-	/** 扩容卡 */
-	const redeemStorage = async (code: string): Promise<{ ok: boolean; text: string }> => {
-		try {
-			await managedClient.redeemStorageCode(code);
-			onChanged?.();
-			return { ok: true, text: "扩容卡已核销，收藏空间已提升" };
-		} catch (err) {
-			return { ok: false, text: (err as Error).message || "核销失败" };
-		}
-	};
 
 	const handleCard = async (): Promise<void> => {
 		const c = cardCode.trim();
@@ -115,7 +102,7 @@ export function RechargeCenter({ open, onClose, onChanged }: { open: boolean; on
 		setAnyBusy(true);
 		setAnyMsg(null);
 		const lower = c.toLowerCase();
-		const r = lower.startsWith("mc-") ? await redeemCard(c) : lower.startsWith("sc-") ? await redeemStorage(c) : await redeemCredits(c);
+		const r = lower.startsWith("mc-") ? await redeemCard(c) : await redeemCredits(c);
 		setAnyBusy(false);
 		setAnyMsg(r);
 		if (r.ok) setAnyCode("");
@@ -286,7 +273,7 @@ export function RechargeCenter({ open, onClose, onChanged }: { open: boolean; on
 										value={anyCode}
 										onChange={(e) => setAnyCode(e.target.value)}
 										onKeyDown={(e) => { if (e.key === "Enter") void handleAny(); }}
-										placeholder="输入任意兑换码：会员卡 / 扩容卡 / 积分兑换码"
+										placeholder="输入会员卡或积分兑换码"
 										className={inputCls}
 									/>
 									<button onClick={() => void handleAny()} disabled={anyBusy || !anyCode.trim()} className={btnCls}>
@@ -296,7 +283,7 @@ export function RechargeCenter({ open, onClose, onChanged }: { open: boolean; on
 								</div>
 								{msgView(anyMsg)}
 								<div className="text-[10px] text-muted-foreground leading-relaxed">
-									自动识别类型：<span className="font-mono">mc-</span> 开头=会员卡（开通/续费会员）；<span className="font-mono">sc-</span> 开头=扩容卡（提升收藏空间，团队卡请到「团队」页由团长使用）；其余=积分兑换码（直接到账）。
+									自动识别类型：<span className="font-mono">mc-</span> 开头=会员卡（开通/续费会员）；其余=积分兑换码（直接到账）。
 								</div>
 							</div>
 						</div>

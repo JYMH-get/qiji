@@ -17,6 +17,7 @@ import { useSettingsStore } from "@/store/settingsStore";
 import { listPresetSchemes } from "@/lib/presetSchemes";
 import { mapUpstreamText } from "@/lib/upstreamText";
 import type { ShotMaterial } from "@/services/projectFile";
+import { materialPromptState } from "@/lib/materialPrompt";
 
 export interface NodePromptEditorHandle {
 	/** 在提示词光标处插入一枚预设胶囊（供功能栏「预设方案」按钮调用） */
@@ -28,11 +29,13 @@ export const NodePromptEditor = forwardRef<NodePromptEditorHandle, {
 	prompt: string;
 	onChange: (v: string) => void;
 	placeholder?: string;
+	onExpand?: () => void;
 	style?: React.CSSProperties;
 	/** 内容自适应高度的上下限（超过 maxHeight 内部滚动，避免面板被撑到无限高）*/
 	minHeight?: number;
 	maxHeight?: number;
-}>(function NodePromptEditor({ nodeId, prompt, onChange, placeholder, style, minHeight = 96, maxHeight = 300 }, ref) {
+}>(function NodePromptEditor({ nodeId, prompt, onChange, placeholder, style, minHeight = 96, maxHeight = 300, onExpand }, ref) {
+	const presentation = useCanvasStore(s => s.nodes[nodeId]?.data.params.materialPrompt);
 	const editorRef = useRef<PromptMentionHandle>(null);
 	const [mentionPos, setMentionPos] = useState<{ x: number; y: number } | null>(null);
 	const [importPos, setImportPos] = useState<{ x: number; y: number } | null>(null);
@@ -80,9 +83,9 @@ export const NodePromptEditor = forwardRef<NodePromptEditorHandle, {
 	useLibraryStore((s) => s.assets);
 
 	const cands = getNodeMaterialItems(nodeId);
-	const mkey = cands.map((c) => `${c.tag}|${c.uri}|${c.name}|${c.media}`).join(";");
+	const mkey = cands.map((c) => `${c.tag}|${c.uri}|${c.name}|${c.media}|${c.assetId}`).join(";");
 	const materials = useMemo<ShotMaterial[]>(
-		() => cands.map((c) => ({ id: c.tag, media: c.media, name: c.name || "", uri: c.uri, kind: "local" } as ShotMaterial)),
+		() => cands.map((c) => ({ id: c.tag, assetId: c.assetId, media: c.media, name: c.name || "", uri: c.uri, kind: "local" } as ShotMaterial)),
 		[mkey], // eslint-disable-line react-hooks/exhaustive-deps
 	);
 
@@ -110,6 +113,8 @@ export const NodePromptEditor = forwardRef<NodePromptEditorHandle, {
 			<PromptMentionEditor
 				ref={editorRef}
 				value={displayedPrompt}
+				materialPrompt={materialPromptState(presentation)}
+				onExpand={onExpand}
 				materials={materials}
 				presets={presetOptions}
 				onChange={onChange}
@@ -117,8 +122,8 @@ export const NodePromptEditor = forwardRef<NodePromptEditorHandle, {
 				onImportProbe={(pos) => setImportPos(pos)}
 				onPasteMedia={(files) => void addNodeMaterialFiles(nodeId, files)}
 				placeholder={placeholder}
-				className="Qiji-scroll-thin nodrag"
-				style={{ minHeight, maxHeight, width: "100%", minWidth: 0, padding: 8, fontSize: 12, lineHeight: 1.5, color: "#e6e6e6", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, overflowY: "auto" }}
+				className="Qiji-scroll-thin nodrag qj-prompt-readable"
+				style={{ minHeight, maxHeight, width: "100%", minWidth: 0, padding: 8, fontSize: 14, lineHeight: 1.5, color: "#e6e6e6", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, overflowY: "auto" }}
 			/>
 			{/* @ 候选框必须 portal 到 body：操作面板容器带 transform(scale/translate)，
 			    transform 祖先会劫持 position:fixed 的定位基准——不 portal 的话候选框按视口坐标

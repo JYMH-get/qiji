@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';import fs from 'node:fs';
+if(!process.cwd().includes('qiji-team-wallets-'))throw Error('Sandbox only');globalThis.fetch=async()=>{throw Error('No network')};
+const users=await import('../src/store/users.ts'),teams=await import('../src/store/teams.ts'),agents=await import('../src/store/agents.ts');
+(await import('../src/store/credits.ts')).selfHealCredits();teams.migrateTeamWallets();
+const legacy=JSON.parse(fs.readFileSync('data/team-wallet-legacy-proof.json','utf8'));
+assert.equal(users.getUser(legacy.userId).credits,30);assert.equal(teams.grantedOf(legacy.teamId,legacy.userId),50);assert.equal(users.getUser(legacy.leaderId).credits,100);
+const settled=JSON.parse(fs.readFileSync('data/team-wallet-restart-proof.json','utf8'));
+await (await import('../src/store/textBilling.ts')).recoverTextBillingResults();
+assert.deepEqual([users.getUser(settled.leaderId).credits,users.getUser(settled.userId).credits,agents.getAgent(settled.agentId).credits],settled.balances);
+console.log('Team wallet restart: legacy personal30/team50 preserved; token remains idempotent');
+(await import('../src/store/sqlite.ts')).closeSqlite();

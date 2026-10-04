@@ -60,7 +60,7 @@ try{
  models.updateModel(modelId,{tokenPricing:{...p,multiplier:.25,rates:{input:500,output:3000,cachedInput:50}}});release();held=undefined;
  const done=await terminal(id);eq(done.status,'success','success');eq(done.result.billing.cost,4,'price snapshot survives config edit');eq(u.credits,before-4,'refund6');eq(done.result.usage.inputTokens,1000,'raw upstream count forwarded');eq(done.result.usage.estimate,undefined,'no local estimate');
  const log=logs.listLogs({model:modelId,limit:1}).items[0];eq(log.cost,4,'log updated to final');eq(log.usage.outputTokens,1000,'log retains usage');
- const balance=u.credits;ledger.finishTextBilling(log.id,done.result);ledger.recoverTextBillingResults();eq(u.credits,balance,'duplicate and recovery idempotent');
+ const balance=u.credits;ledger.finishTextBilling(log.id,done.result);await ledger.recoverTextBillingResults();eq(u.credits,balance,'duplicate and recovery idempotent');
  models.updateModel(modelId,{tokenPricing:p});
  rawUsage={prompt_tokens:100000,completion_tokens:10000};const c=await call(),d=await terminal(c.json().taskId);eq(d.result.billing.cost,80,'supplement70');eq(u.credits,balance-80,'correct supplement');
  users.applyUserCreditsDelta(u.id,u.id,10-u.credits);users.persistUsers();rawUsage={prompt_tokens:100000,completion_tokens:10000};const debt=await call();await terminal(debt.json().taskId);eq(u.credits,-70,'final settlement permits debt');const sent=calls;eq((await call()).statusCode,402,'debt blocks new requests');eq(calls,sent,'no upstream when indebted');
@@ -90,7 +90,7 @@ try{
  eq((await app.inject({method:'POST',url:'/admin-api/models/'+modelId+'/verify-token-usage',headers:admin})).statusCode,404,'probe endpoint removed');
  eq(calls,noProbeCalls,'removed probe makes no request');
  models.updateModel(modelId,{tokenPricing:p});
- const catalog=(await app.inject({method:'GET',url:'/v1/catalog',headers})).json();eq(catalog.models.find(x=>x.id===modelId).tokenPricing.rates.input,5,'catalog exposes pricing');
+ const catalog=(await app.inject({method:'GET',url:'/v1/catalog',headers})).json();eq(catalog.models.find(x=>x.id===modelId).tokenPricing,undefined,'catalog hides text pricing');
 
  const teams=await import('../src/store/teams.ts');
  const leader=users.createUser({name:'shared leader',credits:100}),member=users.createUser({name:'shared member',credits:300});
@@ -102,7 +102,7 @@ try{
  const latest=logs.listLogs({userId:member.id,limit:1}).items[0];
  const saved=JSON.parse(db.prepare('SELECT data FROM text_billing WHERE log_id=?').get(latest.id).data);saved.finalized=false;delete saved.result.billing;
  db.prepare('UPDATE text_billing SET data=? WHERE log_id=?').run(JSON.stringify(saved),latest.id);
- ledger.recoverTextBillingResults();eq(leader.credits,96,'crash between money and result is idempotent');
+ await ledger.recoverTextBillingResults([latest.id]);eq(leader.credits,96,'crash between money and result is idempotent');
  // A refund still credits an indebted payer while other requests are in flight.
  users.applyUserCreditsDelta(leader.id,leader.id,-200,true);users.persistUsers();
  const debtRefund=credits.settle({reason:'refund',payerId:leader.id,statsUserId:member.id,userAmount:-10,agents:[]});eq(debtRefund.ok,true,'partial debt refund succeeds');eq(leader.credits,-94,'debt refund adds10');
@@ -116,6 +116,19 @@ try{
  const nodeSingle=await app.inject({method:'POST',url:'/v1/generate',headers:nodeHeaders,payload:request()});eq(nodeSingle.statusCode,200,'node generate accepted');eq((await terminal(nodeSingle.json().taskId)).result.billing.cost,4,'node HTTP final4');eq(agent.credits,92,'node single pool debit4');
  const nodeBatch=await app.inject({method:'POST',url:'/v1/batch',headers:nodeHeaders,payload:{tasks:[request(),request()]}});eq(nodeBatch.statusCode,200,'node batch accepted');
  for(const taskId of nodeBatch.json().taskIds)eq((await terminal(taskId)).result.billing.cost,4,'node batch settles each');eq(agent.credits,84,'node batch pool debit8');
+ const splitUser=users.createUser({name:'split usage fixture',credits:1000});
+ const splitHeaders={authorization:'Bearer '+splitUser.accessKey,'x-device-id':'split-usage'};
+ for (const completion of [1418,6784]) {
+  rawUsage={prompt_tokens:7248,completion_tokens:completion,total_tokens:14032,completion_tokens_details:{reasoning_tokens:5366}};
+  const response=await app.inject({method:'POST',url:'/v1/generate',headers:splitHeaders,payload:request()});
+  eq(response.statusCode,200,'split usage request accepted');
+  const result=await terminal(response.json().taskId);
+  eq(result.status,'success','real translator accepts split/inclusive reasoning');
+  eq(result.result.text,'OK','generated text is delivered');
+  eq(result.result.usage.outputTokens,6784,'reasoning charged exactly once');
+  eq(result.result.billing.cost,25,'split/inclusive usage identical final price');
+ }
+ eq(splitUser.credits,950,'two requests debit final price only');
  const merged=pricing.mergeTextUsage(usage,usage);eq(merged.inputTokens,2000,'chain input summed');eq(merged.parts.length,2,'chain per-call context retained');
  const discounted=pricing.textCharge(p,{...usage,inputTokens:100000,outputTokens:10000},0,50);eq(discounted.items,{input:25,output:15,cache:0},'membership discounts each item before rounding');
  const unverified=models.createModel({id:'token-unverified',label:'待验证',enabled:false,capability:'text',protocol:'openai-chat',params:[],tokenPricing:p});

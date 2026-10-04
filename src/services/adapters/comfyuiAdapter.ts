@@ -264,7 +264,7 @@ const H3_ADAPTER: ModelAdapter = {
 		// ① 守卫 + 自动分流选端点（多台=并行探测 /queue 负载，派给最闲一台、平手轮转；全部不可达=明确报错）
 		if (!getComfyuiFeature()) throw new Error("ComfyUI 直连功能未对当前账号开放");
 		if (!isComfyuiBound()) throw new Error("尚未绑定 ComfyUI：请到「个人中心 → ComfyUI 直连」绑定地址后重试");
-		precheckThirdPartyFee(); // 手续费余额不足直接拒单（不打第三方）
+		await precheckThirdPartyFee(); // 手续费余额不足直接拒单（不打第三方）
 		const endpoint = await pickComfyEndpoint();
 		const base = endpoint.url;
 

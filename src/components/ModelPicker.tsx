@@ -9,14 +9,15 @@
  * 生成时用 effectiveModelKey(cap) 解析出生效模型，显式传给 runPurpose({modelKey})。
  */
 import { useMemo } from "react";
+import { TextReasoningSettings } from './TextReasoningSettings';
 import { migratedRouteKey } from '@/lib/routeParams';
-import { SEEDANCE_FAMILY_ID, type Capability } from "@/contract";
+import { type Capability } from "@/contract";
 import { useCatalogStore } from "@/store/catalogStore";
 import { useProjectStore } from "@/store/projectStore";
 import { LIBTV_MODEL_CHOICES } from "@/services/adapters/libtvAdapter";
 import { DREAMINA_MODEL_CHOICES } from "@/services/adapters/dreaminaAdapter";
 import { COMFYUI_MODEL_CHOICES } from "@/services/adapters/comfyuiAdapter";
-import { modelChannels, buildModelSourceOptions, sourceValueOf, modelForSource, modelVariantsOf, modelFamilies, familyOf, modelForFamily, channelOf, type ModelOpt } from "@/services/adapters/localChannels";
+import { LIBTV_FAMILY_OPTIONS, DREAMINA_FAMILY_OPTIONS, familyFirstSelection, modelForLine, modelChannels, buildModelSourceOptions, sourceValueOf, modelForSource, modelVariantsOf, modelFamilies, familyOf, modelForFamily, channelOf, type ModelOpt } from "@/services/adapters/localChannels";
 import { useConnectionStore, useComfyuiFeature, useDreaminaFeature, useLibtvFeature } from "@/store/connectionStore";
 import { useLibtvStore } from "@/store/libtvStore";
 import { useDreaminaStore } from "@/store/dreaminaStore";
@@ -29,10 +30,9 @@ function firstModelKey(cap: Capability): string {
 	const m = models.find((x) => x.capability === cap && (!x.modeId || feats?.modes?.[x.modeId] !== false));
 	if (m) return m.id;
 	if (cap === "video") {
-		const routed = useCatalogStore.getState().catalog?.routedFamilies;
-		const local = LIBTV_MODEL_CHOICES.find(c => !routed?.includes(c.familyId));
+		const local = LIBTV_MODEL_CHOICES[0];
 		if (local && feats?.libtv !== false && useLibtvStore.getState().authed) return local.id;
-		if (!routed?.includes(SEEDANCE_FAMILY_ID) && feats?.dreamina !== false && useDreaminaStore.getState().authed) return DREAMINA_MODEL_CHOICES[0].id;
+		if (feats?.dreamina !== false && useDreaminaStore.getState().authed) return DREAMINA_MODEL_CHOICES[0].id;
 		if (feats?.comfyui !== false && isComfyuiBound()) return COMFYUI_MODEL_CHOICES[0].id;
 	}
 	return "";
@@ -45,9 +45,8 @@ function keyAvailable(cap: Capability, key?: string): boolean {
 	const m = (useCatalogStore.getState().catalog?.models ?? []).find((x) => x.id === key);
 	if (m) return m.capability === cap && (!m.modeId || feats?.modes?.[m.modeId] !== false);
 	if (cap === "video") {
-		const routed = useCatalogStore.getState().catalog?.routedFamilies;
-		if (LIBTV_MODEL_CHOICES.some((c) => c.id === key && !routed?.includes(c.familyId))) return feats?.libtv !== false && useLibtvStore.getState().authed;
-		if (!routed?.includes(SEEDANCE_FAMILY_ID) && DREAMINA_MODEL_CHOICES.some((c) => c.id === key)) return feats?.dreamina !== false && useDreaminaStore.getState().authed;
+		if (LIBTV_MODEL_CHOICES.some((c) => c.id === key)) return feats?.libtv !== false && useLibtvStore.getState().authed;
+		if (DREAMINA_MODEL_CHOICES.some((c) => c.id === key)) return feats?.dreamina !== false && useDreaminaStore.getState().authed;
 		if (COMFYUI_MODEL_CHOICES.some((c) => c.id === key)) return feats?.comfyui !== false && isComfyuiBound();
 	}
 	return false;
@@ -101,13 +100,12 @@ export function useCapModelOptions(cap: Capability): ModelOpt[] {
 		.filter((m) => !m.modeId || modeGates?.[m.modeId] !== false)
 		.map((m) => ({ id: m.id, label: m.label, modeId: m.modeId, modeName: modeName(m.modeId), familyId: m.familyId, familyName: famName(m.familyId) }));
 	// 本地模型注入（视频能力 + 已授权 + 管理端未关入口；请求走本机 CLI 不经管理端）：
-	// LibTV 家族按款自带（Seedance 2.0 / MiniMax H3），即梦全系 Seedance；catalog 有同 id 家族时显示名跟随
-	const seedanceName = famName(SEEDANCE_FAMILY_ID) || "Seedance 2.0";
+	// 即梦、LibTV 各自独立展示家族，模型名直接作为路线。
 	if (cap === "video" && libtvOn && libtvAuthed) {
-		opts.push(...LIBTV_MODEL_CHOICES.map((c) => ({ id: c.id, label: c.label, familyId: c.familyId, familyName: famName(c.familyId) || c.familyName })));
+		opts.push(...LIBTV_FAMILY_OPTIONS);
 	}
 	if (cap === "video" && dreaminaOn && dreaminaAuthed) {
-		opts.push(...DREAMINA_MODEL_CHOICES.map((c) => ({ id: c.id, label: c.label, familyId: SEEDANCE_FAMILY_ID, familyName: seedanceName })));
+		opts.push(...DREAMINA_FAMILY_OPTIONS);
 	}
 	// ComfyUI 直连（已绑定地址 + 管理端未关入口）：单款 MiniMax H3，家族按款自带 fam-minimax
 	if (cap === "video" && comfyuiOn && comfyuiBound) {
@@ -152,12 +150,12 @@ export default function ModelPicker({ cap, label = "模型", style, noPlaceholde
 	const routed = useCatalogStore(s => s.catalog?.routedFamilies);
 	const value = override && opts.some((o) => o.id === override) ? override : migratedRouteKey(override, opts, routed) ?? opts[0]?.id ?? '';
 
-	// 第163轮：视频/图像能力改「家族 → 渠道/线路 → 模型」三级选择（家族=模型种类一级筛选；
-	// 渠道/线路=模式名/LibTV/即梦；模型=源内款式）。其余能力（文/音/处理类）保持旧两级：
-	// 本地 CLI 渠道折叠、管理端模型平铺=源本身，行为不变。
-	const fold = cap === "video" || cap === "image";
+	// 四种生成能力统一选择家族 → 线路 → 本线路款式；处理类保留原模型源选择。
+	const fold = ["video","image","text","audio"].includes(cap);
 	const famOrder = useFamilyOrder();
-	const families = useMemo(() => (fold ? modelFamilies(opts, famOrder) : []), [fold, opts, famOrder]);
+	const allFamilies = useMemo(() => (fold ? modelFamilies(opts, famOrder) : []), [fold, opts, famOrder]);
+	const selection = familyFirstSelection(allFamilies,value);
+	const families = selection.families;
 	const curFam = fold ? familyOf(value, families) : null;
 	const famChannels = curFam?.channels ?? [];
 	const curCh = fold ? channelOf(value, famChannels) : null;
@@ -191,20 +189,21 @@ export default function ModelPicker({ cap, label = "模型", style, noPlaceholde
 							<option key={f.familyId} value={`f:${f.familyId}`} style={optSt}>{f.familyName}</option>
 						))}
 					</select>
-					{curFam && (
+					{selection.channels.length > 0 && (
 						<select
 							title="线路"
-							value={curCh ? sourceValueOf(value, famChannels) : ""}
-							onChange={(e) => commit(modelForSource(e.target.value, value, famChannels))}
+							value={selection.current ? sourceValueOf(value, selection.channels) : ""}
+							onChange={(e) => commit(modelForLine(e.target.value, value, allFamilies))}
 							className="qiji-field-select"
 							style={selSt}
 						>
-							{famChannels.map((ch) => (
+							{!selection.current && <option value="" style={optSt}>选择线路</option>}
+							{selection.channels.map((ch) => (
 								<option key={ch.channel} value={`src:${ch.channel}`} style={optSt}>{ch.channel}</option>
 							))}
 						</select>
 					)}
-					{curCh && !value.startsWith("route:") && (
+					{curCh && !curCh.modelAsLine && !value.startsWith("route:") && (
 						<select
 							title="模型（本线路款式）"
 							value={value}
@@ -218,6 +217,7 @@ export default function ModelPicker({ cap, label = "模型", style, noPlaceholde
 						</select>
 					)}
 				</div>
+				{cap === 'text' && !controlled && <TextReasoningSettings modelKey={value} />}
 			</label>
 		);
 	}

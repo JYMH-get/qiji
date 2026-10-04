@@ -9,6 +9,7 @@
  * （reconcile.ts）处理：视频有上游 task_id 的续轮询，其余判失败并凭落盘的计费信息退款。
  */
 import { loadJson, scheduleSave } from "./db.ts";
+import { textBillingAmounts } from './textBilling.ts';
 import { recordRouteResult, isChannelFailure, type RouteTicket } from '../autoRouting.ts';
 import { scrubChannelInfo } from "../errorScrub.ts";
 import { finishRouteObservation, observeAccepted } from '../routeObservations.ts';
@@ -16,6 +17,8 @@ import type { Capability, TaskState, TaskStatus, AssetOut } from "../contract.ts
 
 /** 视频续轮询信息：重启后凭此恢复对上游的轮询（不重提交、不重扣费） */
 export interface TaskResume {
+	/** 提交时实际模型的结果存储策略；重启续跑保持原选择。 */
+	saveToOss?: boolean;
 	kind: "video";
 	/** 协议 id（内置 jianmeng-video/openai-video/volc-mediakit 或自定义协议 id），决定用哪套 poll 驱动 */
 	protocol: string;
@@ -30,6 +33,8 @@ export interface TaskResume {
 }
 
 export interface TaskRecord {
+	/** Caller identity also covers zero-cost and rejected batch tasks. */
+	ownerUserId?: string;
 	routing?: RouteTicket & { recorded?: boolean };
 	taskId: string;
 	clientTaskId?: string;
@@ -61,7 +66,7 @@ export interface TaskRecord {
 	 *  agentId/agentCost：第124轮前的单商旧字段，仅为读回存量落盘任务保留（退款兼容两种形态）；
 	 *  payerId（第172轮团队共享积分）：实际扣款人（共享模式=团长），退款退给它；缺省=userId 本人。
 	 *  userId 恒为实际发起请求的用户（「本人任务」校验/消耗统计归属都按它）。 */
-	billing?: { userId: string; payerId?: string; cost: number; refunded: boolean; agents?: { id: string; cost: number }[]; agentId?: string; agentCost?: number };
+	billing?: { userId: string; payerId?: string; userWallet?: import('./credits.ts').UserWalletRef; cost: number; refunded: boolean; agents?: { id: string; cost: number }[]; agentId?: string; agentCost?: number };
 	/** 对应的请求日志 id：重启对账时收尾日志用 */
 	logId?: string;
 	/** 终态时间（epoch ms）：落盘裁剪与 finishedAt 回显用 */
@@ -145,7 +150,7 @@ export function setTaskResume(taskId: string, resume: TaskResume): void {
  * 「用户侧 + 归属链各级」同进同出，分两次调用等于把原子性在退款侧又漏了一遍。
  * 实现在 store/credits.ts settle()，一次结算一条流水。
  */
-type ReverseFn = (b: { userId: string; payerId?: string; cost: number; agents: { id: string; cost: number }[]; ref?: string }) => void;
+type ReverseFn = (b: { userId: string; payerId?: string; userWallet?: import('./credits.ts').UserWalletRef; cost: number; agents: { id: string; cost: number }[]; ref?: string; logId?: string }) => import('./credits.ts').RequestRefundResult | void;
 let reverseHook: ReverseFn | null = null;
 export function setBillingReverseHook(fn: ReverseFn): void {
 	reverseHook = fn;
@@ -162,34 +167,43 @@ function refundBilling(rec: TaskRecord): void {
 	if (rec.billing.agentId && rec.billing.agentCost) {
 		agents.push({ id: rec.billing.agentId, cost: rec.billing.agentCost });
 	}
-	reverseHook({
+	const result = reverseHook({
 		userId: rec.billing.userId,
 		payerId: rec.billing.payerId,
+		userWallet: rec.billing.userWallet,
 		cost: rec.billing.cost > 0 ? rec.billing.cost : 0,
 		agents,
 		ref: rec.taskId,
+		logId: rec.logId,
 	});
-	rec.billing.refunded = true;
+	if (result && !result.ok) {
+		rec.error = `${rec.error ?? '任务失败'}（账务待核对：${result.error}）`;
+		return;
+	}
+	if (!result || result.status === 'refunded' || result.status === 'already-refunded') rec.billing.refunded = true;
 }
 
 /** 受理异步任务并扣费后调用：记录计费信息（落盘，重启后退款不丢），供失败时退款。
  *  agents=归属链各级渠道商的实扣（仅记 >0 的级）；payerId=实际扣款人（团队共享模式=团长，缺省=本人） */
-export function setTaskBilling(taskId: string, userId: string, cost: number, agents?: { id: string; cost: number }[], payerId?: string): void {
+export function setTaskBilling(taskId: string, userId: string, cost: number, agents?: { id: string; cost: number }[], payerId?: string, userWallet?: import('./credits.ts').UserWalletRef): void {
 	const rec = tasks.get(taskId);
-	const charged = (agents ?? []).filter((a) => a.cost > 0);
+	const charged = (agents ?? []).filter((a) => a.cost > 0).map(a => ({ ...a }));
+	if (rec) rec.ownerUserId = userId;
 	if (rec && (cost > 0 || charged.length > 0)) {
 		const finalCost = rec.doneResult?.billing?.cost;
     if (rec.doneResult?.billing && finalCost !== undefined) {
-      if (charged.length) charged.forEach(a => a.cost = finalCost); else cost = finalCost;
+      const amounts = rec.logId ? textBillingAmounts(rec.logId) : undefined;
+      if (amounts) { cost = amounts.userAmount; charged.splice(0, charged.length, ...amounts.agents.filter(a => a.cost > 0)); }
+      else if (charged.length) charged.forEach(a => a.cost = finalCost); else cost = finalCost;
     }
-    rec.billing = { userId, cost, refunded: false, agents: charged.length ? charged : undefined, payerId: payerId && payerId !== userId ? payerId : undefined };
+    rec.billing = { userId, userWallet, cost, refunded: false, agents: charged.length ? charged : undefined, payerId: payerId && payerId !== userId ? payerId : undefined };
 		// ⚠ 快失败竞态补退（2026-07-23 实锤，勿回退）：翻译器**同步守卫**失败（未配上游密钥/素材守卫/
 		// 缺 Base URL 等不经 await 直接返回的错误）时，failTask 以微任务身份抢在 routes 的 applyBilling/
 		// 本函数之前执行——那一刻 billing 还没挂上、退款空转，随后这里才把用户+渠道商链的钱扣实，
 		// 且再无人回头退（启动对账只管待办任务）。故计费登记发现任务已是失败终态 → 当场补退。
 		if (rec.doneStatus === "failed") refundBilling(rec);
-		persist();
 	}
+	if (rec) persist();
 }
 
 export function nextTaskId(): string {
@@ -283,7 +297,9 @@ export function completeTask(taskId: string, result: TaskState["result"]): void 
 		 rec.doneStatus = "success";
 		rec.doneResult = result;
     if (rec.billing && result?.billing) {
-      if (rec.billing.agents?.length) rec.billing.agents.forEach(a => a.cost = result.billing!.cost);
+      const amounts = rec.logId ? textBillingAmounts(rec.logId) : undefined;
+      if (amounts) { rec.billing.cost = amounts.userAmount; rec.billing.agents = amounts.agents; }
+      else if (rec.billing.agents?.length) rec.billing.agents.forEach(a => a.cost = result.billing!.cost);
       else rec.billing.cost = result.billing.cost;
     }
 		rec.finishedAt = Date.now();
@@ -308,7 +324,7 @@ export function rewriteTaskRawResult(
 	if (!rec) return { ok: false, reason: "not_found" };
 	if (rec.billing?.userId && rec.billing.userId !== userId) return { ok: false, reason: "forbidden" };
 	const a0 = rec.doneResult?.assets?.[0];
-	if (rec.doneStatus !== "success" || !a0 || (a0.meta as { rehosted?: unknown } | undefined)?.rehosted !== false) {
+	if (rec.doneStatus !== "success" || !a0 || a0.meta?.saveToOss === false || (a0.meta as { rehosted?: unknown } | undefined)?.rehosted !== false) {
 		return { ok: false, reason: "not_rewritable" };
 	}
 	rec.doneResult!.assets![0] = {
@@ -385,7 +401,7 @@ export function getTaskState(taskId: string): TaskState | undefined {
 	};
 }
 
-export function failTask(taskId: string, error: string): void {
+export function failTask(taskId: string, error: string, options?: { accountingHandled: true }): void {
 	const rec = tasks.get(taskId);
 	if (!rec || rec.doneStatus) return;
 	rec.doneStatus = "failed";
@@ -396,7 +412,7 @@ export function failTask(taskId: string, error: string): void {
 	// 失败退款：异步任务受理时已预扣，后台失败则退回（一次性；refunded 随盘防重启后重复退）。
 	// 渠道商用户链式扣费（第124轮）：用户积分与归属链各级渠道商的结算积分同退。
 	// 快失败竞态（billing 尚未挂上就走到这里）由 setTaskBilling 侧补退，两处共用 refundBilling 一把尺。
-	refundBilling(rec);
+	if (!options?.accountingHandled) refundBilling(rec);
 	persist();
 }
 
@@ -414,3 +430,5 @@ export function setTaskRouting(taskId: string, ticket: RouteTicket) {
 	settleRouting(rec); persist();
 }
 export function taskPublicModel(taskId: string): string | undefined { return tasks.get(taskId)?.routing?.publicModel; }
+export function taskOwner(taskId: string): string | undefined { const task = tasks.get(taskId); return task?.ownerUserId ?? task?.billing?.userId; }
+export function setTaskOwner(taskId: string, userId: string): void { const task = tasks.get(taskId); if (task) { task.ownerUserId = userId; persist(); } }

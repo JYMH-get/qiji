@@ -1,3 +1,4 @@
+import { ViewportVideo } from "@/components/ViewportVideo";
 
 import { useRef, useState, useEffect, useMemo, type ReactNode, type ComponentType } from "react";
 import { ImageOff, RefreshCw, ScrollText, AudioLines, Film, Globe, User, Image as ImageIco, Package, PawPrint, Users, Layers, LayoutGrid } from "lucide-react";
@@ -11,6 +12,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useUiStore } from "@/store/uiStore";
 import { openLightbox } from "@/store/lightboxStore";
 import { dispatchCommand } from "@/command/dispatch";
+import { isRunnableNode } from "@/command/nodeRunEligibility";
 import { resolveDisplayUri } from "@/services/projectAssetHeal";
 import { progressLabel } from "@/lib/queueLabel";
 import { getPlugin } from "./pluginRegistry";
@@ -165,12 +167,9 @@ export function ResultView({
 	);
 	const params = node?.data.params ?? {};
 	const status = useCanvasStore((s) => s.runtime[nodeId]?.status ?? "idle");
-	const progress = useCanvasStore((s) => s.runtime[nodeId]?.progress ?? 0);
+	const progress = useCanvasStore((s) => (kind === "text" || kind === "script") ? (s.runtime[nodeId]?.progress ?? 0) : 0);
 	const errorMsg = useCanvasStore((s) => s.runtime[nodeId]?.error ?? null);
-	// 第251轮排队提示：三个单值选择器（仅该值变化才重渲染，合 §9 画布渲染性能规则）
-	const queuePosition = useCanvasStore((s) => s.runtime[nodeId]?.queuePosition);
-	const queueTotal = useCanvasStore((s) => s.runtime[nodeId]?.queueTotal);
-	const stageText = useCanvasStore((s) => s.runtime[nodeId]?.stageText);
+	const chatPartial = useCanvasStore((s) => kind === "chat" ? s.runtime[nodeId]?.partialText : undefined);
 	const edges = useCanvasStore((s) => s.edges);
 	// 双快原则·预览本地（第146轮，勿回退）：显示按资产 id **现查三元映射的活本地副本**优先——
 	// 库记录/节点里存的 uri 是写入时快照（可能是死 blob:/失效直链），映射由 上传/自愈/重传 随时升级，
@@ -210,12 +209,12 @@ export function ResultView({
 		if (lod) return <LodBlock label="AI 对话" icon={ScrollText} />;
 		const p = node?.data.params ?? {};
 		const question = String(p.question ?? p.prompt ?? "");
-		const answer = typeof node?.data.resultText === "string" ? node.data.resultText : "";
+		const answer = isLoading && chatPartial ? chatPartial : typeof node?.data.resultText === "string" ? node.data.resultText : "";
 		const skipped = !!p.skipped;
 		const boxCls =
 			"Qiji-scroll-thin flex-1 min-h-[28px] rounded-md border border-[color:var(--node-chat)]/45 bg-white/[0.04] px-2 py-1 text-[10px] leading-snug whitespace-pre-wrap break-words overflow-y-auto";
 		let answerView: ReactNode;
-		if (isFailed) answerView = <span className="text-red-400/90">{errorMsg || "生成失败"}</span>;
+		if (isFailed) answerView = <>{answer && <div>{answer}</div>}<div role="alert" className="text-red-400/90">{errorMsg || "生成失败"}{answer ? "（已保留上次回答）" : ""}</div></>;
 		else if (answer) answerView = answer;
 		else if (isLoading) answerView = <span className="opacity-55">回答中…</span>;
 		else answerView = <span className="opacity-45">（待回答）</span>;
@@ -265,13 +264,7 @@ export function ResultView({
 			<div className="Qiji-result flex flex-col items-center justify-center gap-2.5">
 				<div className="Qiji-pulsebars" aria-hidden><span /><span /><span /><span /><span /></div>
 				<span className="text-[10px] text-muted-foreground tracking-widest font-medium select-none">
-					{status === "uploading"
-					? "上传中…"
-					: status === "scheduled"
-						? "已排期"
-						: status === "queued" && queuePosition == null
-							? "排队中…"
-							: progressLabel(progress, { queuePosition, queueTotal, stageText })}
+					<CanvasProgressLabel nodeId={nodeId} />
 				</span>
 			</div>
 		);
@@ -300,7 +293,7 @@ export function ResultView({
 				<div className="text-[11px] text-red-400/90 text-center leading-snug line-clamp-2 max-w-[220px]">
 					{errorMsg || "生成失败"}
 				</div>
-				<button
+				{isRunnableNode(node, plugin) && <button
 					type="button"
 					className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-medium text-foreground/80 transition hover:scale-[1.03] hover:bg-white/10 hover:text-foreground cursor-pointer select-none"
 					onClick={(e) => {
@@ -310,7 +303,7 @@ export function ResultView({
 				>
 					<RefreshCw className="size-3" />
 					重试
-				</button>
+				</button>}
 			</div>
 		);
 	}
@@ -525,13 +518,12 @@ function VideoResult({
 				openLightbox({ uri, name, media: "video" });
 			}}
 		>
-			<video
-				ref={ref}
+			<ViewportVideo
+				videoRef={ref}
 				src={uri}
 				className="Qiji-result__video"
 				muted
 				playsInline
-				preload="metadata"
 				// 纯展示：不拦截指针事件，点击/拖拽交给节点本体（选中/聚焦/打开面板/拖动）
 				style={{ pointerEvents: "none" }}
 				onLoadedMetadata={(e) => {
@@ -545,3 +537,11 @@ function VideoResult({
 
 // 音频结果渲染已重做为 AudioWaveCard（波形+单播放按钮，无进度条；双击灯箱才有进度条）——
 // 旧原生 <audio controls> 形态（节点又高又空 + 进度条吞指针事件致拖放「粘鼠标」）勿回退，见 AudioWave.tsx。
+
+function CanvasProgressLabel({ nodeId }: { nodeId: string }) {
+    const runtime = useCanvasStore(s => s.runtime[nodeId]);
+    if (runtime?.status === "uploading") return <>上传中…</>;
+    if (runtime?.status === "scheduled") return <>已排期</>;
+    if (runtime?.status === "queued" && runtime.queuePosition == null) return <>排队中…</>;
+    return <>{progressLabel(runtime?.progress ?? 0, runtime)}</>;
+}

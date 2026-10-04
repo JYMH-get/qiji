@@ -128,7 +128,7 @@ try {
     }
     save(c=>{c.lines[1].members.forEach(r=>{r.priority=0;r.concurrencyWeight=1;});c.lines[1].members[0].defaults={watermark:'true',generate_audio:'false'};});
     const withDefaults=routing.selectRoute(req());
-    eq(withDefaults.request.params.watermark,'true','route defaults override model defaults');
+    eq(withDefaults.request.params.watermark,undefined,'route does not inject member or model defaults');
     eq(withDefaults.request.params.duration,5,'user duration untouched');
     const u=users.createUser({name:'线路验收',credits:100000,features:{assetMode:true}});
     const headers={authorization:'Bearer '+u.accessKey};
@@ -139,7 +139,10 @@ try {
     eq((await call('GET','/admin-api/modes',undefined,admin)).json().items.length,6,'access switches are lines');
     eq((await call('POST','/admin-api/modes',{name:'old'},admin)).statusCode,404,'old mode creation removed');
     const balance=u.credits;
-    for(const body of [req('007-sd2.0'),req('dm933-sd2.0'),req('route:seedance-budget'),req('route:seedance-promo',{duration:30}),req('route:seedance-promo',{watermark:'true'})]) eq((await call('POST','/v1/generate',body)).statusCode,400,'invalid/raw request rejected');
+    const extraParams=req('route:seedance-promo',{watermark:'true',providerOptions:{strength:0.7}});
+    eq(routing.prepareRoutingRequest(extraParams),undefined,'additional generation parameters are accepted');
+    eq(routing.selectRoute(extraParams).request.params,extraParams.params,'additional generation parameters are preserved');
+    for(const body of [req('007-sd2.0'),req('os933-sd2.0'),req('route:seedance-budget'),req('route:seedance-promo',{duration:30})]) eq((await call('POST','/v1/generate',body)).statusCode,400,'invalid/raw request rejected '+body.model+' '+JSON.stringify(body.params));
     eq(u.credits,balance,'rejected requests not charged');eq(posts.length,0,'rejected requests never submitted');
     users.updateUser(u.id,{features:{modes:{'route:seedance-promo':false}}});
     eq((await call('POST','/v1/generate',req())).statusCode,400,'line user permission enforced');
@@ -301,14 +304,14 @@ try {
     eq(observations.routeActiveCounts('seedance-promo'),{},'disabled in-flight task can finish and release');
     const beforeVariants=routing.routingConfig();
     const variants=routing.withSeedanceVariantRouting(beforeVariants);
-    eq(variants.lines.length,beforeVariants.lines.length+6,'Fast and Mini each receive three lines');
+    eq(variants.lines.length,beforeVariants.lines.length+8,'Fast and Mini each receive four lines');
     eq(variants.lines.slice(0,beforeVariants.lines.length),beforeVariants.lines,'existing routes unchanged by variant extension');
     eq(routing.withSeedanceVariantRouting(variants),variants,'variant initialization idempotent');
     routing.saveRoutingConfig(variants);
     for(const variant of ['fast','mini']) {
       const family='fam-seedance-2-0-'+variant,lineId='seedance20-'+variant+'-promo';
       const familyLines=routing.routingConfig().lines.filter(l=>l.familyId===family);
-      eq(familyLines.map(l=>l.name),['低价','优惠','官方'],'variant default line names');
+      eq(familyLines.map(l=>l.name),['低价','优惠','稳定','官方'],'variant default line names');
       eq(familyLines.filter(l=>l.enabled).map(l=>l.name),['优惠'],'unconfigured official and budget hidden');
       ok(buildCatalog().models.some(m=>m.id==='route:'+lineId&&m.familyId===family),'variant visible as independent public family');
       eq(models.getModelDef('os933-sd2.0-'+variant).familyId,family,'stored model assignment migrated');

@@ -118,6 +118,33 @@ describe("stripLegend / applyLegend — 素材增删同步图例（删不留残�
             "【素材图例】@Image1 是 四爷；\n\n@Image1 登场",
         );
     });
+
+    it("双图例按当前六张图刷新，清除第二段旧第七张并保留首段用户说明", () => {
+        const materials = ["刘备", "曹操", "孙权", "赵云", "典韦", "甘宁"].map((name, i) => mat(String(i), name, "image"));
+        const current = buildLegend(materials, true);
+        const customized = current.replace("刘备；", "刘备，身穿战甲；");
+        const outdated = buildLegend([...materials, mat("scene", "镇魂宗外", "image")], true);
+        const prompt = `${customized}\n\n${outdated}\n\n刘备持剑，曹操站在旁边。`;
+        const expected = `${customized}\n\n刘备持剑，曹操站在旁边。`;
+        expect(applyLegend(prompt, current)).toBe(expected);
+        expect(applyLegend(prompt, current, { media: "image", n: 7 })).toBe(expected);
+        expect(applyLegend(expected, current)).toBe(expected);
+        expect(stripLegend(prompt)).toBe("刘备持剑，曹操站在旁边。");
+    });
+
+    it("去重图例保留同行正文和声音配对，后段说明不覆盖首段", () => {
+        const first = "【素材图例】@Image1 是 刘备，青年造型；@Image1的声音参考@Audio1；";
+        const second = "【素材图例】@Image1 是 旧造型，@Image1的声音参考@Audio1，";
+        const prompt = `${first}镜头推近。\n${second}刘备开口，保留这句。`;
+        expect(applyLegend(prompt, first)).toBe(`${first}\n\n镜头推近。\n刘备开口，保留这句。`);
+        expect(stripLegend(prompt)).toBe("镜头推近。\n刘备开口，保留这句。");
+    });
+
+    it("重复图例清理不删除正文中单纯提到图例标记的文字", () => {
+        const legend = "【素材图例】@Image1 是 刘备；";
+        const body = "画面标题写【素材图例】四个字。";
+        expect(stripLegend(`${legend}\n${body}\n${legend}刘备站立。`)).toBe(`${body}\n刘备站立。`);
+    });
 });
 
 describe("remapBodyTags — 素材重排后正文内联 @ 引用按新旧编号置换", () => {

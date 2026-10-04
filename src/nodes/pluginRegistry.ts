@@ -148,6 +148,7 @@ export async function defaultNodeExecute(
 	opts?: { resumeTask?: { taskId: string; adapterKey: string } },
 ): Promise<void> {
 	const { useCanvasStore } = await import("@/store/canvasStore");
+	const { useProjectStore } = await import("@/store/projectStore");
 	const node = useCanvasStore.getState().nodes[nodeId];
 	if (!node) return;
 
@@ -157,10 +158,10 @@ export async function defaultNodeExecute(
 	// 请求身份快照（⚠ 第205轮补充2，勿改回「提交确认时现读」）：节点此刻必然在激活画布上——
 	// 项目路径/画布 key 在**执行开始**捕获。提交确认回执到达前用户可能已切画布/切项目，
 	// 那时现读会把身份记错位 → 任务完成后按错身份找不到节点，被误判「已删除」弹找回通知。
-	const ledgerIdentity = await (async () => {
-		const { useProjectStore } = await import("@/store/projectStore");
+	const ledgerIdentity = (() => {
 		const ps0 = useProjectStore.getState();
 		return {
+			projectInstanceId: ps0.projectInstanceId,
 			projectPath: ps0.savePath ?? "",
 			projectName: ps0.name,
 			canvasKey: ps0.canvasEpisodeId && ps0.episodes.some((e) => e.id === ps0.canvasEpisodeId)
@@ -173,7 +174,7 @@ export async function defaultNodeExecute(
 		useCanvasStore.getState().setRuntime(nodeId, patch);
 
 	// 断连找回模式（resumeCanvasNodeTasks 触发）：跳过清场/素材上传/提交，凭持久化凭据重挂轮询接回结果
-	const resumeTask = opts?.resumeTask;
+	const resumeTask = opts?.resumeTask ?? node.data.task;
 	// ── 断连保护（在途任务标记）：提交确认写入 node.data.task（随项目落盘），服务端给出终态后清除。
 	// 重开项目/切回画布时 resumeCanvasNodeTasks 凭它重挂轮询（不重新提交、不再扣费）。
 	const markNodeTask = (taskId: string, adapterKey: string): void => {
@@ -203,9 +204,9 @@ export async function defaultNodeExecute(
 		void import("@/store/projectStore").then((m) => m.useProjectStore.getState().scheduleAutoSave("canvas")).catch(() => {});
 	};
 	// 台账登记载荷统一从**执行开始时刻**取：节点信息随 params、身份用 ledgerIdentity 快照
-	const registerLedger = (taskId: string, adapterKey: string): void => {
+	const registerLedger = (taskId: string, adapterKey: string): Promise<void> => {
 		const p = node.data.params;
-		void import("@/store/requestLedgerStore").then((m) =>
+		return import("@/store/requestLedgerStore").then((m) =>
 			m.registerCanvasLedgerTask({
 				taskId,
 				adapterKey,
@@ -236,7 +237,7 @@ export async function defaultNodeExecute(
 
 	// AI对话：单轮问答（带上游记忆）。由 run 命令驱动，走专用执行。
 	if (plugin.nodeKind === "chat") {
-		await runChatNode(nodeId, plugin, node);
+		await runChatNode(nodeId, plugin, node, ledgerIdentity, useCanvasStore.getState(), opts?.resumeTask ?? node.data.task);
 		return;
 	}
 
@@ -319,6 +320,10 @@ export async function defaultNodeExecute(
 			} else {
 				inputText = resolvedPrompt;
 			}
+		}
+		if (plugin.capability === "image" || plugin.capability === "video") {
+			const { compileNodeMaterialPrompt } = await import("@/canvas/nodeMaterials");
+			inputText = compileNodeMaterialPrompt(nodeId, inputText);
 		}
 		// 内置提示词：调用模型前拼接在用户输入前（仅 ai.chat 作系统指令）。
 		// 资产/分集/分镜/故事板/智能推理等步骤的提示词正文均留服务端，按 templateId/purpose 调用。
@@ -567,12 +572,12 @@ export async function defaultNodeExecute(
 		const sharedInput = Object.keys(mergedInput).length ? mergedInput : undefined;
 
 		// 出图参数与资产模式一致：比例 + 分辨率 + 质量。上游尺寸由服务端转换。
-		let runParams: Record<string, unknown> = params;
+		let runParams: Record<string, unknown> = { ...params };
 		if (plugin.capability === "image") {
 			const { buildImageParams, imageResolutionOptions } = await import("@/lib/genParams");
 			const { useCatalogStore } = await import("@/store/catalogStore");
 			// 分辨率档按模型下发（catalog params.resolution 枚举）；残留档不在开放集时提交前归一
-			runParams = { ...params, ...buildImageParams(params, imageResolutionOptions(useCatalogStore.getState().model(modelKey))) };
+			runParams = { ...params, ...buildImageParams(params, imageResolutionOptions(useCatalogStore.getState().model(modelKey)), useCatalogStore.getState().model(modelKey)?.params) };
 		}
 		if (plugin.capability === "video") {
 			// 第131轮：方法/要求按 catalog 模型收敛（仅管理端模型——本地 CLI 模型无 catalog，参数由 adapter 自管不动）
@@ -643,6 +648,7 @@ export async function defaultNodeExecute(
 			});
 		} else {
 			// 文本类节点同样收口（媒体节点参数为时长/比例/分辨率等，照常透传）
+			delete runParams.materialPrompt;
 			if (plugin.capability === "text") {
 				runParams = { ...runParams, temperature: 0.7, maxTokens: 65535 };
 			}
@@ -655,6 +661,33 @@ export async function defaultNodeExecute(
 				onProgress,
 				onTaskId: onTaskConfirmed,
 			});
+		}
+
+		// 媒体成功由台账统一按原项目/分集投递；下载及节点写入完成前保留任务标记。
+		if (run.status === "success" && !isTextDisplay(plugin)) {
+			const ledger = await import("@/store/requestLedgerStore");
+			await registerLedger(run.taskId, run.adapterKey);
+			try {
+				await ledger.ledgerOnCanvasTerminal({
+					taskId: run.taskId, success: true, delivered: false,
+					resultUri: run.resultUri, assetId: run.assetId, rawLink: run.rawLink, saveToOss: run.saveToOss,
+					resultMeta: {
+						model: run.modelKey || modelKey,
+						aspect: String(runParams.aspect_ratio ?? runParams.aspect ?? runParams.ratio ?? ""),
+						duration: runParams.duration as number | string | undefined,
+						prompt: effectivePrompt, createdAt: new Date().toISOString(),
+					},
+				});
+			} finally {
+				activeCanvasTaskIds.delete(run.taskId);
+			}
+			return;
+		}
+
+		if (run.status === "failed" && run.lost) {
+			if (run.taskId) activeCanvasTaskIds.delete(run.taskId);
+			setRuntime({ status: "failed", progress: 100, error: run.error });
+			return; // A lost acknowledgement is recoverable; retain the original task identity.
 		}
 
 		// 服务端已给出终态（success/failed 均是定论）：释放进程内跟踪守卫 + 清除持久化在途标记。
@@ -670,7 +703,7 @@ export async function defaultNodeExecute(
 		if (run.status !== "no_model" && run.taskId) {
 			const nodeAlive = !!useCanvasStore.getState().nodes[nodeId];
 			const args = run.status === "success"
-				? { taskId: run.taskId, success: true, delivered: nodeAlive, resultUri: run.resultUri, assetId: run.assetId, rawLink: run.rawLink }
+				? { taskId: run.taskId, success: true, delivered: nodeAlive, resultUri: run.resultUri, assetId: run.assetId, rawLink: run.rawLink, saveToOss: run.saveToOss }
 				: { taskId: run.taskId, success: false, delivered: false };
 			void import("@/store/requestLedgerStore").then((m) => m.ledgerOnCanvasTerminal(args)).catch(() => {});
 		}
@@ -687,121 +720,6 @@ export async function defaultNodeExecute(
 		if (isTextDisplay(plugin)) {
 			// 文本类：写 resultText（结果即显示），不入媒体资产库
 			writeResultText(nodeId, run.resultUri || "");
-		} else {
-			// 媒体类：落资产库 + 回写节点 resultAssetId
-			const { useLibraryStore } = await import("@/store/libraryStore");
-			const { saveRemoteAsset, uploadBlobToOss } = await import("@/services/assetPersist");
-			const { useProjectStore } = await import("@/store/projectStore");
-			const assetId = `asset-${run.taskId ?? nodeId}`;
-			const remoteUrl = run.resultUri || "";
-			// 与资产模式一致：把结果下载到本地（asset://，Tauri CSP img-src/media-src 不允许 https 直显）；
-			// 登记三元映射（供下游 ensurePublicUrl 取回公网 url）。直链未能落本地时请管理端转存 OSS 再下载。
-			let displayUri = remoteUrl;
-			let localPath: string | null = null;
-			let serverAssetId: string | null = run.assetId ?? null;
-			try {
-				// rawLink（第158轮）：服务端未转存（meta.rehosted=false，remoteUrl=上游原始时效直链）
-				// → 客户端本机网络快重试下载（图 3×30s / 视频 2×120s）
-				const dl = run.rawLink
-					? (plugin.displayKind === "video" ? { attempts: 2, timeoutSecs: 120 } : { attempts: 3, timeoutSecs: 30 })
-					: undefined;
-				let blob = await saveRemoteAsset(run.assetId || assetId, remoteUrl, dl);
-				// 下载成功 → 本地字节经上传接口传回服务端落 OSS，id/url 换成台账记录（原始直链会过期）
-				if (blob && run.rawLink) {
-					const upPrefix = typeof params.idPrefix === "string" && params.idPrefix
-						? (params.idPrefix as string)
-						: plugin.displayKind === "video" ? "video" : "TP";
-					const upName = typeof params.assetName === "string" && (params.assetName as string).trim()
-						? (params.assetName as string).trim()
-						: `${plugin.type}_output`;
-					const beforeId = blob.id;
-					// 带 taskId=顺带改写服务端任务响应体（rehosted→true，断连找回不再重复接力转存）
-					blob = await uploadBlobToOss(blob, upName, upPrefix, run.taskId);
-					if (blob.id !== beforeId) serverAssetId = blob.id; // 上传成功：以 OSS 台账 id 为准（id 是真理）
-				}
-				if (!blob && /^https?:\/\//i.test(remoteUrl)) {
-					const { managedClient } = await import("@/services/managedClient");
-					const re = await managedClient.rehost(remoteUrl, undefined, `${plugin.type}_output`);
-					if (re?.url) blob = await saveRemoteAsset(re.id, re.url);
-				}
-				if (blob) {
-					useProjectStore.getState().registerAssetBlob(blob);
-					displayUri = blob.localUri || remoteUrl;
-					localPath = blob.localPath || null;
-				}
-			} catch (e) {
-				console.warn(`[Node ${nodeId}] 结果落盘失败：`, e);
-			}
-			// 产物名：资产节点（裂变自资产拆分，params 带 assetName）用**资产名**——节点标题即资产名
-			// （BaseNode 标题显示的是产物资产名），与资产模式一致；非资产节点保留时间戳名。
-			const assetName = typeof params.assetName === "string" ? (params.assetName as string).trim() : "";
-			useLibraryStore.getState().addAsset({
-				id: assetId,
-				kind: (plugin.displayKind as "image" | "video" | "audio") ?? "image",
-				name: assetName || `${plugin.type}_output_${Date.now()}`,
-				uri: displayUri,
-				serverAssetId,
-				thumbnailUri: null,
-				createdAt: new Date().toISOString(),
-				deletedByUser: false,
-				localPath,
-				origin: "generated", // 节点生成产物 → 不进「本地素材库」
-				// 分集归属（三模同步）：产物归**执行开始时所在画布**的分集（实时剪辑素材页按分集过滤）
-				episodeId: ledgerIdentity.canvasKey || null,
-			});
-			// 收录进项目资产库（=资产助手按分类可见，与资产模式同一条写回：addAssetImage 主图+历史）。
-			// 按 idPrefix 定分类、按资产名回查（变体名形如「父名 · 造型名」→ 写回父资产的对应变体）。
-			if (assetName && plugin.displayKind === "image") {
-				try {
-					const PREFIX_CAT: Record<string, "characters" | "crowds" | "scenes" | "organisms" | "items"> = {
-						C: "characters", A: "characters", G: "crowds", S: "scenes", M: "organisms", P: "items",
-					};
-					const idPrefix = typeof params.idPrefix === "string" ? (params.idPrefix as string) : "";
-					const cat = PREFIX_CAT[idPrefix] ?? "characters";
-					const ps2 = useProjectStore.getState();
-					const arr = (ps2[cat] || []) as Array<{ id: string; name: string; variants?: Array<{ id: string; label?: string; name?: string }> }>;
-					const [baseName, variantLabel] = assetName.split(" · ").map((s) => s.trim());
-					const parent = arr.find((a) => String(a.name).trim() === baseName);
-					if (parent) {
-						let variantId: string | null = null;
-						let variantOk = true;
-						if (variantLabel) {
-							const v = (parent.variants || []).find(
-								(x) => String(x.label || "").trim() === variantLabel || String(x.name || "").trim() === variantLabel || String(x.name || "").trim() === assetName,
-							);
-							if (v) variantId = v.id;
-							else variantOk = false; // 找不到对应造型：不写（写基础主图会拿变体图覆盖本体）
-						}
-						if (variantOk) ps2.addAssetImage(cat, parent.id, variantId, displayUri, true);
-					}
-				} catch (e) {
-					console.warn(`[Node ${nodeId}] 结果写回项目资产失败：`, e);
-				}
-			}
-			const cs = useCanvasStore.getState();
-			if (cs.nodes[nodeId]) {
-				const prevHist = cs.nodes[nodeId].data.resultHistory || [];
-				const resultMetaByAssetId = {
-					...(cs.nodes[nodeId].data.resultMetaByAssetId || {}),
-					[assetId]: {
-						model: run.modelKey || modelKey,
-						aspect: String(runParams.aspect_ratio ?? runParams.aspect ?? runParams.ratio ?? ""),
-						duration: runParams.duration as number | string | undefined,
-						prompt: effectivePrompt,
-						createdAt: new Date().toISOString(),
-					},
-				};
-				useCanvasStore.setState({
-					nodes: {
-						...cs.nodes,
-						[nodeId]: {
-							...cs.nodes[nodeId],
-							// 新结果设为主图，并入历史（旧→新；堆叠展开可回看/切回）
-							data: { ...cs.nodes[nodeId].data, resultAssetId: assetId, resultHistory: prevHist.includes(assetId) ? prevHist : [...prevHist, assetId], resultMetaByAssetId },
-						},
-					},
-				});
-			}
 		}
 
 		setRuntime({ status: "success", progress: 100 });
@@ -1094,124 +1012,91 @@ function buildChatPrompt(
 	return (builtin ? `${builtin}\n\n` : "") + lines.join("\n\n");
 }
 
-/** 答完后自动新建一个下游 AI对话节点（已有对话后继则不重复创建） */
-async function autoSpawnDownstreamChat(nodeId: string): Promise<void> {
-	const { useCanvasStore } = await import("@/store/canvasStore");
-	const cs = useCanvasStore.getState();
-	const node = cs.nodes[nodeId];
-	if (!node) return;
-	const hasChatChild = Object.values(cs.edges).some(
-		(e) => e.source === nodeId && cs.nodes[e.target]?.type === "ai.chat",
-	);
-	if (hasChatChild) return;
-	const { makeNode, NODE_W } = await import("@/canvas/nodeFactory");
-	const { genId } = await import("@/lib/id");
-	const child = makeNode("ai.chat", node.x + (node.w || NODE_W) + 90, node.y);
-	child.parentScriptId = nodeId;
-	const edge: import("@/types").CanvasEdge = {
-		id: genId("edge"),
-		kind: "dataflow",
-		source: nodeId,
-		sourcePort: "out",
-		target: child.id,
-		targetPort: "in",
-	};
-	const { dispatchCommand } = await import("@/command/dispatch");
-	dispatchCommand({ type: "spawnNodes", parentId: nodeId, nodes: [child], edges: [edge] });
-}
-
-/**
- * AI对话节点执行：单轮问答 + 上游记忆。
- * - 提问取 params.question；答写 resultText（结果即显示、流式刷新）。
- * - 上游对话节点的一问一答作为记忆（可逐节点「跳过」剔除）。
- * - 首次答成后锁定提问（只能重新回答、不能改问）、并自动新建下游对话节点。
- */
+/** Chat streams are transient; the ledger commits the final answer to its original canvas. */
 async function runChatNode(
-	nodeId: string,
-	plugin: NodePlugin,
-	node: import("@/types").CanvasNode,
+ nodeId: string,
+ plugin: NodePlugin,
+ node: import("@/types").CanvasNode,
+ identity: { projectPath: string; projectName: string; canvasKey: string; projectInstanceId: string },
+ sourceCanvas: ReturnType<typeof import("@/store/canvasStore").useCanvasStore.getState>,
+ resumeTask?: { taskId: string; adapterKey: string },
 ): Promise<void> {
-	const { useCanvasStore } = await import("@/store/canvasStore");
-	const setRuntime = (patch: Partial<NodeRuntime>) => useCanvasStore.getState().setRuntime(nodeId, patch);
-	// 同步写答（+可选 params 补丁），避免 writeResultText 异步导入造成的竞态
-	const writeAnswer = (text: string, paramsPatch?: Record<string, unknown>) => {
-		const cs2 = useCanvasStore.getState();
-		const n = cs2.nodes[nodeId];
-		if (!n) return;
-		useCanvasStore.setState({
-			nodes: {
-				...cs2.nodes,
-				[nodeId]: {
-					...n,
-					data: {
-						...n.data,
-						resultText: text,
-						params: paramsPatch ? { ...n.data.params, ...paramsPatch } : n.data.params,
-					},
-				},
-			},
-		});
-	};
-
-	const params = node.data.params;
-	const question = String(params.question ?? params.prompt ?? "").trim();
-	if (!question) {
-		setRuntime({ status: "failed", progress: 100, error: "请先在面板填写提问" });
-		return;
-	}
-
-	const { resolveActiveModelKey } = await import("@/services/adapters/channelAdapter");
-	const modelKey = resolveActiveModelKey("ai.chat", params.model, plugin.defaultModel);
-	if (!getAdapter(modelKey)) {
-		if (!modelKey) {
-			const { useUiStore } = await import("@/store/uiStore");
-			useUiStore.getState().openModelSettings();
-		}
-		setRuntime({
-			status: "failed",
-			progress: 100,
-			error: modelKey ? `未找到模型适配器「${modelKey}」` : "无可用文本模型：请检查管理端连接与目录拉取后重试（已为你打开设置）",
-		});
-		return;
-	}
-
-	const prompt = buildChatPrompt(nodeId, question, plugin.builtinPrompt, useCanvasStore.getState());
-	const images = Array.isArray(params.images)
-		? (params.images as { id?: string; url?: string }[]).filter((i) => i && i.url)
-		: [];
-
-	try {
-		setRuntime({ status: "queued", progress: 0 });
-		writeAnswer(""); // 清空旧答，准备流式刷新
-		const { runPurpose } = await import("@/services/purposeRunner");
-		const run = await runPurpose("chat.reply", {
-			prompt,
-			modelKey,
-			input: images.length ? { images: images.map((i) => ({ id: i.id, url: i.url })) } : undefined,
-			onProgress: (progress, status, partial) => {
-				if (status === "queued" || status === "running") {
-					setRuntime({ status, progress: progress || 10 });
-					if (typeof partial === "string" && partial) writeAnswer(partial);
-				}
-			},
-		});
-		if (run.status !== "success") {
-			setRuntime({
-				status: "failed",
-				progress: 100,
-				error: run.status === "no_model" ? "未配置可用文本模型" : run.error,
-			});
-			return;
-		}
-		// 答成：写最终答 + 锁定提问（只能重新回答）
-		writeAnswer(run.resultUri || "（模型未返回内容）", { questionLocked: true });
-		setRuntime({ status: "success", progress: 100 });
-		await autoSpawnDownstreamChat(nodeId);
-		const { useProjectStore } = await import("@/store/projectStore");
-		useProjectStore.getState().scheduleAutoSave("history");
-	} catch (err) {
-		setRuntime({ status: "failed", progress: 100, error: err instanceof Error ? err.message : "请求发送失败" });
-	}
+ const { readChatNode, patchChatNode, setChatRuntime } = await import("@/services/chatNodeState");
+ const { useProjectStore } = await import("@/store/projectStore");
+ const ledger = await import("@/store/requestLedgerStore");
+ const ctx = { projectInstanceId: identity.projectInstanceId, canvasKey: identity.canvasKey, nodeId };
+ if (!readChatNode(ctx)) return;
+ const runtime = (patch: Partial<NodeRuntime>) => setChatRuntime(ctx, patch);
+ const params = node.data.params;
+ const question = String(params.question ?? params.prompt ?? "").trim();
+ const images = Array.isArray(params.images) ? (params.images as { id?: string; url?: string }[]).filter((i) => i && i.url) : [];
+ const prompt = buildChatPrompt(nodeId, question, plugin.builtinPrompt, sourceCanvas);
+ let taskId = resumeTask?.taskId;
+ let registered: Promise<void> = Promise.resolve();
+ const register = (id: string, adapterKey: string) => {
+  taskId = id;
+  activeCanvasTaskIds.add(id);
+  patchChatNode(ctx, (data) => ({ ...data, task: { taskId: id, adapterKey, startedAt: data.task?.startedAt ?? Date.now() } }));
+  registered = ledger.registerCanvasLedgerTask({ taskId: id, adapterKey, nodeId, nodeType: node.type,
+   nodeTitle: String(node.data.title ?? plugin.label), displayKind: "chat", purpose: "chat.reply", identity }).then(async () => {
+    if (readChatNode(ctx) && identity.projectPath) await useProjectStore.getState().save(true);
+   });
+ };
+ const fail = (error: string) => {
+  patchChatNode(ctx, (data) => {
+   if (!taskId || data.task?.taskId !== taskId) return data;
+   const next = { ...data }; delete next.task; return next;
+  });
+  runtime({ status: "failed", progress: 100, error, taskId: null, partialText: undefined });
+ };
+ try {
+  if (!resumeTask && !question && !images.length) { fail("请先在面板填写提问或附加图片"); return; }
+  const { resolveActiveModelKey } = await import("@/services/adapters/channelAdapter");
+  const modelKey = resumeTask?.adapterKey ?? resolveActiveModelKey("ai.chat", params.model, plugin.defaultModel);
+  if (!resumeTask && !getAdapter(modelKey)) {
+   if (!modelKey) {
+    const { useUiStore } = await import("@/store/uiStore");
+    if (readChatNode(ctx)) useUiStore.getState().openModelSettings();
+   }
+   fail("无可用文本模型：请检查模型设置"); return;
+  }
+  if (!resumeTask && !identity.projectPath) {
+   await useProjectStore.getState().ensureProjectPath();
+   if (!readChatNode(ctx)) return;
+   identity.projectPath = useProjectStore.getState().savePath ?? "";
+  }
+  const { runPurpose } = await import("@/services/purposeRunner");
+  if (!readChatNode(ctx)) return;
+  runtime({ status: "queued", progress: 0, error: null, partialText: undefined });
+  if (resumeTask) register(resumeTask.taskId, resumeTask.adapterKey);
+  const run = await runPurpose("chat.reply", {
+   prompt, modelKey, resumeTask,
+   input: images.length ? { images: images.map((i) => ({ id: i.id, url: i.url })) } : undefined,
+   onTaskId: register,
+   onProgress: (progress, status, partial) => {
+    if (status === "queued" || status === "running") runtime({ status, progress: progress || 10, ...(typeof partial === "string" ? { partialText: partial } : {}) });
+   },
+  });
+  await registered;
+  if (run.status !== "success") {
+   if (run.status === "failed" && run.lost) {
+    runtime({ status: "failed", progress: 100, error: run.error, partialText: undefined });
+    return; // Keep accepted-task credentials for reconnect/reopen recovery.
+   }
+   fail(run.status === "no_model" ? "未配置可用文本模型" : run.error);
+   if (taskId) await ledger.ledgerOnCanvasTerminal({ taskId, success: false, delivered: false });
+   return;
+  }
+  if (!taskId) { register(run.taskId, run.adapterKey); await registered; }
+  await ledger.ledgerOnCanvasTerminal({ taskId: run.taskId, success: true, delivered: false, resultUri: run.resultUri || "（模型未返回内容）" });
+ } catch (err) {
+  const error = err instanceof Error ? err.message : "请求发送失败";
+  if (taskId) runtime({ status: "failed", progress: 100, error, partialText: undefined });
+  else fail(error);
+  // Once accepted, retain credentials on a local failure so recovery can still poll it.
+ } finally {
+  if (taskId) activeCanvasTaskIds.delete(taskId);
+ }
 }
 
 /** 把文本结果写入节点 data.resultText（结果即显示 / 流式刷新） */

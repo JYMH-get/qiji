@@ -1,3 +1,4 @@
+import { getDualModeFeature } from '@/store/connectionStore';
 /**
  * inferRun —— 「智能推理」的持久化运行 + 锁定 + 断连找回。
  *
@@ -180,6 +181,7 @@ function producedSomething(target: InferTarget): boolean {
  * 调用方需在调用前完成「覆盖」：多镜清空整集分镜、单镜清空该镜两段提示词。
  */
 export function startInfer(spec: StartInferSpec): string {
+ if (!getDualModeFeature()) spec = { ...spec, sameSource: true, inference: { ...spec.inference, source: spec.inference?.source ?? 'template', outputMode: 'unified' } };
 	const st = useProjectStore.getState();
 	// 清掉同目标的旧记录（失败残留 / 重复点击），保证一个目标至多一条 running
 	st.inferTasks

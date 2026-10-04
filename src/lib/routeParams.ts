@@ -1,8 +1,14 @@
-import { seedanceModelFamily } from '../contract';
-/** Project/node state contains UI fields. The public line wire contract contains only generation parameters. */
-export function routeParams(params: Record<string, unknown>, capability?: string): Record<string, unknown> {
-  const keys = capability === 'image' ? ['aspect_ratio', 'resolution', 'quality', 'assetName', 'idPrefix'] : ['duration', 'resolution', 'aspect_ratio', 'method', 'firstFrameUrl', 'assetName', 'idPrefix'];
-  return Object.fromEntries(keys.filter(key => params[key] !== undefined).map(key => [key, params[key]]));
+import { seedanceModelFamily, type GenerateRequest } from '../contract';
+
+/** Copy legacy image indexes onto references without changing the original inputs or parameters. */
+export function normalizeIdentityInputs(inputs: GenerateRequest['inputs'], legacy: unknown): GenerateRequest['inputs'] {
+  if (!inputs?.images || !Array.isArray(legacy)) return inputs;
+  const indexes = new Set(legacy.filter((i): i is number => Number.isInteger(i) && i >= 0));
+  return { ...inputs, images: inputs.images.map((ref, index) => ({ ...ref, usage: ref.usage ?? (indexes.has(index) ? 'identity' : 'reference') })) };
+}
+/** Routing reads request parameters for selection and pricing; it must not filter their contents. */
+export function routeParams(params: Record<string, unknown>, _capability?: string, _fields?: readonly { key: string }[]): Record<string, unknown> {
+  return { ...params };
 }
 
 /** Retired Seedance selections retain their model version; never substitute another family. */

@@ -10,8 +10,9 @@ import { useLibraryStore } from "@/store/libraryStore";
 import { useAssetFormStore } from "@/store/assetFormStore";
 import { getPlugin } from "@/nodes/pluginRegistry";
 import { stripLegend, withLegend } from "@/lib/shotMaterials";
-import { buildNodeLegend, computeMatOrder } from "@/canvas/nodeMaterials";
+import { buildNodeLegend, computeMatOrder, syncNodeLegend } from "@/canvas/nodeMaterials";
 import { findProjectAssetByImage } from "@/lib/projectAssets";
+import type { ShotMaterial } from "@/services/projectFile";
 
 // ── 高精度匹配器（第86轮）────────────────────────────────────
 // 旧匹配 = 纯 text.includes(term)：原文写法与资产名有丝毫格式差异（空格/标点/全半角/大小写）就漏配。
@@ -112,10 +113,33 @@ export interface MatchedAsset {
 interface PoolForm { variantId: string | null; name: string; image: string; terms: string[] }
 interface PoolItem extends MatchedAsset { terms: string[]; forms: PoolForm[] }
 
+interface DialoguePair { start: number; end: number; quote: boolean }
+/** 先在原文上配对，不能先抹去引号，否则会丢失对白结束位置。end为闭合符之后。 */
+function dialoguePairs(line: string): DialoguePair[] {
+	const closers: Record<string, string> = { "{": "}", "｛": "｝", "【": "】", "[": "]", "“": "”", "‘": "’", "’": "‘", '"': '"', "'": "'", "「": "」", "『": "』" };
+	const brackets = new Set(["{", "｛", "【", "["]);
+	const stack: Array<{ start: number; close: string; quote: boolean }> = [];
+	const pairs: DialoguePair[] = [];
+	for (let i = 0; i < line.length; i++) {
+		const top = stack[stack.length - 1];
+		const ch = line[i];
+		// 引号内的转义字符与括号属于对白内容，不改变外层边界。
+		if (top?.quote && ch === "\\") { i++; continue; }
+		if (top && ch === top.close) {
+			stack.pop();
+			pairs.push({ start: top.start, end: i + 1, quote: top.quote });
+		} else if (!top?.quote && closers[ch]) {
+			stack.push({ start: i, close: closers[ch], quote: !brackets.has(ch) });
+		}
+	}
+	return pairs.sort((a, b) => a.start - b.start);
+}
+
 /**
  * 排除对白正文，但保留说话人供角色匹配：
- * - 项目角色/群像名（含别名）后接冒号时，只保留冒号前的说话人；
- * - 其它行仅剥掉中文/英文双引号中的行内对白；「」常用于强调资产名，不在此删除。
+ * - 冒号前包含项目角色/群像名（含别名、造型名）或明确说话主体时，保留主体、排除对白；
+ * - 成对括号/引号闭合后恢复正文匹配；无闭合边界时排除到行尾；同行后续对白重新判定；
+ * - 成对引号包围的行内内容独立排除；未闭合引号和普通结构标题不据此删除正文。
  * 这里只做结构排除，不判断“回忆/计划/进入”等自然语言语义。
  */
 function stripDialogueForMatch(text: string, pool: PoolItem[]): string {
@@ -126,21 +150,30 @@ function stripDialogueForMatch(text: string, pool: PoolItem[]): string {
 			.map(normForMatch)
 			.filter(Boolean),
 	);
-	const fixedSpeakers = new Set(["旁白", "画外音", "电话音", "广播", "众人"]);
-	const structuralHead = /^(?:场景|地点|时间|镜头|画面|环境|内景|外景|草稿|提示词|构图|动作|描述|备注|色调|光线|音效)\d*$/;
-	return String(text || "").split(/\r?\n/).map((rawLine) => {
-		const line = rawLine.trim();
-		if (!line) return "";
-		const colon = /^([^：:\n]{1,24})[：:]/.exec(line);
-		if (colon) {
-			const speaker = colon[1].trim();
-			const genericSpeaker = /^[一-龥A-Za-z0-9·・]{1,12}$/.test(speaker) && !structuralHead.test(speaker);
-			if (speakers.has(normForMatch(speaker)) || fixedSpeakers.has(speaker) || genericSpeaker) return speaker;
+	const speakerTerms = [...speakers, "旁白", "内心os", "内心独白", "画外音", "电话音", "广播", "众人"];
+	// 用等长空格遮掉对白，保留原文坐标供已匹配资产高亮复用。
+	return String(text || "").replace(/[^\r\n]+/g, (rawLine) => {
+		const pairs = dialoguePairs(rawLine);
+		const chars = rawLine.split("");
+		const mask = (start: number, end: number) => { for (let i = start; i < end; i++) chars[i] = " "; };
+		for (const pair of pairs) if (pair.quote) mask(pair.start, pair.end);
+		// 引号对白独立排除；普通【结构标题】/{场景名}仍正常参与匹配。
+		const line = chars.join("");
+		let cursor = 0;
+		while (cursor < line.length) {
+			const offset = line.slice(cursor).search(/[：:]/);
+			if (offset < 0) break;
+			const colon = cursor + offset;
+			const normalizedSpeaker = normForMatch(line.slice(cursor, colon));
+			if (!speakerTerms.some((term) => normalizedSpeaker.includes(term))) { cursor = colon + 1; continue; }
+			const enclosing = pairs.filter(p => p.start < colon && p.end > colon).sort((a, b) => a.end - b.end)[0];
+			const body = pairs.find(p => p.start > colon);
+			const end = enclosing?.end ?? body?.end ?? line.length;
+			mask(colon, end);
+			cursor = end;
 		}
-		return line
-			.replace(/“[^”]*(?:”|$)/g, "")
-			.replace(/"[^"\n]*(?:"|$)/g, "");
-	}).filter(Boolean).join("\n");
+		return chars.join("");
+	});
 }
 
 /** 从 projectStore 构建资产池（5 类）：terms 含名称+别名+各造型名；forms=全部有图造型（基础+变体） */
@@ -174,10 +207,17 @@ function buildAssetPool(): PoolItem[] {
 /** 扫文本匹配资产（资产模式/画布/实时剪辑共用）：五类均按名称/别名/造型名命中。
  *  命中标准 = 排除对白正文后，归一化精确子串优先、同区间最长词唯一占用，再用相似度 ≥80% 兜底。
  *  资产图优先「原文点名的造型 > 资产助手当前选中造型 > 基础形象 > 首个有图造型」。 */
-export function matchAssetsInText(text: string): MatchedAsset[] {
+export function matchAssetsInText(text: string, onHit?: (assetId: string, start: number, end: number) => void): MatchedAsset[] {
 	if (!text.trim()) return [];
 	const pool = buildAssetPool();
-	const normalizedText = normForMatch(stripDialogueForMatch(text, pool));
+	const matchText = stripDialogueForMatch(text, pool);
+	const normalizedText = normForMatch(matchText);
+	const offsets: number[] = [];
+	if (onHit) {
+		for (let i = 0; i < matchText.length; i++) {
+			for (let n = 0; n < normForMatch(matchText[i]).length; n++) offsets.push(i);
+		}
+	}
 	type TermHit = { asset: PoolItem; term: string; start: number; end: number; exact: boolean; poolIndex: number };
 	const hits: TermHit[] = [];
 	for (let poolIndex = 0; poolIndex < pool.length; poolIndex++) {
@@ -214,6 +254,7 @@ export function matchAssetsInText(text: string): MatchedAsset[] {
 		const terms = acceptedTerms.get(hit.asset.assetId) ?? new Set<string>();
 		terms.add(hit.term);
 		acceptedTerms.set(hit.asset.assetId, terms);
+		onHit?.(hit.asset.assetId, offsets[hit.start], offsets[hit.end - 1] + 1);
 	}
 	const selFormMap = useAssetFormStore.getState().selForm;
 	const out: MatchedAsset[] = [];
@@ -233,6 +274,24 @@ export function matchAssetsInText(text: string): MatchedAsset[] {
 	};
 	for (const a of pool) { if (acceptedTerms.has(a.assetId)) add(a); }
 	return out;
+}
+
+/** 只高亮素材区实际持有的项目资产；对白排除、长名称消歧与模糊命中均复用匹配器。 */
+export function matchedAssetTextRanges(text: string, materials: Pick<ShotMaterial, "assetId" | "uri" | "media">[]): Array<{ start: number; end: number }> {
+	if (!materials.length || !text) return [];
+	const s = useProjectStore.getState();
+	const assets = [...s.characters, ...s.crowds, ...s.scenes, ...s.organisms, ...s.items];
+	const ids = new Set<string>();
+	for (const mat of materials) {
+		if (mat.media && mat.media !== "image") continue;
+		const asset = mat.assetId ? assets.find((a) => a.id === mat.assetId || a.variants?.some((v) => v.id === mat.assetId)) : undefined;
+		const id = asset?.id ?? findProjectAssetByImage(mat.uri)?.assetId;
+		if (id) ids.add(id);
+	}
+	if (!ids.size) return [];
+	const ranges: Array<{ start: number; end: number }> = [];
+	matchAssetsInText(text, (id, start, end) => { if (ids.has(id)) ranges.push({ start, end }); });
+	return ranges.sort((a, b) => a.start - b.start);
 }
 
 /** 取连入某节点的上游文本（文本/对话/种子类上游的 resultText 或 prompt） */
@@ -269,6 +328,7 @@ export function applyAssetMatchToImageNode(nodeId: string, promptOverride?: stri
 	const cs = useCanvasStore.getState();
 	const node = cs.nodes[nodeId];
 	if (!node) return 0;
+	const imageOnly = getPlugin(node.type)?.capability === "image";
 	// 匹配范围 = 上游文本 + 节点自己的提示词（裂变出的图片节点资产名就在提示词里，不只在上游原文）。
 	// 节点提示词里已有的「【素材图例】」前缀先剥掉再匹配——否则图例里的资产名会自我循环命中。
 	const ownPrompt = promptOverride ?? (typeof node.data.params.prompt === "string" ? (node.data.params.prompt as string) : "");
@@ -277,7 +337,8 @@ export function applyAssetMatchToImageNode(nodeId: string, promptOverride?: stri
 	type ImgRef = { id?: string; url?: string; name?: string; assetId?: string; voiceForAssetId?: string };
 	const inp = (node.data.input as Record<string, ImgRef[]> | undefined) || {};
 	let existing: ImgRef[] = Array.isArray(inp.images) ? [...inp.images] : [];
-	const audios: ImgRef[] = Array.isArray(inp.audios) ? [...inp.audios] : [];
+	const audios: ImgRef[] = !imageOnly && Array.isArray(inp.audios) ? [...inp.audios] : [];
+	const removedAudio = imageOnly && Object.prototype.hasOwnProperty.call(inp, "audios");
 	const hasIn = (arr: ImgRef[], id?: string, url?: string) => arr.some((m) => (!!id && m.id === id) || (!!url && m.url === url));
 	let added = 0;
 	// ── 绑定资产识别（第114轮补，用户报「绑定后匹配不加前缀」的根因）：素材不是靠名字匹配进来的
@@ -299,7 +360,7 @@ export function applyAssetMatchToImageNode(nodeId: string, promptOverride?: stri
 		return { ...ref, name: ref.name || hit.name, assetId: ref.assetId || hit.assetId };
 	});
 	for (const hit of boundHits) {
-		if (!hit?.voiceUri || hasIn(audios, hit.voiceAssetId, hit.voiceUri)) continue;
+		if (imageOnly || !hit?.voiceUri || hasIn(audios, hit.voiceAssetId, hit.voiceUri)) continue;
 		const vblob = ps.blobByUri(hit.voiceUri);
 		audios.push({
 			id: vblob?.id || hit.voiceAssetId,
@@ -318,7 +379,7 @@ export function applyAssetMatchToImageNode(nodeId: string, promptOverride?: stri
 			: { url: m.image as string, name: m.name, assetId: m.assetId };
 		if (!hasIn(existing, ref.id, ref.url)) { existing.push(ref); added++; }
 		// 角色绑定了音色 → 把「声音参考」音频一并加入 input.audios，标记归属角色供图例配对「@ImageN的声音参考@AudioM」
-		if (m.voiceUri && !hasIn(audios, m.voiceAssetId, m.voiceUri)) {
+		if (!imageOnly && m.voiceUri && !hasIn(audios, m.voiceAssetId, m.voiceUri)) {
 			const vblob = ps.blobByUri(m.voiceUri);
 			audios.push({
 				id: vblob?.id || m.voiceAssetId,
@@ -334,14 +395,16 @@ export function applyAssetMatchToImageNode(nodeId: string, promptOverride?: stri
 	// 按更新后的素材编号重建、幂等刷新（不堆叠）。同步落 matOrder 快照（锁定加入顺序——
 	// 此后再连线的上游素材只会排在本次匹配素材之后，已写入的 @ 引用不错位）。
 	const newInput: Record<string, unknown> = { ...node.data.input, images: existing };
+	if (imageOnly) delete newInput.audios;
 	if (audios.length) newInput.audios = audios;
 	const legend = buildNodeLegend(nodeId, newInput as Record<string, ImgRef[]>);
 	const newPrompt = withLegend(ownPrompt, legend);
-	if (!added && newPrompt === ownPrompt) return 0; // 无新增且图例无变化
+	if (!added && !removedAudio && newPrompt === ownPrompt) return 0; // 无素材或图例变化
 	const matOrder = computeMatOrder(nodeId, newInput as Record<string, ImgRef[]>);
 	useCanvasStore.setState({
 		nodes: { ...cs.nodes, [nodeId]: { ...node, data: { ...node.data, input: newInput, matOrder, params: { ...node.data.params, prompt: newPrompt } } } },
 	});
+	if (node.data.params.materialPrompt) syncNodeLegend(nodeId);
 	return added;
 }
 

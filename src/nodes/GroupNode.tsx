@@ -10,6 +10,7 @@ export function GroupNode({
   selected?: boolean;
 }) {
   const kind = useCanvasStore((s) => s.groups[id]?.kind ?? "default");
+  const title = useCanvasStore((s) => s.nodes[id]?.data.title);
   const material = kind === "material";
   return (
     <div className={`Qiji-group-node ${material ? "is-material" : ""} ${selected ? "is-selected" : ""}`}>
@@ -32,7 +33,7 @@ export function GroupNode({
         }}
       />
       <div className="absolute bottom-full left-0.5 mb-1.5 font-mono text-[9px] font-bold uppercase tracking-wider text-[#98a2b3] select-none nodrag">
-        {material ? "素材分组·MATERIAL" : "分组·GROUP"}
+        {title ? `${title} · ` : ""}{material ? "素材分组·MATERIAL" : "分组·GROUP"}
       </div>
     </div>
   );

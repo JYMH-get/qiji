@@ -40,6 +40,7 @@ try {
   eq(routing.withSeedanceVariantRouting(c),c,'variant extension preserves saved routes after restart');
  }else{
   for(const ch of channels.listChannels())channels.updateChannel(ch.id,{baseUrl:'https://'+ch.id+'.image-routing.test',apiKey:'test-only',enabled:true});
+  models.updateModel('gpt-image-2',{imageSizeMap:(await import('../src/imageSizes.ts')).AISC_IMAGE_SIZES});
   const original=routing.routingConfig();const extended=routing.withImageRouting(original);
   eq(extended.lines.filter(l=>l.capability==='image').length,21,'seven distinct image families with three lines each');
   eq(extended.lines.filter(l=>l.capability!=='image'),original.lines,'video configuration preserved');
@@ -58,9 +59,10 @@ try {
   const gpt=pub.find(m=>m.familyId==='fam-gpt-image-2');eq(gpt.cost,10,'uniform image price is highest configured candidate');
   const request=(model=gpt.id,params={aspect_ratio:'16:9',resolution:'2k',quality:'high'})=>({model,purpose:'image.generate',clientTaskId:'image-test-'+Math.random(),promptOverride:'A blue square',params,inputs:{}});
   const defaults=request(gpt.id,{});eq(routing.prepareRoutingRequest(defaults),undefined,'image defaults accepted');
-  eq(defaults.params.aspect_ratio,'16:9','omitted image ratio follows public default');
-  eq(defaults.params.resolution,'2k','omitted image resolution follows public default');
-  eq(images.imageUpstreamParams(models.getModelDef('sky-gpt-image-2-low'),request().params).size,'1536x1024','Sky GPT converts public landscape request using its configured upstream size list');
+  eq(defaults.params,{},'preflight does not add defaults to the original image request');
+  eq(routing.routingRequestParams(defaults).aspect_ratio,'16:9','capability view reads the default ratio');
+  eq(routing.routingRequestParams(defaults).resolution,'2k','pricing view reads the default resolution');
+  assert.throws(()=>images.imageUpstreamParams(models.getModelDef('sky-gpt-image-2-low'),request().params),/禁止替换/,'wrong ratio or resolution cannot substitute for 16:9 2K');checks++;
   for(let i=0;i<6;i++){
    const selected=routing.selectRoute(request());ok(images.imageMemberAccepts(models.getModelDef(selected.ticket.modelId),selected.request.params),'every selected candidate can convert the public ratio and resolution');
   }

@@ -1,3 +1,4 @@
+import { returnOriginalResult } from "./resultStorage.ts";
 /**
  * 火山引擎 AI MediaKit 智能处理翻译器（视频超分×4 / 字幕擦除·精细化）。
  *
@@ -135,7 +136,7 @@ export async function translateVolcEnhanceImage(
 	req: GenerateRequest,
 	up: Upstream,
 	onUpstream?: OnUpstream,
-): Promise<{ ok: true; data: Buffer; contentType: string } | { ok: false; error: string }> {
+): Promise<import("./openai.ts").ImageResult> {
 	if (!up.apiKey) {
 		return { ok: false, error: "火山引擎 MediaKit 未配置 API Key（管理端「火山引擎 MediaKit」渠道或环境 VOLC_API_KEY）" };
 	}
@@ -175,6 +176,7 @@ export async function translateVolcEnhanceImage(
 	const outUrl = data?.result?.image_url;
 	if (!outUrl) return { ok: false, error: "火山图像增强完成但未返回 result.image_url" };
 	try {
+		if (returnOriginalResult()) return { ok: true, url: String(outUrl) };
 		const ir = await fetch(String(outUrl), { signal: AbortSignal.timeout(120000) });
 		if (!ir.ok) return { ok: false, error: `下载增强结果失败 HTTP ${ir.status}` };
 		const buf = Buffer.from(await ir.arrayBuffer());

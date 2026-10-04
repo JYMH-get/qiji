@@ -1,13 +1,16 @@
+import { useDualModeFeature } from '@/store/connectionStore';
+import { supportsOfficialMaterials } from "@/services/materialPolicy";
 import { InferenceStrategyPicker, StoryGuidanceButton } from '@/components/InferenceStrategyPicker';
 import { inferenceDurationLimit, inferenceDurationRangeError, normalInferenceStrategy, resolveSplitTemplate, resolveStrategyTemplate, type InferenceStrategy } from '@/lib/inferenceStrategy';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import EditorHeader from "@/components/EditorHeader";
 import EditorSidebar from "@/components/EditorSidebar";
 import { useProjectStore } from "@/store/projectStore";
 import { confirmDialog } from "@/lib/confirmDialog";
 import { useSettingsStore } from "@/store/settingsStore";
-import { startShotGeneration, startDerivedGeneration, recallPendingGeneration, subscribeJobProgress, jobProgressVersion, getJobProgress } from "@/services/generationQueue";
-import { progressLabel } from "@/lib/queueLabel";
+import { startShotGeneration, startDerivedGeneration, recallPendingGeneration } from "@/services/generationQueue";
+import { JobProgressText } from "@/components/JobProgressText";
+import { ViewportVideo } from "@/components/ViewportVideo";
 import VideoProcessModal, { PROCESS_PURPOSE, type VideoProcessSpec, type VideoProcessMode } from "@/components/VideoProcessModal";
 import ClipPickerModal from "@/components/ClipPickerModal";
 import MediaCompareModal from "@/components/MediaCompareModal";
@@ -39,6 +42,7 @@ import { validateShotMaterials, type MatVerdict } from "@/lib/materialValidation
 import { uploadMediaToCanvasAsset } from "@/canvas/nodeUpload";
 import { ensurePublicUrl as ensurePublicUrlShared } from "@/lib/publicUrl";
 import { syncCanvasFromProject } from "@/services/canvasProjection";
+import { CANVAS_SEND_OPTIONS, resolveCanvasSendSettings } from "@/lib/canvasSendSettings";
 import type { MediaKind } from "@/lib/shotMaterials";
 import PromptMentionEditor from "@/components/PromptMentionEditor";
 import type { PromptMentionHandle } from "@/components/PromptMentionEditor";
@@ -48,7 +52,7 @@ import { captureFromUri, probeVideoDuration } from "@/canvas/videoCapture";
 import { aliasTerms, matchAssetsInText, stripLegendForMatch } from "@/lib/assetMatch";
 import { saveUriToLocal } from "@/lib/saveMedia";
 // 本地 CLI 模型（LibTV/即梦，非 catalog）在标题栏显示实名（清单与模型下拉注入同源）
-import { LOCAL_MODEL_LABELS, sourceValueOf, modelForSource, modelFamilies, familyOf, modelForFamily, channelOf } from "@/services/adapters/localChannels";
+import { familyFirstSelection, modelForLine, LOCAL_MODEL_LABELS, sourceValueOf, modelFamilies, familyOf, modelForFamily, channelOf } from "@/services/adapters/localChannels";
 import "@/styles/Frame161195.css";
 
 function isTauri(): boolean {
@@ -120,6 +124,7 @@ const Frame161195 = () => {
 
     // 「视频设置」逐项目持久化（重启不回默认）——全部读写 projectStore.mediaSettings
     const ms = useProjectStore((s) => s.mediaSettings);
+    const canvasSend = resolveCanvasSendSettings(ms.canvasSend);
     const setMS = (patch: Partial<MediaSettings>) => useProjectStore.getState().setMediaSettings(patch);
     const maxDuration = ms.maxDuration ?? 15;
     const shotCount = ms.shotCount ?? 0;            // 0 = 自动
@@ -143,7 +148,8 @@ const Frame161195 = () => {
     const imageQuality = ms.imageQuality ?? "high";
     const inferTplId = ms.inferTplId ?? ""; // 旧项目的推理方案选择
     // 图视同源决定结果字段和请求输出格式，不切换创作方案。
-    const sameSource = ms.imgVideoSameSource ?? false;
+    const dualModeEnabled = useDualModeFeature();
+	const sameSource = !dualModeEnabled || (ms.imgVideoSameSource ?? false);
     const unifiedTplId = ms.unifiedTplId ?? "";
     // 第243轮：选中名称带比例标记的推理模板（如「同源推理9:16」）→ 图像/视频比例自动跟随模板比例
     // （用户定稿「优先提示词内比例」；写入即生效、下拉如实显示，之后仍可在下方单独改回=最高优先）
@@ -427,20 +433,18 @@ const Frame161195 = () => {
     const epLocked = (epId?: string): boolean => epInferring(epId) || epSplitting(epId);
     // 整集级当前忙碌文案：拆分中 / 推理中（两按钮同步显示同一状态，视觉上一起锁住）
     // 服务端排队（如奇迹云 FIFO）时带上位次——「排队第3」比恒久不动的「推理中…」有信息量
-    const epBusyLabel = (epId?: string): string | null => {
+    const epBusyLabel = (epId?: string) => {
         const t = inferTasks.find((x) => !!epId && x.episodeId === epId && x.mode === "split" && x.status === "running")
             ?? inferTasks.find((x) => !!epId && x.episodeId === epId && x.mode === "multi" && x.status === "running");
         if (!t) return null;
         const base = t.mode === "split" ? "拆分中" : "推理中";
-        const q = getJobProgress(t.id)?.extra?.queuePosition;
-        return q ? `${base}·排队第${q}` : `${base}…`;
+        return <JobProgressText taskId={t.id} busyLabel={base} />;
     };
     // 禁用态视觉样式（置灰 + 禁用光标），避免「看着还能点」
     const lockedStyle = (epId?: string): React.CSSProperties => epLocked(epId) ? { opacity: 0.5, cursor: "not-allowed" } : {};
 
     // ── 在途任务（持久化 pendingGens）按 key 派生：key=`sb-${shotId}` / `vid-${shotId}` ──
-    // 进度/排队位次是会话态（generationQueue 的 Map，不落盘）：订阅版本号触发重渲染，值走 getJobProgress
-    useSyncExternalStore(subscribeJobProgress, jobProgressVersion, jobProgressVersion);
+    // 瞬时进度由 JobProgressText 按任务订阅，不触发整张表格重渲染。
     const fieldOf = (key: string): "storyboard" | "video" => (key.startsWith("sb-") ? "storyboard" : "video");
     const shotIdOf = (key: string): string => key.replace(/^sb-|^vid-/, "");
     const jobList = (key: string) => pendingGens.filter((p) => p.shot?.shotId === shotIdOf(key) && p.shot.field === fieldOf(key));
@@ -450,11 +454,10 @@ const Frame161195 = () => {
     // 历史区占位符（运行中=转圈「生成中」；失败=红色「失败 ✕」点击移除该 pending）
     const jobChips = (key: string) =>
         jobList(key).map((p) => {
-            const jp = getJobProgress(p.id);
             return p.status === "running" ? (
                 <span key={p.id} title="生成中（切页/重启会自动找回，完成后加入历史，不阻塞继续生成）"
                     style={{ display: "inline-flex", alignItems: "center", gap: 4, flexShrink: 0, fontSize: 10, padding: "2px 8px", borderRadius: 4, border: "1px solid rgba(139,92,246,0.5)", background: "rgba(139,92,246,0.15)", color: "#c4b5fd", alignSelf: "center" }}>
-                    <span className="sb-spin" style={{ display: "inline-block" }}>↻</span>{progressLabel(jp?.progress ?? null, jp?.extra)}
+                    <span className="sb-spin" style={{ display: "inline-block" }}>↻</span><JobProgressText taskId={p.id} />
                 </span>
             ) : p.recoverable ? (
                 // 服务端异常（lost）：凭原 taskId 重连找回，不重新生成、不再扣费
@@ -554,13 +557,13 @@ const Frame161195 = () => {
         if (renameEpId && renameEpVal.trim()) useProjectStore.getState().updateEpisode(renameEpId, { title: renameEpVal.trim() });
         setRenameEpId(null);
     };
-    // 同步本集到画布：手动单向投影「资产 + 当前选中分集」成画布节点（清除其它集投影节点）。
-    // 不自动同步——只有在此点击才投影；会覆盖同名投影节点的提示词/结果，画布手建/裂变节点不受影响。
+    // 按项目设置手动发送本集；其它分集画布保持不变。
+    // 不自动同步——只有在此点击才投影；更新同名投影节点的提示词/素材，保留已有结果与在途任务；画布手建/裂变节点不受影响。
     const syncEpisodeToCanvas = () => {
         if (!activeEp) { alert("请先在左侧选择分集"); return; }
         // 多画布：先切到本集的独立画布（载入其自己的节点/连线），再把「资产 + 本集分镜」投影进去
         useProjectStore.getState().switchCanvas(activeEp.id);
-        try { syncCanvasFromProject(activeEp.id); } catch (err) { console.error("同步到画布失败", err); }
+        try { syncCanvasFromProject(activeEp.id); } catch (err) { console.error("同步到画布失败", err); alert("发送到画布失败，请重试"); return; }
         setCanvasSynced(true);
         setTimeout(() => setCanvasSynced(false), 1800);
     };
@@ -817,7 +820,8 @@ const Frame161195 = () => {
                 const u = await ensurePublicUrl(m.uri, m.name, m.id);
                 if (!u) { alert(`分镜${shot.index}的素材「${m.name}」无法取得公网直链（原文件失效或网络异常），请重新上传该素材或删除后重试。`); return false; }
                 const md = mediaOf(m);
-                const baseRef = { url: u, name: m.name, ...(m.assetId && !m.assetId.startsWith("LC-") ? { id: m.assetId } : {}) };
+                const fileId = useProjectStore.getState().blobByUri(m.uri)?.id;
+                const baseRef = { url: u, name: m.name, ...(fileId && !fileId.startsWith("LC-") ? { id: fileId } : {}) };
                 if (md === "video") videos.push(baseRef);
                 else if (md === "audio") audios.push(baseRef);
                 else {
@@ -834,7 +838,7 @@ const Frame161195 = () => {
         // 单分镜覆盖优先（未设置回退全局视频设置）；「要求」三档按当前模型 catalog params 收敛（服务端控档一把尺）
         const ov = ovPre;
         const req = videoReqOptionsForKey(vModelKey);
-        const officialIdx = vModel?.officialAssets
+        const officialIdx = supportsOfficialMaterials(vModel)
             ? identityIndexesForMaterials(shot.materials, ov.officialAssetIndexes).filter((i) => i >= 0 && i < images.length)
             : [];
         if (!getAssetVideoFeature()) return false;
@@ -1396,10 +1400,10 @@ const Frame161195 = () => {
                                 <button
                                     style={{ ...ghostBtn, alignSelf: "center", ...(canvasSynced ? { background: "rgba(34,197,94,0.14)", color: "#22c55e", borderColor: "rgba(34,197,94,0.5)" } : {}) }}
                                     disabled={!activeEp}
-                                    title="把「资产 + 当前选中分集」投影成画布节点（不自动同步，仅此处手动触发）。会覆盖同名投影节点，画布手建节点不受影响。"
+                                    title="按视频设置中的发送选项更新本集画布。"
                                     onClick={syncEpisodeToCanvas}
                                 >
-                                    {canvasSynced ? "已同步本集 ✓" : "同步本集到画布"}
+                                    {canvasSynced ? "已发送本集 ✓" : "发送本集到画布"}
                                 </button>
                             )}
 
@@ -1436,6 +1440,19 @@ const Frame161195 = () => {
                                         {/* 点击遮罩关闭 */}
                                         <div onClick={() => setVidSettingsOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 49 }} />
                                         <div style={{ position: "absolute", zIndex: 50, top: "100%", right: 0, marginTop: 6, width: 300, maxHeight: "70vh", overflowY: "auto", padding: 14, borderRadius: 10, border: "1px solid rgba(255,255,255,0.12)", background: "#161b26", boxShadow: "0 8px 24px rgba(0,0,0,0.5)", display: "flex", flexDirection: "column", gap: 12 }}>
+                                            <div style={{ fontSize: 12, fontWeight: 600, color: "#fff" }}>发送到画布</div>
+                                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                                                {CANVAS_SEND_OPTIONS.map(([key, label]) => (
+                                                    <label key={key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#fff" }}>
+                                                        <input type="checkbox"
+                                                            checked={canvasSend[key]}
+                                                            disabled={key === "inference" && !canvasSend.original}
+                                                            onChange={(e) => setMS({ canvasSend: { ...ms.canvasSend, [key]: e.target.checked } })} />
+                                                        {label}
+                                                    </label>
+                                                ))}
+                                            </div>
+                                            <div style={{ height: 1, background: "rgba(255,255,255,0.08)" }} />
                                             {/* 单行样式：标题左 + 控件右（不再两行） */}
                                             <div style={{ fontSize: 12, fontWeight: 600, color: "#fff" }}>拆分·文本</div>
                                             <ModelPicker cap="text" label="文本模型" style={rowPicker} />
@@ -1443,7 +1460,7 @@ const Frame161195 = () => {
                                             <div style={rowSt}>
                                                 <span style={rowLb}>图视同源</span>
                                                 <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", color: "#fff", fontSize: 12 }} title="开启后：故事板与视频共用同一段「同源提示词」，提示词区只有单栏、图片与视频均使用它；推理走同源模板、同步到画布走同源链路（原文→图片+视频并联）。">
-                                                    <input type="checkbox" checked={sameSource} onChange={(e) => setMS({ imgVideoSameSource: e.target.checked })} />图片与视频共用提示词
+                                                    <input type="checkbox" checked={sameSource} disabled={!dualModeEnabled} onChange={(e) => setMS({ imgVideoSameSource: e.target.checked })} />图片与视频共用提示词
                                                 </label>
                                             </div>
                                             <InferenceStrategyPicker value={strategy} onChange={setStrategy} />
@@ -1578,7 +1595,7 @@ const Frame161195 = () => {
                                             <InferenceStrategyPicker value={strategy} onChange={setStrategy} />
                                         </div>
                                         <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", color: "rgba(255,255,255,0.8)", fontSize: 12, alignSelf: "flex-end", paddingBottom: 8 }} title="图片与视频共用同一段提示词（同源）">
-                                            <input type="checkbox" checked={sameSource} onChange={(e) => setMS({ imgVideoSameSource: e.target.checked })} />图视同源
+                                            <input type="checkbox" checked={sameSource} disabled={!dualModeEnabled} onChange={(e) => setMS({ imgVideoSameSource: e.target.checked })} />图视同源
                                         </label>
                                         <button style={{ ...toolBtn, alignSelf: "flex-end", ...lockedStyle(activeEp.id) }} disabled={epLocked(activeEp.id)} onClick={handleSmartInfer}>
                                             {epBusyLabel(activeEp.id) ?? "智能推理"}
@@ -1616,7 +1633,8 @@ const Frame161195 = () => {
                                         const tab = tabOf(shot.id);
                                         // 单卡模型：家族 → 渠道/线路 → 模型 → 方法 → 要求（第163轮五级，家族=一级筛选）
                                         const curVideoModel = shot.overrides?.videoModelKey || effectiveModelKey("video") || "";
-                                        const curFamGrp = familyOf(curVideoModel, videoFamilies);
+                                        const lineSelection=familyFirstSelection(videoFamilies,curVideoModel);
+                                        const curFamGrp = familyOf(curVideoModel, lineSelection.families);
                                         const curFamChs = curFamGrp?.channels ?? [];
                                         const curSrcCh = channelOf(curVideoModel, curFamChs);
                                         // curCatModel 只用于 officialAssets（真人图，catalog 专属字段）；档位/方法一律走 modelOptions
@@ -1710,7 +1728,7 @@ const Frame161195 = () => {
                                                                     style={{ position: "relative", width: 40, height: 40, borderRadius: 6, overflow: "hidden", border: (matError[m.id] || bad) ? "1px solid #f87171" : "1px solid rgba(255,255,255,0.12)", background: matError[m.id] ? "rgba(248,113,113,0.18)" : "rgba(255,255,255,0.05)", cursor: m.uri ? "grab" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: "var(--muted-foreground)", textAlign: "center" }}>
                                                                     {matError[m.id] ? <span style={{ color: "#f87171", fontSize: 18, fontWeight: 700 }}>✕</span>
                                                                         : m.uri ? (
-                                                                            md === "video" ? <video src={m.uri} muted preload="metadata" style={{ width: "100%", height: "100%", objectFit: "cover", pointerEvents: "none" }} />
+                                                                            md === "video" ? <ViewportVideo src={m.uri} muted style={{ width: "100%", height: "100%", objectFit: "cover", pointerEvents: "none" }} />
                                                                                 : md === "audio" ? <span style={{ fontSize: 18 }}>🎵</span>
                                                                                     : <img src={m.uri} alt={m.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                                                                         ) : m.name.slice(0, 4)}
@@ -1718,8 +1736,8 @@ const Frame161195 = () => {
                                                                     <span style={{ position: "absolute", top: 0, left: 0, fontSize: 8, lineHeight: "12px", padding: "0 3px", borderBottomRightRadius: 4, background: BADGE_BG[md], color: "#fff", fontWeight: 700 }}>{TAG_BADGE[md]}{matTags[m.id].replace(/^@\D+/, "")}</span>
                                                                     {/* 视频角标：右下角播放小三角 */}
                                                                     {md === "video" && !matError[m.id] && <span style={{ position: "absolute", right: 1, bottom: 1, fontSize: 9, color: "#fff", textShadow: "0 0 3px #000" }}>▶</span>}
-														{curCatModel?.officialAssets && md === "image" && !matError[m.id] && (
-															<IdentityAssetToggle active={identity} onToggle={() => setShotMaterialIdentity(activeEp.id, shot.id, m.id, !identity)} />
+														{supportsOfficialMaterials(curCatModel) && !matError[m.id] && (
+															<IdentityAssetToggle kind={md} modelId={curVideoModel} material={{ id: useProjectStore.getState().blobByUri(m.uri)?.id, url: m.uri, name: m.name }} active={identity} onToggle={() => setShotMaterialIdentity(activeEp.id, shot.id, m.id, !identity)} />
 														)}
                                                                     {uploading[m.id] && <span style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.55)" }}><span className="sb-spin" style={{ display: "inline-block", color: "#fff", fontSize: 15 }}>↻</span></span>}
                                                                     {/* 违规红色遮罩 + ❗（悬停时由 CSS .qj-mat-cell:hover 隐藏，方便查看原素材）*/}
@@ -1790,22 +1808,23 @@ const Frame161195 = () => {
                                                             onClick={() => toggleSupplement(shot)}
                                                             style={{ padding: "3px 8px", fontSize: 11, cursor: "pointer", borderRadius: 6, border: shot.isSupplement ? "1px solid rgba(245,196,81,0.7)" : "1px solid rgba(255,255,255,0.18)", background: shot.isSupplement ? "rgba(245,196,81,0.18)" : "transparent", color: shot.isSupplement ? "#f5c451" : "rgba(255,255,255,0.7)" }}>补镜头</button>
                                                     </div>
-                                                    {/* 第二行：家族 → 渠道/线路 → 模型 → 时长/比例/分辨率 → 放大（第163轮，与画布一致的 家族|线路|模型|要求） */}
+                                                    {/* 第二行：家族 → 线路 → 模型 → 时长/比例/分辨率 → 放大 */}
                                                     <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                                                         {assetVideoEnabled && <>
                                                         {/* 家族（模型种类：Seedance 2.0 / Sora2 / Grok…） */}
-                                                        <select title="模型家族（模型种类，仅本分镜）" value={curFamGrp ? `f:${curFamGrp.familyId}` : ""} onChange={(e) => { if (e.target.value) setShotVideoModel(shot, modelForFamily(e.target.value.slice(2), curVideoModel, videoFamilies)); }} style={miniSel}>
+                                                        <select title="模型家族（模型种类，仅本分镜）" value={curFamGrp ? `f:${curFamGrp.familyId}` : ""} onChange={(e) => { if (e.target.value) setShotVideoModel(shot, modelForFamily(e.target.value.slice(2), curVideoModel, lineSelection.families)); }} style={miniSel}>
                                                             {!curFamGrp && <option value="" style={miniOpt}>未选模型</option>}
-                                                            {videoFamilies.map((f) => <option key={f.familyId} value={`f:${f.familyId}`} style={miniOpt}>{f.familyName}</option>)}
+                                                            {lineSelection.families.map((f) => <option key={f.familyId} value={`f:${f.familyId}`} style={miniOpt}>{f.familyName}</option>)}
                                                         </select>
-                                                        {/* 渠道/线路（家族内的源：模式名 / LibTV / 即梦） */}
-                                                        {curFamGrp && (
-                                                            <select title="线路（仅本分镜）" value={curSrcCh ? sourceValueOf(curVideoModel, curFamChs) : ""} onChange={(e) => setShotVideoModel(shot, modelForSource(e.target.value, curVideoModel, curFamChs))} style={miniSel}>
-                                                                {curFamChs.map((ch) => <option key={ch.channel} value={`src:${ch.channel}`} style={miniOpt}>{ch.channel}</option>)}
+                                                        {/* 线路（当前家族） */}
+                                                        {lineSelection.channels.length > 0 && (
+                                                            <select title="线路（仅本分镜）" value={lineSelection.current ? sourceValueOf(curVideoModel, lineSelection.channels) : ""} onChange={(e) => setShotVideoModel(shot, modelForLine(e.target.value, curVideoModel, videoFamilies))} style={miniSel}>
+                                                                {!lineSelection.current && <option value="" style={miniOpt}>选择线路</option>}
+                                                                {lineSelection.channels.map((ch) => <option key={ch.channel} value={`src:${ch.channel}`} style={miniOpt}>{ch.channel}</option>)}
                                                             </select>
                                                         )}
                                                         {/* 模型（本线路内的款式） */}
-                                                        {curSrcCh && !curVideoModel.startsWith("route:") && (
+                                                        {curSrcCh && !curSrcCh.modelAsLine && !curVideoModel.startsWith("route:") && (
                                                             <select title="模型（本线路款式，仅本分镜）" value={curVideoModel} onChange={(e) => setShotVideoModel(shot, e.target.value)} style={miniSel}>
                                                                 {curSrcCh.choices.map((v) => <option key={v.id} value={v.id} style={miniOpt}>{v.variantLabel}</option>)}
                                                             </select>
@@ -1831,7 +1850,7 @@ const Frame161195 = () => {
                                                             title={sameSource ? "编辑同源提示词" : tab === "storyboard" ? "编辑故事板提示词" : "编辑视频提示词"}
                                                             getValue={() => promptVal}
                                                             onSave={(v) => update(shot.id, promptPatch(v))}
-                                                            getExtra={() => <ShotMaterialStrip episodeId={activeEp.id} shotId={shot.id} identityEnabled={!!curCatModel?.officialAssets} />}
+                                                            getExtra={() => <ShotMaterialStrip episodeId={activeEp.id} shotId={shot.id} identityEnabled={supportsOfficialMaterials(curCatModel)} />}
                                                             getMentions={() => {
                                                                 const mats = useProjectStore.getState().episodes.find((e) => e.id === activeEp.id)?.shots.find((s) => s.id === shot.id)?.materials ?? [];
                                                                 const tg = materialTags(mats);
@@ -1970,7 +1989,7 @@ const Frame161195 = () => {
                                                 {assetVideoEnabled && <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
                                                     <div style={{ flex: 1, minHeight: 120, borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(0,0,0,0.25)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
                                                         {shot.videoUri ? (
-                                                            <video src={shot.videoUri} controls title="双击放大 / 右键菜单（导出、首尾帧、片段到下一镜）"
+                                                            <ViewportVideo src={shot.videoUri} controls title="双击放大 / 右键菜单（导出、首尾帧、片段到下一镜）"
                                                                 onDoubleClick={() => openLightbox({ uri: shot.videoUri!, media: "video", name: `${shot.title || "分镜"}·视频` })}
                                                                 onContextMenu={(e) => { e.preventDefault(); setMediaMenu({ x: e.clientX, y: e.clientY, idx, kind: "video", uri: shot.videoUri! }); }}
                                                                 style={{ width: "100%", height: "100%", objectFit: "contain" }} />

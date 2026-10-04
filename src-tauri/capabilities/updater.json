@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "client-updater",
+  "description": "主应用窗口检查、下载签名更新，并由用户触发安装",
+  "windows": ["main", "main-*"],
+  "permissions": ["updater:default", "process:allow-restart"]
+}

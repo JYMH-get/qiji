@@ -19,7 +19,7 @@
  *   - **进度帧 / 在途状态镜像**：走 `patchSilent`（不进撤销栈，见 rtcStore.patchSilent 注释）。
  */
 import type { Capability, Purpose } from "@/contract";
-import { clampDuration, clampImageResolution, buildImageParams } from "@/lib/genParams";
+import { clampDuration, buildImageParams } from "@/lib/genParams";
 import { clampDurationTo, clampToOptions, type VideoReqOptions } from "@/lib/videoMethods";
 import type { RtcSegment } from "@/types/rtc";
 
@@ -231,15 +231,18 @@ export function buildFreeVideoParams(
 
 /**
  * 自由占位·图片参数（与 assetGenActions.buildAssetBaseGenSpec / genShotStoryboard 同尺：
- * `{aspect_ratio, resolution, quality}`，分辨率档按当前生效图像模型的 catalog params 收敛）。
+ * 从项目媒体设置读取图片专用字段，显式分辨率原样保留，catalog 只补缺省档位）。
  */
 export function buildFreeImageParams(
 	ms: FreeGenSettings | undefined,
 	resOptions?: { v: string }[],
 ): Record<string, unknown> {
-	const aspect = ms?.imageAspect || "16:9";
-	const resolution = clampImageResolution(ms?.imageResolution ?? "2k", resOptions);
-	return buildImageParams({ aspect, resolution, quality: ms?.imageQuality || "high" }, resOptions);
+	// ms 的 aspect/resolution 属于视频设置，不是本次图片请求的 params。
+	const params: Record<string, unknown> = {};
+	if (ms?.imageAspect !== undefined) params.aspect = ms.imageAspect;
+	if (ms?.imageResolution !== undefined) params.resolution = ms.imageResolution;
+	if (ms?.imageQuality !== undefined) params.quality = ms.imageQuality;
+	return buildImageParams(params, resOptions);
 }
 
 /** 已公网化的垫素材引用（提交前由 ensurePublicUrl 解析得到） */

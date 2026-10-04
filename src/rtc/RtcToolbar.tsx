@@ -208,6 +208,8 @@ export function RtcToolbar() {
 	};
 	const onExport = async () => {
 		if (exportBusy) return;
+		const { beginClientActivity } = await import("@/services/clientUpdateActivity");
+		const endActivity = beginClientActivity();
 		setExportBusy(true);
 		setExportMsg(null);
 		try {
@@ -223,6 +225,7 @@ export function RtcToolbar() {
 			setExportMsg({ ok: false, text: String((e as Error)?.message || e) });
 		} finally {
 			setExportBusy(false);
+			endActivity();
 		}
 	};
 

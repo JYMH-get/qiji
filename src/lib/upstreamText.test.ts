@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { buildLegend } from "@/lib/shotMaterials";
 import {
 	upstreamTag,
 	hasUpstreamCapsule,
@@ -67,5 +68,27 @@ describe("upstreamText（逐个编号胶囊）", () => {
 
 	it("旧项目的上游胶囊在原位兼容展开", () => {
 		expect(mapUpstreamText("前缀\n【上游文本1】\n后缀", ["旧链路原文"])).toBe("前缀\n旧链路原文\n后缀");
+	});
+
+	it("节点六图图例承接带七图旧图例的上游时，只采用当前节点图例", () => {
+		const materials = ["刘备", "曹操", "孙权", "赵云", "典韦", "甘宁"].map((name, i) => ({ id: String(i), name, uri: "", media: "image" as const, kind: "local" as const }));
+		const current = buildLegend(materials, true).replace("刘备；", "刘备，身穿战甲；");
+		const old = buildLegend([...materials, { id: "scene", name: "镇魂宗外", uri: "", media: "image", kind: "local" }], true);
+		const source = `${old}\n\n刘备持剑，曹操站在旁边。`;
+		const expected = `${current}\n\n刘备持剑，曹操站在旁边。`;
+		expect(mapUpstreamText(current, [source])).toBe(expected);
+		expect(mapUpstreamText(expected, [source])).toBe(expected);
+		expect(mapUpstreamText(`${current}\n\n【上游文本1】`, [source])).toBe(expected);
+	});
+
+	it("没有节点自有图例时仍保留上游图例，避免丢掉唯一素材说明", () => {
+		const source = "【素材图例】@Image1 是 刘备；\n\n刘备持剑。";
+		expect(mapUpstreamText("", [source])).toBe(source);
+	});
+
+	it("已有正文的单段图例保持原来的标点与换行", () => {
+		const prompt = "【素材图例】@Image1 是 刘备，\n刘备持剑。";
+		expect(mapUpstreamText(prompt, ["上游正文"])).toBe(prompt);
+		expect(mapUpstreamText(prompt, [])).toBe(prompt);
 	});
 });

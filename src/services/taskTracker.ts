@@ -73,6 +73,7 @@ export class TaskTracker {
 						if (res.status === "success" || res.status === "failed" || res.status === "lost") this.finish(t.taskId);
 						else if (res.status === "running" && res.partialText) streaming = true; // 文本流式中 → 下轮快轮询
 						this.onProgress(t.nodeId, res.progress, res.status, res.resultUri, res.error, res.assetId, res.partialText, res.rawLink, {
+							saveToOss: res.saveToOss,
 							queuePosition: res.queuePosition,
 							queueTotal: res.queueTotal,
 							stageText: res.stageText,
