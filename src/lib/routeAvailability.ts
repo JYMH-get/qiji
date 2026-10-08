@@ -38,13 +38,14 @@ function fieldOptions(field: ParamField | undefined): string[] {
   }
   return [];
 }
-/** Fold duration tiers into a comparable second rate; keep other pricing conditions separate. */
-function videoSecondPrices(p: NonNullable<RoutePriceAvailabilityRow['pricing']>, price: (cost: number) => number) {
+/** Fold duration-priced tiers into second rates; fixed request prices keep their billing unit. */
+function videoPrices(p: NonNullable<RoutePriceAvailabilityRow['pricing']>, price: (cost: number) => number) {
   if (p.costField && p.costField !== 'duration') return null;
   const rules = p.costRules ?? [], perSecond = p.costField === 'duration';
+  const durationPriced = perSecond || rules.some(r => Number.isFinite(Number(r.when.duration)) && Number(r.when.duration) > 0);
   const durationField = p.params.find(f => f.key === 'duration');
   const declaredDurations = fieldOptions(durationField);
-  const durations = (declaredDurations.length ? declaredDurations : rules.map(r => r.when.duration)).filter(d => Number.isFinite(Number(d)) && Number(d) > 0);
+  const durations = durationPriced ? (declaredDurations.length ? declaredDurations : rules.map(r => r.when.duration)).filter(d => Number.isFinite(Number(d)) && Number(d) > 0) : [''];
   // A configured unit rate needs no invented duration; a fixed price must have a known duration to divide by.
   if (!durations.length && perSecond) durations.push('1');
   if (!durations.length) return null;
@@ -62,14 +63,14 @@ function videoSecondPrices(p: NonNullable<RoutePriceAvailabilityRow['pricing']>,
     const rates = [...new Set(durations)].map(duration => {
       const params: Record<string, string> = { ...group, duration };
       const rule = rules.find(r => Object.entries(r.when).every(([k, v]) => params[k] === v));
-      const rate = perSecond ? price(rule?.costPerUnit ?? p.costPerUnit ?? 0) : price(rule?.cost ?? p.cost!) / Number(duration);
+      const rate = perSecond ? price(rule?.costPerUnit ?? p.costPerUnit ?? 0) : price(rule?.cost ?? p.cost!) / (durationPriced ? Number(duration) : 1);
       return Number(rate.toFixed(8));
     });
     all.push(...rates);
     const label = Object.entries(group).map(([k, v]) => k === 'resolution' ? v || '其他分辨率' : `${p.params.find(f => f.key === k)?.label || k} ${v || '其他'}`).join(' · ') || '全部参数';
     return { label, value: creditRange(rates) };
   });
-  return { summary: creditRange(all), unit: '积分 / 秒', items };
+  return { summary: creditRange(all), unit: durationPriced ? '积分 / 秒' : '积分 / 次', items };
 }
 /** Prices are catalog prices with the current payer's membership discount, never token precharges. */
 export function routePrice(row: Pick<RoutePriceAvailabilityRow, 'pricing' | 'discountPercent'> & Partial<Pick<RoutePriceAvailabilityRow, 'capability'>>): { summary: string; unit: string; items: PriceItem[]; notes: string[] } | null {
@@ -108,11 +109,12 @@ export function routePrice(row: Pick<RoutePriceAvailabilityRow, 'pricing' | 'dis
     return scaled <= 0 || discount === 0 ? 0 : discount < 1 ? Math.max(1, Math.ceil(scaled * discount)) : scaled;
   };
   if (row.capability === 'video' || p.costField === 'duration') {
-    const seconds = videoSecondPrices(p, price);
-    if (seconds) {
-      notes.push(perUnit ? '单价按总用量合计后取整。' : '按各时长档位的整次价格折算每秒价格；不同时长单价有差异时显示范围。');
+    const video = videoPrices(p, price);
+    if (video) {
+      if (perUnit) notes.push('单价按总用量合计后取整。');
+      else if (video.unit === '积分 / 秒') notes.push('按各时长档位的整次价格折算每秒价格；不同时长单价有差异时显示范围。');
       if (p.refVideoSecondsWeight) notes.push(`参考视频按逐条向上取整的秒数 × ${p.refVideoSecondsWeight} 计入收费时长。`);
-      return { ...seconds, notes };
+      return { ...video, notes };
     }
   }
   const base = perUnit ? p.costPerUnit ?? 0 : p.cost;

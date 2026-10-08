@@ -60,12 +60,21 @@ interface SharedLibState {
 	addLib: (lib: SharedLibraryInfo) => void;
 	removeLib: (libId: string) => void;
 	addFolder: (libId: string, folder: SharedFolderInfo) => void;
+	/** 服务端删除成功后移除缓存；保留本地媒体文件及项目中的引用。 */
+	removeFolder: (libId: string, folderId: string) => void;
+	removeAsset: (folderId: string, assetRecordId: string) => void;
 	save: () => Promise<void>;
 }
 
 const isTauri = () => typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
 const LS_KEY = "Qiji:sharedCache";
 const CACHE_FILE = "shared-cache.json";
+
+// 请求身份只在会话中使用；删除使旧请求失效，迟到的清单/下载不能重新写回缓存。
+let libsRequest: symbol | undefined;
+const folderRequests = new Map<string, symbol>();
+const assetRequests = new Map<string, symbol>();
+let saveQueue = Promise.resolve();
 
 async function sharedDir(): Promise<string> {
 	const { appDataDir, join } = await import("@tauri-apps/api/path");
@@ -155,73 +164,97 @@ export const useSharedLibStore = create<SharedLibState>((set, get) => ({
 		set({ initialized: true });
 	},
 
-	save: async () => {
-		const { libs, foldersByLib, assetsByFolder, lastView } = get();
-		const data = JSON.stringify({ libs, foldersByLib, assetsByFolder, lastView });
-		try {
-			if (isTauri()) {
-				const { appDataDir, join } = await import("@tauri-apps/api/path");
-				const { exists, mkdir, writeTextFile } = await import("@tauri-apps/plugin-fs");
-				const dir = await join(await appDataDir(), "Qiji");
-				if (!(await exists(dir))) await mkdir(dir, { recursive: true });
-				await writeTextFile(await join(dir, CACHE_FILE), data);
-			} else {
-				localStorage.setItem(LS_KEY, data);
+	save: () => {
+		const persist = async () => {
+			try {
+				// 排队执行时再读最新状态；旧保存必须结束后，删除后的缓存才能落盘。
+				const { libs, foldersByLib, assetsByFolder, lastView } = get();
+				const data = JSON.stringify({ libs, foldersByLib, assetsByFolder, lastView });
+				if (isTauri()) {
+					const { appDataDir, join } = await import("@tauri-apps/api/path");
+					const { exists, mkdir, writeTextFile } = await import("@tauri-apps/plugin-fs");
+					const dir = await join(await appDataDir(), "Qiji");
+					if (!(await exists(dir))) await mkdir(dir, { recursive: true });
+					await writeTextFile(await join(dir, CACHE_FILE), data);
+				} else {
+					localStorage.setItem(LS_KEY, data);
+				}
+			} catch (e) {
+				console.warn("[sharedLib] save failed:", e);
 			}
-		} catch (e) {
-			console.warn("[sharedLib] save failed:", e);
-		}
+		};
+		saveQueue = saveQueue.then(persist, persist);
+		return saveQueue;
 	},
 
 	fetchLibs: async () => {
-		const libs = await managedClient.sharedLibraries();
-		set({ libs });
-		void get().save();
+		const request = Symbol();
+		libsRequest = request;
+		try {
+			const libs = await managedClient.sharedLibraries();
+			if (libsRequest !== request) return;
+			set({ libs });
+			void get().save();
+		} finally {
+			if (libsRequest === request) libsRequest = undefined;
+		}
 	},
 
 	fetchFolders: async (libId) => {
+		const request = Symbol();
+		folderRequests.set(libId, request);
 		set((s) => ({ fetching: { ...s.fetching, [libId]: { done: 0, total: 1 } } }));
 		try {
 			const items = await managedClient.sharedFolders(libId);
+			if (folderRequests.get(libId) !== request) return;
 			set((s) => ({ foldersByLib: { ...s.foldersByLib, [libId]: items } }));
 			void get().save();
 		} finally {
-			set((s) => {
-				const f = { ...s.fetching };
-				delete f[libId];
-				return { fetching: f };
-			});
+			if (folderRequests.get(libId) === request) {
+				folderRequests.delete(libId);
+				set((s) => {
+					const f = { ...s.fetching };
+					delete f[libId];
+					return { fetching: f };
+				});
+			}
 		}
 	},
 
 	fetchFolderAssets: async (folderId) => {
-		// 先拉记录清单（轻量），再逐条下载缺本地副本的（进度条=下载进度）
-		const records = await managedClient.sharedFolderAssets(folderId);
-		const merged = mergeSharedAssets(get().assetsByFolder[folderId] ?? [], records);
-		set((s) => ({ assetsByFolder: { ...s.assetsByFolder, [folderId]: merged } }));
-		const missing = merged.filter((r) => !r.localUri);
-		if (missing.length === 0 || !isTauri()) {
-			// 非 Tauri：直接用远程 url 显示（浏览器无 CSP 限制）
-			if (!isTauri() && missing.length) {
-				set((s) => ({
-					assetsByFolder: {
-						...s.assetsByFolder,
-						[folderId]: (s.assetsByFolder[folderId] ?? []).map((r) => (r.localUri ? r : { ...r, localUri: r.url })),
-					},
-				}));
-			}
-			void get().save();
-			return;
-		}
-		set((s) => ({ fetching: { ...s.fetching, [folderId]: { done: 0, total: missing.length } } }));
+		const request = Symbol();
+		assetRequests.set(folderId, request);
+		const isCurrent = () => assetRequests.get(folderId) === request;
+		set((s) => ({ fetching: { ...s.fetching, [folderId]: { done: 0, total: 1 } } }));
 		try {
+			// 先拉记录清单（轻量），再逐条下载缺本地副本的（进度条=下载进度）
+			const records = await managedClient.sharedFolderAssets(folderId);
+			if (!isCurrent()) return;
+			const merged = mergeSharedAssets(get().assetsByFolder[folderId] ?? [], records);
+			set((s) => ({ assetsByFolder: { ...s.assetsByFolder, [folderId]: merged } }));
+			const missing = merged.filter((r) => !r.localUri);
+			if (missing.length === 0 || !isTauri()) {
+				// 非 Tauri：直接用远程 url 显示（浏览器无 CSP 限制）
+				if (!isTauri() && missing.length) {
+					set((s) => ({
+						assetsByFolder: {
+							...s.assetsByFolder,
+							[folderId]: (s.assetsByFolder[folderId] ?? []).map((r) => (r.localUri ? r : { ...r, localUri: r.url })),
+						},
+					}));
+				}
+				void get().save();
+				return;
+			}
+			set((s) => ({ fetching: { ...s.fetching, [folderId]: { done: 0, total: missing.length } } }));
 			let done = 0;
 			const CONC = 4;
 			let idx = 0;
 			const worker = async () => {
-				while (idx < missing.length) {
+				while (isCurrent() && idx < missing.length) {
 					const rec = missing[idx++];
 					const local = await downloadShared(rec);
+					if (!isCurrent()) return;
 					done += 1;
 					set((s) => ({
 						fetching: { ...s.fetching, [folderId]: { done, total: missing.length } },
@@ -237,13 +270,16 @@ export const useSharedLibStore = create<SharedLibState>((set, get) => ({
 				}
 			};
 			await Promise.all(Array.from({ length: Math.min(CONC, missing.length) }, worker));
-			void get().save();
+			if (isCurrent()) void get().save();
 		} finally {
-			set((s) => {
-				const f = { ...s.fetching };
-				delete f[folderId];
-				return { fetching: f };
-			});
+			if (isCurrent()) {
+				assetRequests.delete(folderId);
+				set((s) => {
+					const f = { ...s.fetching };
+					delete f[folderId];
+					return { fetching: f };
+				});
+			}
 		}
 	},
 
@@ -271,6 +307,57 @@ export const useSharedLibStore = create<SharedLibState>((set, get) => ({
 
 	addFolder: (libId, folder) => {
 		set((s) => ({ foldersByLib: { ...s.foldersByLib, [libId]: [...(s.foldersByLib[libId] ?? []), folder] } }));
+		void get().save();
+	},
+
+	removeFolder: (libId, folderId) => {
+		libsRequest = undefined;
+		folderRequests.delete(libId);
+		assetRequests.delete(folderId);
+		set((s) => {
+			const folders = s.foldersByLib[libId];
+			const removed = folders?.find((folder) => folder.id === folderId);
+			const assetsByFolder = { ...s.assetsByFolder };
+			delete assetsByFolder[folderId];
+			const fetching = { ...s.fetching };
+			delete fetching[libId];
+			delete fetching[folderId];
+			return {
+				libs: removed ? s.libs.map((lib) => lib.id === libId ? {
+					...lib,
+					folderCount: Math.max(0, lib.folderCount - 1),
+					assetCount: Math.max(0, lib.assetCount - removed.count),
+				} : lib) : s.libs,
+				foldersByLib: folders ? { ...s.foldersByLib, [libId]: folders.filter((folder) => folder.id !== folderId) } : s.foldersByLib,
+				assetsByFolder,
+				fetching,
+				lastView: s.lastView?.libId === libId && s.lastView.folderId === folderId ? { libId } : s.lastView,
+			};
+		});
+		void get().save();
+	},
+
+	removeAsset: (folderId, assetRecordId) => {
+		libsRequest = undefined;
+		assetRequests.delete(folderId);
+		const libId = Object.keys(get().foldersByLib).find((id) => get().foldersByLib[id].some((folder) => folder.id === folderId));
+		if (libId) folderRequests.delete(libId);
+		set((s) => {
+			const assets = s.assetsByFolder[folderId];
+			const removed = assets?.some((asset) => asset.id === assetRecordId);
+			const fetching = { ...s.fetching };
+			delete fetching[folderId];
+			if (libId) delete fetching[libId];
+			return {
+				assetsByFolder: assets ? { ...s.assetsByFolder, [folderId]: assets.filter((asset) => asset.id !== assetRecordId) } : s.assetsByFolder,
+				foldersByLib: removed && libId ? {
+					...s.foldersByLib,
+					[libId]: s.foldersByLib[libId].map((folder) => folder.id === folderId ? { ...folder, count: Math.max(0, folder.count - 1) } : folder),
+				} : s.foldersByLib,
+				libs: removed && libId ? s.libs.map((lib) => lib.id === libId ? { ...lib, assetCount: Math.max(0, lib.assetCount - 1) } : lib) : s.libs,
+				fetching,
+			};
+		});
 		void get().save();
 	},
 }));

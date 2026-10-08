@@ -20,6 +20,12 @@ import {
 	ANGLE_STEP, DEFAULT_VIEW, SHOT_LABELS, SHOT_SCALES, shotFromScale, VIEW_PRESETS, type ViewAngleParams,
 } from "@/lib/viewAngle";
 import { getChannelModelsForNodeType, type ModelOption } from "@/services/adapters/channelAdapter";
+import { GenerationCost } from "@/components/GenerationCost";
+import { buildImageParams, imageResolutionOptions } from "@/lib/genParams";
+import { inheritSharedParams } from "@/lib/sharedNodeParams";
+import { getNodeSpec } from "@/nodes/nodeSpecs";
+import { useCanvasStore } from "@/store/canvasStore";
+import { RouteSelect } from "@/components/RouteSelect";
 
 const PREVIEW_W = 320;
 const PREVIEW_H = 240;
@@ -92,6 +98,12 @@ export default function ViewAngleModal() {
 	// 图片能力模型：订阅 catalog——弹窗打开早于 catalog 拉取完成时，到货即刷新列表
 	// （实测坑：只按 session 记忆列表会永远停在打开瞬间的快照）
 	const catalog = useCatalogStore((s) => s.catalog);
+	useCanvasStore(s => s.nodes);
+	const imageModel = catalog?.models.find(model => model.id === modelKey);
+	const imageParams = buildImageParams({
+		...Object.fromEntries((getNodeSpec("image.gen")?.params ?? []).filter(field => field.default !== undefined).map(field => [field.key, field.default])),
+		...inheritSharedParams("image.gen"),
+	}, imageResolutionOptions(imageModel), imageModel?.params);
 	const models = useMemo<ModelOption[]>(
 		() => (session ? getChannelModelsForNodeType("image.gen") : []),
 		[session, catalog], // eslint-disable-line react-hooks/exhaustive-deps
@@ -356,12 +368,9 @@ export default function ViewAngleModal() {
 						)}
 						<label style={rowCss}>
 							<span style={labelCss}>模型</span>
-							<select value={modelKey} onChange={(e) => setModelKey(e.target.value)}
-								style={{ flex: 1, minWidth: 0, padding: "6px 8px", fontSize: 12.5, borderRadius: 8, color: "#fff", background: "#1a1f2b", border: "1px solid rgba(255,255,255,0.14)", outline: "none" }}>
-								{models.map((m) => (
-									<option key={m.id} value={m.id}>{m.label}{m.modeName ? `（${m.modeName}）` : ""}</option>
-								))}
-							</select>
+							<RouteSelect title="视角生成模型" value={modelKey} onChange={setModelKey}
+								style={{ flex: 1, minWidth: 0, padding: "6px 8px", fontSize: 12.5, borderRadius: 8, color: "#fff", background: "#1a1f2b", border: "1px solid rgba(255,255,255,0.14)", outline: "none" }}
+								options={models.map(model => ({ value: model.id, modelKey: model.id, label: `${model.label}${model.modeName ? `（${model.modeName}）` : ""}` }))} />
 						</label>
 					</div>
 				</div>
@@ -377,7 +386,7 @@ export default function ViewAngleModal() {
 						提交后在画布新建图片节点生成（可在节点上换模型重跑）
 					</span>
 					<button onClick={onSubmit} title="生成该视角"
-						className="rounded-full w-9 h-9 flex items-center justify-center bg-violet-500 hover:bg-violet-400 text-white cursor-pointer text-base">↑</button>
+						className="rounded-full px-4 h-9 flex items-center justify-center bg-violet-500 hover:bg-violet-400 text-white cursor-pointer text-xs whitespace-nowrap">生成<GenerationCost modelKey={modelKey} params={imageParams} /></button>
 				</div>
 			</div>
 		</div>

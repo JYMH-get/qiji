@@ -53,6 +53,9 @@ outcode/
 # 运维巡检/使用分析导出（本地产物，不进仓库）
 ops-reports/
 
+# 本地验证产物、浏览器会话与生产配置快照（不进仓库）
+outputs/
+
 # LightRAG 本地 venv（不入库）
 .venv-lightrag/
 

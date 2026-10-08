@@ -37,7 +37,7 @@
  *     rtcStore.playheadUs（时间轴播放头竖线自动跟随）；rAF 只在播放中运行；tick 内经 getState 现读
  *     （进度条 seek / 循环开关 / 解码上限 改了即时生效，不必重启循环）；
  *     循环内顺带对全部活跃视频层做漂移校正（>150ms seek 回来）；
- *   - ⚠ **图层元素按 trackId 作 key 常驻，绝不按片段 id / uri 作 key**：换段时复用同一个元素只换 src，
+ *   - ⚠ **图层元素按 trackId 作 key 常驻，绝不按片段 id / uri 作 key**：每槽双缓冲，下一段首帧就绪才交换显示，
  *     否则每次切片段都重建 DOM、播放断流（第236轮「勿条件卸载播放器」的同一精神）；
  *     该层这一刻没有片段时**隐藏而不是卸载**；同一层这一刻是 video、下一刻是 image → 每层内
  *     `<video>` 与 `<img>` 都常驻，按当前片段类型显隐其一（src 一律由同步 effect imperative 赋值，
@@ -49,7 +49,7 @@
  *     订阅 selection 只为画选中框——它只触发重渲染、不重建图层元素，**播放不中断**；
  *   - 暂停时播放头被时间轴拖动 → 各层被动 seek 跟随。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
 	Maximize2,
 	Minimize2,
@@ -99,7 +99,7 @@ import {
 } from "./rtcPreviewStore";
 import { useRtcSettingsModal } from "./settings/rtcSettingsModalStore";
 import { docCanvas } from "@/types/rtc";
-import type { RtcSegment, RtcTransform } from "@/types/rtc";
+import type { RtcTransform } from "@/types/rtc";
 /* ── 第二批：关键帧——画面/音量的生效值一律经 rtcKeyframes 解算（无关键帧片段返回
  *    segTransform/基础音量的同一结果 = 原路径零变化）；落笔走 applyTransformAt（关键帧感知：
  *    某属性已有帧 → 在播放头时刻写帧；无帧属性照旧写基础 transform）。 */
@@ -107,23 +107,13 @@ import { applyTransformAt, effectiveTransformAt } from "@/lib/rtcKeyframes";
 /* ── 第三批：画面裁剪（clip-path 换算）+ 字幕层 ── */
 import { cropClipPathCss, cropOf } from "@/lib/rtcCropCore";
 import { RtcTextLayer } from "./RtcTextLayer";
-import { rememberMediaTime, seekMediaTime, shouldResyncMedia } from "./rtcMediaSync";
+import { rememberMediaTime, seekMediaTime } from "./rtcMediaSync";
+import { RtcVideoBuffer } from "./rtcVideoBuffer";
+import { nextVideoBoundaryUs, nextVideoLayers, videoBoundaryTimes } from "./rtcVideoLookahead";
+import { applyRtcPlaybackCommand, registerRtcPlaybackController, requestRtcPlayback, rtcPlaybackScope } from "./rtcPlaybackControl";
 
-/** 漂移校正阈值（秒）：视频阈值由 rtcMediaSync 统一；音频池粗校正 300ms */
+/** 音频池粗漂移校正阈值（秒）；视频由 rtcVideoBuffer 同步并等待目标帧。 */
 const AUDIO_DRIFT_SEC = 0.3;
-
-function PlaceholderCard({ seg }: { seg: RtcSegment }) {
-	return (
-		<div style={{ padding: "16px 28px", borderRadius: 10, border: "1px dashed rgba(255,255,255,0.28)", background: "rgba(255,255,255,0.04)", textAlign: "center", maxWidth: "80%" }}>
-			<div style={{ fontSize: 13, color: "rgba(255,255,255,0.85)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-				{seg.name?.trim() || "分镜占位"}
-			</div>
-			<div style={{ marginTop: 6, fontSize: 11, color: "rgba(255,255,255,0.4)", letterSpacing: 2 }}>
-				{seg.status === "running" ? "生成中" : seg.status === "failed" ? "生成失败" : "未生成"}
-			</div>
-		</div>
-	);
-}
 
 /* ════════════════ 控制条通用件 ════════════════ */
 
@@ -384,15 +374,22 @@ function SelectionOverlay({ frameRatio, natural, t, locked, onDown, onReset }: {
 
 /* ════════════════ 播放器本体 ════════════════ */
 
-export function RtcSequencePlayer() {
+export function RtcSequencePlayer({ showScriptReference = true }: { showScriptReference?: boolean }) {
 	/* 第四批：取数口径 = 当前编辑层（主层=doc、复合子层=子文档视图，引用稳定可直接作 selector）。
 	 * 编辑子层时播放器就播子层（子层视图不含复合片段，下方全部逻辑天然退化为普通 doc）。 */
 	const doc = useRtcStore(activeRtcDoc);
+	const previewScope = useRtcStore(rtcPlaybackScope);
+	const previousScopeRef = useRef(previewScope);
 	const playheadUs = useRtcStore((s) => s.playheadUs);
 	const selection = useRtcStore((s) => s.selection);
-	const [playing, setPlaying] = useState(false);
+	const [playing, setPlayingState] = useState(false);
 	const playingRef = useRef(false);
-	playingRef.current = playing;
+	const playbackControllerRef = useRef<ReturnType<typeof registerRtcPlaybackController> | null>(null);
+	const setPlaying = useCallback((next: boolean) => {
+		playingRef.current = next;
+		setPlayingState(next);
+		playbackControllerRef.current?.publish(next);
+	}, []);
 
 	/* 预览显示偏好（全在 rtcPreviewStore，绝不进 rtcDoc） */
 	const quality = useRtcPreviewStore((s) => s.quality);
@@ -401,14 +398,19 @@ export function RtcSequencePlayer() {
 	const hideBoxWhilePlaying = useRtcPreviewStore((s) => s.hideBoxWhilePlaying);
 	const uniformScale = useRtcPreviewStore((s) => s.uniformScale);
 
-	/** 图层元素表：trackId → 元素（常驻复用，换段只换 src） */
-	const videoElsRef = useRef<Map<string, HTMLVideoElement>>(new Map());
+	/** 每槽固定两个元素，备用元素提前解码；只交换显示，不重建 DOM。 */
+	const videoElsRef = useRef<Map<string, [HTMLVideoElement | null, HTMLVideoElement | null]>>(new Map());
+	const videoBuffersRef = useRef<Map<string, RtcVideoBuffer>>(new Map());
+	const decodeStillsRef = useRef<Map<string, { segId: string; uri: string; sourceSec: number }>>(new Map());
+	const [mediaRevision, setMediaRevision] = useState(0);
+	const mediaChanged = useCallback(() => setMediaRevision((n) => n + 1), []);
+	const [buffering, setBuffering] = useState(false);
+	const [mediaError, setMediaError] = useState(false);
+	const bufferingRef = useRef(false);
 	const imgElsRef = useRef<Map<string, HTMLImageElement>>(new Map());
 	/** 稳定的 ref 回调缓存（内联箭头会每帧 detach/attach，必须按 trackId 复用同一个函数） */
-	const videoRefCbsRef = useRef<Map<string, (el: HTMLVideoElement | null) => void>>(new Map());
+	const videoRefCbsRef = useRef<Map<string, ((el: HTMLVideoElement | null) => void)[]>>(new Map());
 	const imgRefCbsRef = useRef<Map<string, (el: HTMLImageElement | null) => void>>(new Map());
-	/** 各层已完成入段对时的片段 id——漂移校正/暂停跟随只作用于对过时的层（防换段瞬间乱 seek） */
-	const syncedSegRef = useRef<Map<string, string>>(new Map());
 	/** 音频元素池：segId → <audio>（不进 DOM；离开区间只停不销毁，重进复用） */
 	const audioPoolRef = useRef<Map<string, HTMLAudioElement>>(new Map());
 	const barRef = useRef<HTMLDivElement | null>(null);
@@ -431,10 +433,13 @@ export function RtcSequencePlayer() {
 	const [isFullscreen, setIsFullscreen] = useState(false);
 
 	const durationUs = doc ? docDurationUs(doc) : 0;
+	const videoBoundaries = useMemo(() => doc ? videoBoundaryTimes(doc) : [], [doc]);
+	const videoBoundariesRef = useRef(videoBoundaries);
+	videoBoundariesRef.current = videoBoundaries;
 	// 显示帧时刻：播完停在末尾时钳到 duration-1（末帧右缘开区间，不钳会闪黑场）
 	const frameUs = durationUs > 0 ? Math.min(playheadUs, durationUs - 1) : 0;
 	// 图层槽位（第四批）：普通视频轨一槽 + 复合片段的每条子视频轨一槽——元素按 slotId 常驻复用
-	const layerSlots = doc ? videoLayerSlotsBottomUp(doc) : [];
+	const layerSlots = useMemo(() => doc ? videoLayerSlotsBottomUp(doc) : [], [doc]);
 	const stage = doc ? videoStageAt(doc, frameUs) : { layers: [] as RtcVideoLayer[], placeholder: null };
 	const layerByTrack = new Map(stage.layers.map((l) => [l.trackId, l]));
 	const canvas = docCanvas(doc ?? {});
@@ -495,19 +500,23 @@ export function RtcSequencePlayer() {
 		});
 	}, []);
 
-	const videoRefFor = (trackId: string) => {
-		let cb = videoRefCbsRef.current.get(trackId);
-		if (!cb) {
-			cb = (el) => {
-				const m = videoElsRef.current;
-				if (el) { m.set(trackId, el); return; }
-				m.get(trackId)?.pause(); // 卸载即停（脱离 DOM 的媒体元素可能继续发声）
-				m.delete(trackId);
-				syncedSegRef.current.delete(trackId);
-			};
-			videoRefCbsRef.current.set(trackId, cb);
+	const videoRefFor = (trackId: string, index: number) => {
+		let callbacks = videoRefCbsRef.current.get(trackId);
+		if (!callbacks) {
+			callbacks = [0, 1].map((i) => (el: HTMLVideoElement | null) => {
+				const pair = videoElsRef.current.get(trackId) ?? [null, null];
+				if (pair[i] === el) return;
+				videoBuffersRef.current.get(trackId)?.dispose();
+				videoBuffersRef.current.delete(trackId);
+				decodeStillsRef.current.delete(trackId);
+				pair[i] = el;
+				if (!pair[0] && !pair[1]) videoElsRef.current.delete(trackId);
+				else videoElsRef.current.set(trackId, pair);
+				if (pair[0] && pair[1]) videoBuffersRef.current.set(trackId, new RtcVideoBuffer([pair[0], pair[1]], mediaChanged));
+			});
+			videoRefCbsRef.current.set(trackId, callbacks);
 		}
-		return cb;
+		return callbacks[index];
 	};
 	const imgRefFor = (trackId: string) => {
 		let cb = imgRefCbsRef.current.get(trackId);
@@ -522,6 +531,30 @@ export function RtcSequencePlayer() {
 		return cb;
 	};
 
+	useLayoutEffect(() => {
+		if (previousScopeRef.current === previewScope) return;
+		previousScopeRef.current = previewScope;
+		setPlaying(false);
+		bufferingRef.current = false;
+		decodeStillsRef.current.clear();
+		for (const buffer of videoBuffersRef.current.values()) buffer.reset();
+		for (const el of audioPoolRef.current.values()) {
+			el.pause();
+			el.removeAttribute("src");
+		}
+		audioPoolRef.current.clear();
+	}, [previewScope]);
+
+	useLayoutEffect(() => {
+		const controller = registerRtcPlaybackController(previewScope, command => applyRtcPlaybackCommand(command, playingRef.current, setPlaying));
+		playbackControllerRef.current = controller;
+		controller.publish(playingRef.current);
+		return () => {
+			controller.dispose();
+			if (playbackControllerRef.current === controller) playbackControllerRef.current = null;
+		};
+	}, [previewScope, setPlaying]);
+
 	/* ── rAF 播放驱动（单一循环，只在播放中运行；顺带对全部活跃视频层做漂移校正） ── */
 	useEffect(() => {
 		if (!playing) return;
@@ -531,11 +564,14 @@ export function RtcSequencePlayer() {
 			const wall = performance.now();
 			const dtUs = (wall - lastWall) * 1000;
 			lastWall = wall;
+			// 等待首帧时不累计墙钟差值：恢复后从切点继续，声音也在同步 effect 中暂停。
+			if (bufferingRef.current) { raf = requestAnimationFrame(tick); return; }
 			const st = useRtcStore.getState();
 			const view = activeRtcDoc(st); // 第四批：编辑子层时按子层时长/图层推进
 			if (!view) { setPlaying(false); return; }
 			const dur = docDurationUs(view);
-			const next = st.playheadUs + dtUs;
+			const boundary = nextVideoBoundaryUs(videoBoundariesRef.current, st.playheadUs);
+			const next = Math.min(st.playheadUs + dtUs, boundary ?? Infinity);
 			if (next >= dur) {
 				// 循环开关经 getState 现读（改了即时生效，不必重启 rAF）
 				if (useRtcPreviewStore.getState().loop && dur > 0) {
@@ -548,66 +584,54 @@ export function RtcSequencePlayer() {
 				return;
 			}
 			st.setPlayhead(next);
-			// 逐层漂移校正：以 video.currentTime 对照期望源时间，差 >150ms seek 回来
-			const st2 = videoStageAt(view, next);
-			const active = activeDecodeTrackIds(st2.layers, useRtcPreviewStore.getState().maxDecodeLayers);
-			for (const l of st2.layers) {
-				if (l.media !== "video" || l.frozen || !active.has(l.trackId)) continue;
-				const el = videoElsRef.current.get(l.trackId);
-				if (!el || el.readyState < 1) continue;
-				if (syncedSegRef.current.get(l.trackId) !== l.seg.id) continue;
-				rememberMediaTime(el, l.sourceSec);
-				if (shouldResyncMedia(el.currentTime, l.sourceSec, true)) seekMediaTime(el, l.sourceSec);
-			}
 			raf = requestAnimationFrame(tick);
 		};
 		raf = requestAnimationFrame(tick);
 		return () => cancelAnimationFrame(raf);
 	}, [playing]);
 
-	/* ── 图层同步：src / 入段对时 / 声音属性 / 播放暂停 / 暂停时跟随拖动（全部 imperative，元素不重建） ── */
-	useEffect(() => {
-		const vids = videoElsRef.current;
+	/* ── 绘制前同步：备用视频解码成功才交换；全部层一起暂停/恢复，避免画面等待时声音先走。 ── */
+	useLayoutEffect(() => {
+		const buffers = videoBuffersRef.current;
 		const imgs = imgElsRef.current;
-		const synced = syncedSegRef.current;
 		const st = videoStageAt(doc ?? { id: "", name: "", fps: 30, tracks: [] }, frameUs);
 		const byTrack = new Map(st.layers.map((l) => [l.trackId, l]));
 		const active = activeDecodeTrackIds(st.layers, maxDecodeLayers);
-
-		for (const [trackId, el] of vids) {
+		let waiting = false;
+		let failed = false;
+		for (const [trackId, buffer] of buffers) {
 			const layer = byTrack.get(trackId);
-			if (!layer || layer.media !== "video" || !layer.uri) {
-				// 该层这一刻没有视频：停掉（元素与 src 保留，重进不重载；显隐由 style 负责）
-				if (!el.paused) el.pause();
-				synced.delete(trackId);
-				continue;
+			let syncLayer = layer;
+			if (playing && layer?.media === "video" && !layer.frozen && !active.has(trackId)) {
+				// 超解码上限的层只准备入段静帧，不能以逐帧 seek 绕过暂停护栏。
+				let still = decodeStillsRef.current.get(trackId);
+				if (!still || still.segId !== layer.seg.id || still.uri !== layer.uri) {
+					still = { segId: layer.seg.id, uri: layer.uri, sourceSec: layer.sourceSec };
+					decodeStillsRef.current.set(trackId, still);
+				}
+				syncLayer = { ...layer, sourceSec: still.sourceSec };
+			} else decodeStillsRef.current.delete(trackId);
+			const ready = buffer.sync(syncLayer, playing && active.has(trackId));
+			if (!ready && (active.has(trackId) || layer?.frozen)) {
+				waiting = true;
+				failed ||= buffer.error;
 			}
-			if (el.dataset.uri !== layer.uri) {
-				el.dataset.uri = layer.uri;
-				el.src = layer.uri;
-				synced.delete(trackId);
-			}
-			// 音量关键帧：按当前帧时刻解算（无 volume 帧 = layer.volume 同值）；本 effect 依赖 frameUs，播放中逐帧跟随
-			el.volume = layer.volume; // 音量（含关键帧与复合宿主乘积）已在 rtcPlayback 源头算好
-			el.muted = layer.muted;
-			el.playbackRate = layer.rate;
-			// 每一帧先登记最新目标：metadata 延迟到达时必须跳当前播放头，不能跳最初入段位置。
-			rememberMediaTime(el, layer.sourceSec);
-			if (synced.get(trackId) !== layer.seg.id) {
-				seekMediaTime(el, layer.sourceSec); // 入段对时（含 sourceStartUs/speed 换算）
-				synced.set(trackId, layer.seg.id);
-			} else if (el.readyState >= 1 && shouldResyncMedia(el.currentTime, layer.sourceSec, playing)) {
-				// 暂停拖动精确跟随；同一片段从其它位置开播时，也在 play() 前立即对时。
-				seekMediaTime(el, layer.sourceSec);
-			}
-			// 冻结幽灵层（转场定格帧）永不 play：入段对时那一帧就是它的全部
-			if (playing && active.has(trackId) && !layer.frozen) {
-				if (el.paused) void el.play().catch(() => {});
-			} else if (!el.paused) {
-				el.pause();
-			}
-			// 元数据已就绪的层顺手补记自然尺寸（错过 loadedmetadata 事件时的兜底）
-			if (el.videoWidth > 0) recordNatural(layer.uri, el.videoWidth, el.videoHeight);
+		}
+		bufferingRef.current = waiting;
+		setBuffering(waiting);
+		setMediaError(failed);
+		for (const [trackId, buffer] of buffers) {
+			buffer.setPlaying(playing && !waiting && active.has(trackId), byTrack.get(trackId));
+		}
+		if (waiting) for (const el of audioPoolRef.current.values()) el.pause();
+
+		// 仅在附近边界预热每槽下一段，后台解码数量同样遵守预览层数上限。
+		if (doc && !waiting) {
+			const upcoming = nextVideoLayers(doc, frameUs, 1_500_000, videoBoundaries);
+			const slotOrder = new Map(layerSlots.map((slot, index) => [slot.slotId, index]));
+			upcoming.sort((a, b) => (slotOrder.get(a.trackId) ?? 0) - (slotOrder.get(b.trackId) ?? 0));
+			const limited = maxDecodeLayers > 0 ? upcoming.slice(-maxDecodeLayers) : upcoming;
+			for (const layer of limited) buffers.get(layer.trackId)?.warm(layer);
 		}
 
 		for (const [trackId, el] of imgs) {
@@ -619,7 +643,7 @@ export function RtcSequencePlayer() {
 			}
 			if (el.naturalWidth > 0) recordNatural(layer.uri, el.naturalWidth, el.naturalHeight);
 		}
-	}, [doc, frameUs, playing, maxDecodeLayers, recordNatural]);
+	}, [doc, frameUs, playing, maxDecodeLayers, recordNatural, mediaRevision, videoBoundaries, layerSlots, previewScope]);
 
 	/* ── 音频池：进入区间即播、离开即停（元素留池复用） ── */
 	useEffect(() => {
@@ -649,7 +673,7 @@ export function RtcSequencePlayer() {
 			el.volume = clip.volume;
 			el.playbackRate = clip.rate;
 			rememberMediaTime(el, clip.sourceSec);
-			if (playing) {
+			if (playing && !bufferingRef.current) {
 				// 条目自带已解算的源时间（复合偏移与 speed 已在纯函数里算好）
 				const target = clip.sourceSec;
 				if (el.paused) {
@@ -662,7 +686,7 @@ export function RtcSequencePlayer() {
 				el.pause();
 			}
 		}
-	}, [playheadUs, playing]);
+	}, [playheadUs, playing, buffering]);
 
 	/* ── doc 变更：清掉池里已不存在的片段元素 + 已删槽位的 ref 回调缓存 ── */
 	useEffect(() => {
@@ -693,14 +717,14 @@ export function RtcSequencePlayer() {
 	/* ── 卸载收尾：全停并清池 ── */
 	useEffect(() => {
 		const pool = audioPoolRef.current;
-		const vids = videoElsRef.current;
+		const buffers = videoBuffersRef.current;
 		return () => {
 			for (const el of pool.values()) {
 				el.pause();
 				el.removeAttribute("src");
 			}
 			pool.clear();
-			for (const el of vids.values()) el.pause();
+			for (const buffer of buffers.values()) buffer.setPlaying(false);
 			frameRoRef.current?.disconnect();
 			frameRoRef.current = null;
 		};
@@ -861,15 +885,7 @@ export function RtcSequencePlayer() {
 
 	if (!doc) return null;
 
-	const onToggle = () => {
-		if (playing) { setPlaying(false); return; }
-		const st = useRtcStore.getState();
-		if (!st.doc) return;
-		const dur = docDurationUs(st.doc);
-		if (dur <= 0) return;
-		if (st.playheadUs >= dur - 1) st.setPlayhead(0); // 播完再按=从头
-		setPlaying(true);
-	};
+	const onToggle = () => { requestRtcPlayback("toggle"); };
 
 	const seekFromPointer = (clientX: number) => {
 		const bar = barRef.current;
@@ -896,7 +912,7 @@ export function RtcSequencePlayer() {
 	const aspectText = aspectTextOf(canvas.width, canvas.height);
 
 	return (
-		<div ref={rootRef} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", background: isFullscreen ? "#000" : undefined }}>
+		<div ref={rootRef} style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", isolation: "isolate", background: isFullscreen ? "#000" : undefined }}>
 			{/* 画面区：外层=可用空间（纯黑留白），内层=按 doc.canvas 比例居中的**画幅框**，图层全在框内合成 */}
 			{/* 外层=画幅之外的留白：**刻意用灰**，与画幅内的纯黑区分开，让用户一眼看出画幅边界在哪 */}
 			<div style={{ position: "relative", flex: 1, minHeight: 0, background: "#2b2d36", overflow: "hidden", containerType: "size" }}>
@@ -952,14 +968,15 @@ export function RtcSequencePlayer() {
 										...(layer?.fill ? { background: layer.fill } : null),
 									}}
 								>
-									<video
-										ref={videoRefFor(slot.slotId)}
+									{[0, 1].map((bufferIndex) => <video
+										key={bufferIndex}
+										ref={videoRefFor(slot.slotId, bufferIndex)}
 										preload="auto"
 										playsInline
 										disablePictureInPicture
 										onLoadedMetadata={(e) => recordNatural(e.currentTarget.dataset.uri, e.currentTarget.videoWidth, e.currentTarget.videoHeight)}
 										style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", display: isVideo ? "block" : "none" }}
-									/>
+									/>)}
 									<img
 										ref={imgRefFor(slot.slotId)}
 										alt=""
@@ -970,14 +987,14 @@ export function RtcSequencePlayer() {
 								</div>
 							);
 						})}
-						{/* 第三批·字幕层：播放头处的活动字幕（压在全部画面层之上、占位提示卡之下；零测量排版） */}
-						<RtcTextLayer doc={doc} tUs={frameUs} />
-						{/* 占位提示卡：仅当**一层画面都没有**时显示（占位绝不遮挡下层旧版本） */}
-						{stage.layers.length === 0 && stage.placeholder ? (
-							<div style={{ position: "absolute", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
-								<PlaceholderCard seg={stage.placeholder} />
+						{/* 第三批·字幕层：播放头处的活动字幕（压在全部画面层之上；零测量排版） */}
+						<RtcTextLayer doc={doc} tUs={frameUs} showScriptReference={showScriptReference} />
+						{buffering && (
+							<div role="status" style={{ position: "absolute", left: 12, bottom: 12, zIndex: 60, padding: "5px 9px", borderRadius: 5, background: "rgba(0,0,0,0.65)", color: "#ddd", fontSize: 12 }}>
+								{mediaError ? "视频加载失败" : "正在准备画面…"}
+								{mediaError && <button type="button" onClick={(e) => { e.stopPropagation(); for (const buffer of videoBuffersRef.current.values()) buffer.retry(); mediaChanged(); }} style={{ marginLeft: 8 }}>重试</button>}
 							</div>
-						) : null}
+						)}
 					</div>
 				</div>
 				{/*
@@ -1007,6 +1024,7 @@ export function RtcSequencePlayer() {
 			<div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", background: "rgba(255,255,255,0.03)" }}>
 				<button
 					type="button"
+					data-rtc-play-toggle
 					title={playing ? "暂停" : "播放"}
 					onClick={onToggle}
 					style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 30, height: 30, flexShrink: 0, borderRadius: "50%", border: "1px solid rgba(139,92,246,0.5)", background: "rgba(139,92,246,0.18)", color: "#d6c8ff", cursor: "pointer" }}

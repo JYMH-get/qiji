@@ -597,10 +597,11 @@ export function backfillUsageProducts(since: string): void {
 
 /** 完成一条日志：更新索引元信息（防抖落盘）+ 把 ②响应 写入详情文件 */
 export function finishLog(id: string, patch: FinishPatch): void {
-  if (patch.status === 'success' || patch.status === 'failed') { finishRouteObservation(id, patch.status === 'success', patch.error); finishChannelObservation(id, patch.status === 'success', patch.error); }
+	if (patch.status === 'success' || patch.status === 'failed') finishRouteObservation(id, patch.status === 'success', patch.error);
 	const m = logById.get(id);
 	if (!m) return;
 	applyFinishMeta(m, patch);
+	finishChannelObservation(id, patch.status === 'success', patch.error, Date.parse(m.finishedAt!), m);
 	if (patch.response !== undefined) patchDetail(id, { response: truncateBase64(patch.response) });
 	markDirty(m);
 	flushIndex();
@@ -628,6 +629,7 @@ export function finishLogsBulk(patches: ({ id: string } & FinishPatch)[]): void 
 		const m = logById.get(p.id);
 		if (!m) continue;
 		applyFinishMeta(m, p);
+		finishChannelObservation(p.id, p.status === 'success', p.error, Date.parse(m.finishedAt!), m);
 		if (p.response !== undefined) patchDetail(p.id, { response: truncateBase64(p.response) });
 		markDirty(m);
 	}

@@ -11,6 +11,8 @@ import { dispatchCommand } from "@/command/dispatch";
 import { managedClient } from "@/services/managedClient";
 import { PromptExpandButton } from "@/components/PromptExpandButton";
 import { AssetDisplayImage } from "@/components/AssetDisplayImage";
+import { GenerationCost } from "@/components/GenerationCost";
+import { useRouteSuccessRates } from "@/components/RouteSuccessRate";
 
 const panelTransition = { duration: 0.18 };
 
@@ -22,6 +24,7 @@ const panelTransition = { duration: 0.18 };
  * - 发送 / 重新回答（经 run 命令走 runChatNode：带上游记忆、答完自动新建下游对话节点）
  */
 export function ChatPanel({ nodeId }: { nodeId: string }) {
+	const rateForModel = useRouteSuccessRates();
 	const node = useCanvasStore((s) => s.nodes[nodeId]);
 	const viewport = useCanvasStore((s) => s.viewport);
 	const status = useCanvasStore((s) => s.runtime[nodeId]?.status ?? "idle");
@@ -180,14 +183,15 @@ export function ChatPanel({ nodeId }: { nodeId: string }) {
 				{upload?.error && <div role="alert" className="text-xs text-red-400">{upload.error}</div>}
 
 				{/* 底部：模型 + 图片 / 跳过开关 + 发送/重新回答 */}
-				<div className="flex items-center justify-between gap-2">
+				<div className="flex flex-wrap items-center justify-between gap-2">
 					<div className="flex items-center gap-2">
 						<div className="relative">
 							<button
 								onClick={(e) => { e.stopPropagation(); setModelOpen((v) => !v); }}
 								className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-white/5 border border-white/5 hover:bg-white/8 text-foreground cursor-pointer whitespace-nowrap"
 							>
-								{modelLabel}
+								<span className="min-w-0 max-w-[220px] truncate">{modelLabel}</span>
+								<span className="shrink-0 tabular-nums" title={rateForModel(modelKey).expanded}>{rateForModel(modelKey).compact}</span>
 								<ChevronDown className="h-3 w-3 text-muted-foreground" />
 							</button>
 							{modelOpen && (
@@ -203,7 +207,7 @@ export function ChatPanel({ nodeId }: { nodeId: string }) {
 											onClick={() => { setParam({ model: opt.id }); setModelOpen(false); }}
 											className={`flex items-center justify-between w-full px-3.5 py-2 text-xs text-left transition-colors cursor-pointer ${opt.id === modelKey ? "bg-white/10 text-white" : "text-muted-foreground hover:bg-white/5 hover:text-foreground"}`}
 										>
-											<span>{opt.modelName}</span>
+											<span>{opt.modelName}（{rateForModel(opt.id).expanded}）</span>
 											{opt.id === modelKey && <span className="text-green-400 text-[10px]">✓</span>}
 										</button>
 									))}
@@ -236,6 +240,7 @@ export function ChatPanel({ nodeId }: { nodeId: string }) {
 						>
 							{busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
 							{node.data.task ? "重连原任务" : "重新回答"}
+							{!node.data.task && <GenerationCost modelKey={modelKey} params={params} />}
 						</button>
 					) : (
 						<button
@@ -245,6 +250,7 @@ export function ChatPanel({ nodeId }: { nodeId: string }) {
 						>
 							{busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
 							发送
+							<GenerationCost modelKey={modelKey} params={params} />
 						</button>
 					)}
 				</div>

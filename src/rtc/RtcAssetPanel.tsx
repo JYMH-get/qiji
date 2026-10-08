@@ -14,20 +14,24 @@
  *  - 字幕页：「＋在播放头添加字幕」 + 现有字幕列表（点行=选中并跳到该字幕，正文在右栏编辑）；
  *  - 特效页：占位（导出剪映后可在剪映里加特效）。
  *
- * 数据读取/拖拽/选中语义与旧版完全一致（AssetAssistant 同源只读；HTML5 MIME 拖拽硬契约；
- * 项目五类卡选中→右栏出图、媒体卡选中→中栏预览、右键选造型、双击灯箱、音频试听）。
- * 红线：绝不存 base64；本面板不发起任何生成请求（资产出图收口在 panel/assetGenActions 唯一路径）。
+ * 数据读取/拖拽/选中语义与旧版完全一致（AssetAssistant 同源；HTML5 MIME 拖拽硬契约；
+ * 项目五类卡选中→中栏资产工作台、媒体卡选中→中栏预览、右键选造型、双击灯箱、音频试听）。
+ * 红线：绝不存 base64；本面板不发起任何生成请求，出图复用 AssetWorkbench 的生成队列。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Search, Upload, Plus } from "lucide-react";
 import { useProjectStore, resolveEpisodeKey } from "@/store/projectStore";
 import { useLibraryStore } from "@/store/libraryStore";
 import { useFavoritesStore } from "@/store/favoritesStore";
 import { useSharedLibStore, type CachedSharedAsset } from "@/store/sharedLibStore";
+import { SharedLibraryDeleteButton } from "@/components/SharedLibraryDeleteButton";
 import { useAssetFormStore } from "@/store/assetFormStore";
-import { openLightbox } from "@/store/lightboxStore";
+import { useScopedLightboxGallery } from "@/hooks/useScopedLightboxGallery";
 import { saveRemoteAsset } from "@/services/assetPersist";
-import { uploadMediaToCanvasAsset, uploadKindFromFile } from "@/canvas/nodeUpload";
+import { getJobProgress, jobProgressVersion, subscribeJobProgress } from "@/services/generationQueue";
+import { useFreeRtcGenerationTasks } from "@/services/rtcFreeGenerationDelivery";
+import { collectGenerationAssetItems } from "./asset/rtcGenerationAssetData";
+import { captureRtcImportTarget, importRtcMediaFiles } from "./asset/rtcMediaImport";
 import {
 	buildAssetPayload, isAssetCat, filterByQuery, filterLibraryByEpisode, buildCanvasAssetEpisodeMap,
 	collectProjectImageItems, collectLibraryImageItems, collectVideoItems, collectAudioItems,
@@ -37,6 +41,9 @@ import {
 import { useCanvasStore } from "@/store/canvasStore";
 import { RtcAssetCard } from "./asset/RtcAssetCard";
 import { useRtcAssetSelStore } from "./rtcAssetSelStore";
+import { openRtcAssetWorkbench } from "./asset/rtcAssetNavigation";
+import { createRtcAsset, deleteRtcAsset } from "./asset/rtcAssetEditing";
+import { RtcAssetNameDialog } from "./asset/RtcAssetNameDialog";
 import { useRtcStore, activeRtcDoc } from "@/store/rtcStore";
 import type { AssetCat } from "@/store/projectStore";
 import { JY_PREVIEW_TRANSITIONS, findJyTransition } from "@/lib/jyTransitions";
@@ -109,7 +116,10 @@ export function RtcAssetPanel() {
 	// 共享栏两级导航（参考资产助手：库 → 文件夹 → 素材，不摊平全显示）
 	const [sharedLibId, setSharedLibId] = useState<string | null>(null);
 	const [sharedFolderId, setSharedFolderId] = useState<string | null>(null);
+	const sharedPreview = useRef<{ folderId: string; recordId: string; key: string; uri: string } | null>(null);
+	const sharedAudio = useRef<{ folderId: string; recordId: string } | null>(null);
 	const [importing, setImporting] = useState(false);
+	const importToken = useRef<symbol | null>(null);
 	const [toast, setToast] = useState("");
 	const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const showToast = (m: string) => {
@@ -118,7 +128,8 @@ export function RtcAssetPanel() {
 		toastTimer.current = setTimeout(() => setToast(""), 4000);
 	};
 	// 右键「选择造型」菜单（与 AssetAssistant 同规：造型=主体卡的副资产，不单独成卡）
-	const [formMenu, setFormMenu] = useState<{ x: number; y: number; item: RtcAssetItem } | null>(null);
+	const [formMenu, setFormMenu] = useState<{ x: number; y: number; item: RtcAssetItem; owner: string } | null>(null);
+	const [newAssetTarget, setNewAssetTarget] = useState<{ owner: string; cat: AssetCat } | null>(null);
 	const setPage = (p: RtcPage) => { setPageRaw(p); setSelectedKey(null); setFormMenu(null); setSharedLibId(null); setSharedFolderId(null); };
 
 	// ── 数据源（与 AssetAssistant 同源；逐字段订阅限制重渲染范围） ──
@@ -128,6 +139,8 @@ export function RtcAssetPanel() {
 	const crowds = useProjectStore((s) => s.crowds);
 	const propItems = useProjectStore((s) => s.items);
 	const episodes = useProjectStore((s) => s.episodes);
+	const projectInstanceId = useProjectStore((s) => s.projectInstanceId);
+	const loading = useProjectStore((s) => s.isProjectLoading);
 	const rtcEpisodeId = useProjectStore((s) => s.rtcEpisodeId);
 	const assetBlobs = useProjectStore((s) => s.assetBlobs);
 	const selForm = useAssetFormStore((s) => s.selForm);
@@ -139,7 +152,13 @@ export function RtcAssetPanel() {
 	// 跨面板共享的「项目资产」选中态（右栏资产属性视图数据源）+ 出图在途（卡片角标）
 	const assetSel = useRtcAssetSelStore((s) => s.selected);
 	const mediaSel = useRtcAssetSelStore((s) => s.mediaSel);
+	useEffect(() => {
+		const preview = sharedPreview.current;
+		if (preview && (mediaSel?.key !== preview.key || mediaSel.uri !== preview.uri)) sharedPreview.current = null;
+	}, [mediaSel]);
 	const pendingGens = useProjectStore((s) => s.pendingGens);
+	const freeTasks = useFreeRtcGenerationTasks();
+	const progressVersion = useSyncExternalStore(subscribeJobProgress, jobProgressVersion, jobProgressVersion);
 	const generatingKeys = useMemo(() => {
 		const set = new Set<string>();
 		for (const p of pendingGens) if (p.status === "running" && p.cat && p.assetId) set.add(`${p.cat}:${p.assetId}`);
@@ -149,6 +168,20 @@ export function RtcAssetPanel() {
 	// 当前激活分集（素材页分集过滤 + 本地导入打标）
 	const epKey = resolveEpisodeKey(rtcEpisodeId, episodes);
 	const activeEpisode = episodes.find((e) => e.id === epKey);
+	useEffect(() => {
+		setImporting(false);
+		setFormMenu(null);
+		setNewAssetTarget(null);
+		return () => { importToken.current = null; };
+	}, [projectInstanceId]);
+	useEffect(() => {
+		if (!formMenu) return;
+		const onKey = (event: KeyboardEvent) => {
+			if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setFormMenu(null); }
+		};
+		window.addEventListener("keydown", onKey, true);
+		return () => window.removeEventListener("keydown", onKey, true);
+	}, [formMenu]);
 
 	const libAssets = useMemo(() => Object.values(libAssetsMap), [libAssetsMap]);
 	// 画布生成物 → 分集归属反查表（用户定稿「画布生成物也加进来」：每分集一块画布，画布产物=该集产物；
@@ -171,9 +204,20 @@ export function RtcAssetPanel() {
 		const all = Object.values(assetBlobs);
 		return (uri: string) => all.find((b) => b.localUri === uri || b.url === uri || b.srcUri === uri);
 	}, [assetBlobs]);
+	const generationItems = useMemo(() => ({
+		video: collectGenerationAssetItems({ pendingGens, freeTasks, episodeId: epKey, media: "video", getProgress: getJobProgress }),
+		image: collectGenerationAssetItems({ pendingGens, freeTasks, episodeId: epKey, media: "image", getProgress: getJobProgress }),
+	}), [pendingGens, freeTasks, epKey, progressVersion]);
 
 	// 共享缓存初始化（读应用级缓存文件；素材「获取」入口仍在资产助手）
 	useEffect(() => { void useSharedLibStore.getState().init(); }, []);
+	// 其它入口删除当前文件夹后，返回仍有效的文件夹层。
+	useEffect(() => {
+		if (sharedLibId && sharedFolderId && !foldersByLib[sharedLibId]?.some((folder) => folder.id === sharedFolderId)) {
+			setSharedFolderId(null);
+			setSelectedKey(null);
+		}
+	}, [sharedLibId, sharedFolderId, foldersByLib]);
 	// 收藏：切到收藏栏时从服务端拉一次（收藏是跨机的，本地不留权威副本）
 	const onFavRail = page === "media" && mediaRail === "favorite";
 	useEffect(() => { if (onFavRail) void useFavoritesStore.getState().load(); }, [onFavRail]);
@@ -182,16 +226,18 @@ export function RtcAssetPanel() {
 	useEffect(() => {
 		if (!onFavRail || !isTauriEnv()) return;
 		let cancelled = false;
+		const current = () => !cancelled && useProjectStore.getState().projectInstanceId === projectInstanceId
+			&& !useProjectStore.getState().isProjectLoading;
 		void (async () => {
 			for (const f of favServerItems) {
-				if (cancelled) break;
+				if (!current()) break;
 				if (!f.url || useProjectStore.getState().assetBlobs[f.assetId]?.localUri) continue;
-				const b = await saveRemoteAsset(f.assetId, f.url).catch(() => null);
-				if (!cancelled && b) useProjectStore.getState().registerAssetBlob({ ...b, srcUri: f.url });
+				const b = await saveRemoteAsset(f.assetId, f.url, { shouldContinue: current }).catch(() => null);
+				if (current() && b) useProjectStore.getState().registerAssetBlob({ ...b, srcUri: f.url });
 			}
 		})();
 		return () => { cancelled = true; };
-	}, [onFavRail, favServerItems]);
+	}, [onFavRail, favServerItems, projectInstanceId]);
 
 	// ── 分类汇集（纯函数层；素材页按当前分集过滤——防素材堆积卡顿） ──
 	const gridItems = useMemo<RtcAssetItem[]>(() => {
@@ -203,16 +249,27 @@ export function RtcAssetPanel() {
 		if (page !== "media") return [];
 		if (mediaRail === "videos") {
 			// 分镜成片只列**当前分集**（分集化核心：别的集的成片在别的集的素材页）
-			return collectVideoItems(activeEpisode ? [activeEpisode] : [], epLibAssets, blobByUri);
+			return [...generationItems.video, ...collectVideoItems(activeEpisode ? [activeEpisode] : [], epLibAssets, blobByUri)];
 		}
 		if (mediaRail === "audios") return collectAudioItems([...characters, ...scenes, ...organisms, ...crowds, ...propItems], epLibAssets, blobByUri);
-		if (mediaRail === "images") return collectLibraryImageItems(epLibAssets, { includeGenerated: true });
+		if (mediaRail === "images") return [...generationItems.image, ...collectLibraryImageItems(epLibAssets, { includeGenerated: true })];
 		if (mediaRail === "favorite") return collectFavoriteItems(favServerItems, assetBlobs);
 		// 共享：按 库→文件夹 层级浏览（参考资产助手，不摊平全显示）——进到具体文件夹才出素材网格
 		return sharedFolderId ? collectSharedFolderItems(assetsByFolder[sharedFolderId] ?? []) : [];
-	}, [page, mediaRail, assetRail, characters, scenes, organisms, crowds, propItems, activeEpisode, epLibAssets, blobByUri, selForm, favServerItems, assetBlobs, assetsByFolder, sharedFolderId]);
+	}, [page, mediaRail, assetRail, characters, scenes, organisms, crowds, propItems, activeEpisode, epLibAssets, blobByUri, selForm, favServerItems, assetBlobs, assetsByFolder, sharedFolderId, generationItems]);
 
 	const shown = useMemo(() => filterByQuery(gridItems, q), [gridItems, q]);
+	const openGallery = useScopedLightboxGallery(JSON.stringify([projectInstanceId, rtcEpisodeId, page, mediaRail, assetRail, sharedFolderId, q]), {
+		getItems: () => {
+			const project = useProjectStore.getState();
+			if (project.projectInstanceId !== projectInstanceId || project.isProjectLoading || project.rtcEpisodeId !== rtcEpisodeId) return null;
+			return shown.flatMap((item, index) => item.placeholder || item.generation || !item.uri ? [] : [{
+				id: item.key, uri: item.uri, name: item.name, media: item.media, label: String(index + 1),
+				voiceUri: item.voiceUri, voiceName: item.voiceName,
+			}]);
+		},
+		subscribe: listener => useProjectStore.subscribe(listener),
+	});
 
 	// ── 音频试听（单例：同时只播一条，切换即停旧的） ──
 	const [playingKey, setPlayingKey] = useState<string | null>(null);
@@ -220,21 +277,38 @@ export function RtcAssetPanel() {
 	const togglePlay = (item: RtcAssetItem) => {
 		if (playingKey === item.key) {
 			audioRef.current?.pause();
+			sharedAudio.current = null;
 			setPlayingKey(null);
 			return;
 		}
 		if (!audioRef.current) audioRef.current = new Audio();
 		const a = audioRef.current;
+		sharedAudio.current = item.sharedRec && sharedFolderId ? { folderId: sharedFolderId, recordId: item.sharedRec.id } : null;
 		a.src = item.uri;
 		a.onended = () => setPlayingKey(null);
 		void a.play().catch(() => setPlayingKey(null));
 		setPlayingKey(item.key);
 	};
 	useEffect(() => () => { audioRef.current?.pause(); }, []);
+	// 删除共享记录后清理它的预览/试听；已放入项目或时间轴的同一素材保持原状态。
+	useEffect(() => {
+		const preview = sharedPreview.current;
+		if (preview && !assetsByFolder[preview.folderId]?.some((record) => record.id === preview.recordId)) {
+			const selection = useRtcAssetSelStore.getState();
+			if (selection.mediaSel?.key === preview.key && selection.mediaSel.uri === preview.uri) selection.clear();
+			sharedPreview.current = null;
+		}
+		const audio = sharedAudio.current;
+		if (audio && !assetsByFolder[audio.folderId]?.some((record) => record.id === audio.recordId)) {
+			audioRef.current?.pause();
+			setPlayingKey(null);
+			sharedAudio.current = null;
+		}
+	}, [assetsByFolder]);
 
 	// ── 拖拽（恒 HTML5 MIME——时间轴/右栏 drop 端的契约） ──
 	const onDragStart = (e: React.DragEvent, item: RtcAssetItem) => {
-		if (item.placeholder) { e.preventDefault(); return; } // 占位符无图无媒体：不进拖拽体系（卡片已 draggable=false，双保险）
+		if (item.placeholder || item.generation || !item.uri) { e.preventDefault(); return; } // 没有成品媒体不进拖拽体系。
 		if (item.sharedRec) ensureSharedBlob(item.sharedRec); // 先登记：drop 端才能凭 blobByUri 解析公网 url
 		const st = useProjectStore.getState();
 		const blob = st.blobByUri(item.uri) || (item.id ? st.assetBlobs[item.id] : undefined);
@@ -245,28 +319,28 @@ export function RtcAssetPanel() {
 	};
 
 	const onPreview = (item: RtcAssetItem) => {
-		if (item.placeholder) return; // 占位符无图可看（双击不开灯箱；点击选中已在右栏引导出图）
-		openLightbox({ uri: item.uri, name: item.name, media: item.media, voiceUri: item.voiceUri, voiceName: item.voiceName });
+		if (item.placeholder || item.generation || !item.uri) return;
+		openGallery(item.key);
 	};
 
-	// ── 右键「选择造型」（仅资产页、>1 个已出图造型才弹；选中造型写 assetFormStore——与资产助手互通） ──
+	// 资产右键：选择已有造型或删除资产；未出图资产同样可删除。
 	const onCardContextMenu = (e: React.MouseEvent, item: RtcAssetItem) => {
-		if (page !== "assets" || !item.id || !isAssetCat(item.cat) || (item.forms?.length ?? 0) <= 1) return;
+		if (page !== "assets" || loading || !item.id || !isAssetCat(item.cat)) return;
 		e.preventDefault();
-		setFormMenu({ x: e.clientX, y: e.clientY, item });
+		setFormMenu({ x: e.clientX, y: e.clientY, item, owner: projectInstanceId });
 	};
 
 	// ── 卡片选中 ──
-	// 资产页五类卡：选中态进跨面板共享 store（右栏资产属性视图 + 中栏主图预览）；
+	// 资产页五类卡：点击打开中栏预览与右栏编辑；重复点击恢复预览与属性页。
 	// 素材页「视频/音频」媒体卡（收藏/共享除外）：选中态进同 store 的 mediaSel（中栏预览；两类互斥）；
 	// 其余卡（收藏/共享/图片）保持本地高亮。均「再点已选中的卡 = 取消选中」。
 	const onSelectCard = (item: RtcAssetItem) => {
+		if (item.generation) return;
+		sharedPreview.current = item.sharedRec && sharedFolderId
+			? { folderId: sharedFolderId, recordId: item.sharedRec.id, key: item.key, uri: item.uri }
+			: null;
 		if (page === "assets" && item.id && isAssetCat(item.cat)) {
-			const st = useRtcAssetSelStore.getState();
-			const same = !!st.selected && st.selected.cat === item.cat && st.selected.id === item.id;
-			st.toggle({ cat: item.cat, id: item.id });
-			// 新选中时清时间轴片段选中——右栏立即切到资产视图（片段视图优先级更高）
-			if (!same) useRtcStore.getState().setSelection([]);
+			openRtcAssetWorkbench({ cat: item.cat, id: item.id });
 			setSelectedKey(null);
 			return;
 		}
@@ -288,50 +362,46 @@ export function RtcAssetPanel() {
 
 	// ── 本地导入（懒上传：LC- 本地资产零网络；ensurePublicUrl 提交时统一补传；打当前分集标记） ──
 	const doImport = () => {
-		if (importing) return;
+		if (importToken.current) return;
+		const target = captureRtcImportTarget(epKey);
+		if (!target.isCurrent()) return;
+		const token = Symbol("rtc-import");
+		importToken.current = token;
+		const current = () => importToken.current === token && target.isCurrent();
 		const input = document.createElement("input");
 		input.type = "file";
 		input.multiple = true;
 		input.accept = "image/*,video/*,audio/*";
+		input.addEventListener("cancel", () => { if (importToken.current === token) importToken.current = null; }, { once: true });
 		input.onchange = async () => {
 			const files = Array.from(input.files ?? []);
-			if (!files.length) return;
+			if (!files.length || !current()) {
+				if (importToken.current === token) importToken.current = null;
+				return;
+			}
 			setImporting(true);
-			let done = 0;
-			let firstRail: MediaRail | null = null;
 			try {
-				for (const f of files) {
-					const kind = uploadKindFromFile(f);
-					if (kind === "script") continue; // 仅媒体文件（选择器 accept 已限定，双保险）
-					try {
-						const up = await uploadMediaToCanvasAsset(f);
-						useLibraryStore.getState().addAsset({
-							id: up.assetId, kind, name: f.name.replace(/\.[^.]+$/, ""), uri: up.displayUri,
-							serverAssetId: up.assetId, thumbnailUri: kind === "image" ? up.displayUri : null,
-							createdAt: new Date().toISOString(), deletedByUser: false, localPath: up.localPath,
-							origin: "upload",
-							episodeId: epKey || null, // 分集化：导入归当前分集（素材页按分集过滤）
-						});
-						done++;
-						if (!firstRail) firstRail = kind === "video" ? "videos" : kind === "audio" ? "audios" : "images";
-					} catch (err) {
-						showToast(`导入失败：${f.name}（${err instanceof Error ? err.message : "未知错误"}）`);
-					}
+				const result = await importRtcMediaFiles(files, target, {
+					shouldContinue: current,
+					onError: (file, err) => showToast(`导入失败：${file.name}（${err instanceof Error ? err.message : "未知错误"}）`),
+				});
+				if (current() && !result.cancelled && result.done > 0) {
+					showToast(`已导入 ${result.done} 个素材到「${activeEpisode?.title ?? "当前分集"}」（提交请求时自动上传云端）`);
+					setPageRaw("media");
+					if (result.firstKind) setMediaRail(result.firstKind === "video" ? "videos" : result.firstKind === "audio" ? "audios" : "images");
 				}
 			} finally {
-				setImporting(false);
-			}
-			if (done > 0) {
-				showToast(`已导入 ${done} 个素材到「${activeEpisode?.title ?? "当前分集"}」（提交请求时自动上传云端）`);
-				setPageRaw("media");
-				if (firstRail) setMediaRail(firstRail);
+				if (importToken.current === token) {
+					importToken.current = null;
+					setImporting(false);
+				}
 			}
 		};
 		input.click();
 	};
 
 	const emptyText = page === "assets"
-		? "该分类暂无资产——在「AI 生成」工作台做资产拆分后，提取的资产会以占位符卡显示（选中后在右栏生成图片）"
+		? "暂无资产，拆分后点击资产卡，在右侧属性中生成图片"
 		: mediaRail === "favorite"
 			? "暂无收藏，在资产助手点资产卡的 ☆ 收藏"
 			: mediaRail === "shared"
@@ -389,7 +459,7 @@ export function RtcAssetPanel() {
 
 	const cardGrid = (
 		<div style={{ flex: 1, overflowY: "auto", padding: "10px 10px" }}>
-			{shown.length === 0 ? (
+			{shown.length === 0 && page !== "assets" ? (
 				<div style={{ color: "rgba(255,255,255,0.4)", fontSize: 12, textAlign: "center", padding: "44px 10px", lineHeight: 1.7 }}>
 					{q.trim() ? "没有匹配的素材" : emptyText}
 				</div>
@@ -408,8 +478,16 @@ export function RtcAssetPanel() {
 							onPreview={onPreview}
 							onTogglePlay={it.media === "audio" ? togglePlay : undefined}
 							onContextMenu={page === "assets" ? onCardContextMenu : undefined}
+							action={it.sharedRec && sharedLibId && sharedFolderId ? (
+								<SharedLibraryDeleteButton libId={sharedLibId} target={{ kind: "asset", folderId: sharedFolderId, asset: it.sharedRec }} overlay />
+							) : undefined}
 						/>
 					))}
+					{page === "assets" && <button type="button" aria-label="新增资产" title="新增资产" disabled={loading}
+						onClick={() => { setFormMenu(null); setNewAssetTarget({ owner: projectInstanceId, cat: assetRail }); }}
+						style={{ aspectRatio: "1/1", border: "1px dashed rgba(139,92,246,0.55)", borderRadius: 8, color: "#a78bfa", background: "rgba(139,92,246,0.04)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+						<Plus size={28} aria-hidden="true" />
+					</button>}
 				</div>
 			)}
 		</div>
@@ -502,6 +580,7 @@ export function RtcAssetPanel() {
 														style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "8px 10px", marginBottom: 5, borderRadius: 7, cursor: "pointer", border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.03)" }}>
 														<span style={{ fontSize: 12, color: "rgba(255,255,255,0.85)", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>📁 {f.name}</span>
 														<span style={{ fontSize: 10.5, color: "rgba(255,255,255,0.4)", flexShrink: 0 }}>{f.count} 素材 · 已下载 {downloaded}</span>
+														<SharedLibraryDeleteButton libId={sharedLibId} target={{ kind: "folder", folder: f }} />
 													</div>
 												);
 											})
@@ -620,26 +699,30 @@ export function RtcAssetPanel() {
 				</div>
 			)}
 
-			{/* 底部提示（素材/资产页） */}
-			{(page === "media" || page === "assets") && (
-				<div style={{ fontSize: 10, color: "rgba(255,255,255,0.4)", padding: "7px 12px", borderTop: "1px solid rgba(255,255,255,0.06)", lineHeight: 1.5 }}>
-					点击资产 = 右栏出图/中栏预览 · 拖到时间轴 = 入轨 · 拖到右栏垫图区 = 复用 · 双击 = 灯箱 · 右键 = 选造型
-				</div>
-			)}
+			{newAssetTarget?.owner === projectInstanceId && !loading && <RtcAssetNameDialog title="新增资产" initialValue={`新${ASSET_RAILS.find(rail => rail.v === newAssetTarget.cat)?.label ?? "资产"}`}
+				onClose={() => setNewAssetTarget(null)} onSubmit={name => {
+					if (createRtcAsset(newAssetTarget.owner, newAssetTarget.cat, name)) { setQ(""); setSelectedKey(null); }
+					setNewAssetTarget(null);
+				}} />}
 
-			{/* 右键「选择造型」选单（与 AssetAssistant 同规：网格缩略 + 当前造型高亮，点选写 assetFormStore） */}
-			{formMenu && (
+			{/* 资产卡右键：已有造型和资产管理 */}
+			{formMenu && formMenu.owner === projectInstanceId && !loading && (
 				<>
 					<div onClick={() => setFormMenu(null)} onContextMenu={(e) => { e.preventDefault(); setFormMenu(null); }}
 						style={{ position: "fixed", inset: 0, zIndex: 100150 }} />
-					<div style={{ position: "fixed", left: Math.min(formMenu.x, window.innerWidth - 232), top: Math.min(formMenu.y, window.innerHeight - 240), zIndex: 100151, width: 220, maxHeight: 320, overflowY: "auto", padding: 10, borderRadius: 10, border: "1px solid rgba(255,255,255,0.12)", background: "#181a22", boxShadow: "0 10px 40px rgba(0,0,0,0.6)" }}>
-						<div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.55)", marginBottom: 8 }}>选择造型·{formMenu.item.baseName || formMenu.item.name}</div>
+					<div role="menu" aria-label="资产操作" data-rtc-shortcuts-stop="true" style={{ position: "fixed", left: Math.max(8, Math.min(formMenu.x, window.innerWidth - 232)), top: Math.max(8, Math.min(formMenu.y, window.innerHeight - 340)), zIndex: 100151, width: 220, maxHeight: 320, overflowY: "auto", padding: 10, borderRadius: 10, border: "1px solid rgba(255,255,255,0.12)", background: "#181a22", boxShadow: "0 10px 40px rgba(0,0,0,0.6)" }}>
+						{(formMenu.item.forms?.length ?? 0) > 0 && <div style={{ fontSize: 11.5, color: "rgba(255,255,255,0.55)", marginBottom: 8 }}>选择造型</div>}
 						<div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
 							{(formMenu.item.forms ?? []).map((f, i) => {
 								const active = (f.variantId ?? null) === (formMenu.item.variantId ?? null);
 								return (
 									<div key={i} title={f.label + (active ? "（当前）" : "")}
-										onClick={() => { if (formMenu.item.id) useAssetFormStore.getState().setSelForm(formMenu.item.id, f.variantId ?? null); setFormMenu(null); }}
+										onClick={() => {
+											const project = useProjectStore.getState(), { item, owner } = formMenu;
+											const target = isAssetCat(item.cat) ? project[item.cat].find(asset => asset.id === item.id) : undefined;
+											if (project.projectInstanceId === owner && !project.isProjectLoading && target && (!f.variantId || target.variants?.some(v => v.id === f.variantId))) useAssetFormStore.getState().setSelForm(target.id, f.variantId ?? null);
+											setFormMenu(null);
+										}}
 										style={{ position: "relative", aspectRatio: "1/1", borderRadius: 6, overflow: "hidden", cursor: "pointer", border: "2px solid " + (active ? ACCENT : "rgba(255,255,255,0.12)"), background: `center/cover no-repeat url(${f.uri})` }}>
 										{active && <span style={{ position: "absolute", inset: 0, background: "rgba(139,92,246,0.25)" }} />}
 										<span style={{ position: "absolute", left: 0, right: 0, bottom: 0, fontSize: 9, color: "#fff", background: "rgba(0,0,0,0.6)", padding: "1px 3px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textAlign: "center" }}>{f.label}</span>
@@ -647,6 +730,11 @@ export function RtcAssetPanel() {
 								);
 							})}
 						</div>
+						<button type="button" role="menuitem" onClick={() => {
+							const { owner, item } = formMenu;
+							setFormMenu(null);
+							if (item.id && isAssetCat(item.cat)) void deleteRtcAsset(owner, item.cat, item.id);
+						}} style={{ width: "100%", textAlign: "left", padding: "8px 6px", marginTop: 4, borderRadius: 5, color: "#fca5a5", background: "transparent", cursor: "pointer" }}>删除资产</button>
 					</div>
 				</>
 			)}

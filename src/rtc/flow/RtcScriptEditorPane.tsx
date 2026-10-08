@@ -26,13 +26,14 @@ const btn = (kind: "primary" | "plain"): React.CSSProperties => ({
 	color: kind === "primary" ? "#d6c8ff" : "rgba(255,255,255,0.88)",
 });
 
-export function RtcScriptEditorPane() {
+export function RtcScriptEditorPane({ active = true }: { active?: boolean }) {
 	const scriptText = useProjectStore((s) => s.scriptText);
 	const [draft, setDraft] = useState(scriptText || "");
 	const taRef = useRef<HTMLTextAreaElement>(null);
 
-	// 打开即聚焦；Esc 关闭（capture 拦下，别漏给时间轴快捷键）
+	// 仅显示时聚焦、接管 Esc；隐藏保持挂载和草稿，恢复显示再聚焦。
 	useEffect(() => {
+		if (!active) return;
 		taRef.current?.focus();
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key === "Escape") {
@@ -43,7 +44,7 @@ export function RtcScriptEditorPane() {
 		};
 		window.addEventListener("keydown", onKey, true);
 		return () => window.removeEventListener("keydown", onKey, true);
-	}, []);
+	}, [active]);
 
 	const dirty = draft !== (scriptText || "");
 	const save = () => {

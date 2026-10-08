@@ -21,14 +21,22 @@ import { useState } from "react";
 import { Image as ImageIcon, Video } from "lucide-react";
 import { PromptExpandButton } from "@/components/PromptExpandButton";
 import { progressLabel } from "@/lib/queueLabel";
+import { useEffectiveModelKey } from "@/components/ModelPicker";
+import { videoReqOptionsForKey } from "@/lib/modelOptions";
+import { useCatalogStore } from "@/store/catalogStore";
+import { useRtcStore } from "@/store/rtcStore";
 import type { RtcSegment, RtcTrack } from "@/types/rtc";
-import { AUDIO_GEN_UNSUPPORTED, genCapabilityFor, segSeconds } from "./rtcGenCore";
-import { fmtUs, usToSecLabel } from "./rtcSegUtils";
+import { AUDIO_GEN_UNSUPPORTED, genCapabilityFor } from "./rtcGenCore";
+import { fmtUs, usToSecLabel, patchSegmentDoc } from "./rtcSegUtils";
+import { RtcGenerationDurationPicker } from "./RtcGenerationPicker";
+import { resolveRtcGenerationDuration } from "./rtcGenerationDuration";
 import { useRtcFreeGenStore } from "./rtcFreeGenStore";
+import { freePromptMediaDrop } from "./rtcPromptDrop";
 import { DraftArea, KIND_LABEL, RefStrip, secBox, secTitle } from "./freeGenParts";
 import { WorkbenchRefColumn } from "./shotWorkbenchParts";
-import { retryFreeGen, segGenKind, startFreeGen } from "./freeGenActions";
+import { retryFreeGen, segGenKind, startFreeGen, useFreeGenPreparing } from "./freeGenActions";
 import { useSegQueueInfo } from "./rtcQueueStore";
+import { RtcFreeGenerationCost } from "./RtcGenerationCost";
 
 /** 参照列·上格「结果预览」：占位期间恒空态（生成成功占位就地变成结果片段并自动切「预览」页） */
 function ResultPreviewPane({ kind, isNewVersion }: { kind: "video" | "image" | "audio"; isNewVersion: boolean }) {
@@ -69,6 +77,11 @@ export function RtcFreeGenWorkbench({ seg, track, segIndex }: { seg: RtcSegment;
 	const kind = segGenKind(seg);
 	const cap = genCapabilityFor(kind);
 	const draft = useRtcFreeGenStore((s) => s.drafts[seg.id]);
+	const defaultModel = useEffectiveModelKey("video");
+	useCatalogStore(s => s.catalog?.version);
+	const durations = videoReqOptionsForKey(draft?.modelKey || defaultModel || "").durations;
+	const generationDuration = seg.generationDuration ?? "auto";
+	const autoDuration = resolveRtcGenerationDuration("auto", seg.targetDurationUs, durations, 1);
 	const prompt = draft?.prompt ?? "";
 	const refs = draft?.refs ?? [];
 	const running = seg.status === "running";
@@ -76,13 +89,15 @@ export function RtcFreeGenWorkbench({ seg, track, segIndex }: { seg: RtcSegment;
 	// 在途排队信息（内存态）→ 「排队中 · 第 N 位」/「生成中 42%」
 	const queueInfo = useSegQueueInfo(seg.id);
 	const runLabel = progressLabel(seg.progress ?? null, queueInfo);
-	const [busy, setBusy] = useState(false);
+	const [localBusy, setBusy] = useState(false);
+	const preparing = useFreeGenPreparing(seg.id);
+	const busy = localBusy || preparing;
 
 	const submit = async (retry: boolean) => {
 		setBusy(true);
 		try {
 			const r = retry ? await retryFreeGen(seg.id) : await startFreeGen(seg.id);
-			if (!r.ok) alert(r.error); // 请求没发出：明确报错，绝不静默失败
+			if (!r.ok && r.error) alert(r.error); // 请求没发出：明确报错，绝不静默失败
 		} finally {
 			setBusy(false);
 		}
@@ -143,11 +158,13 @@ export function RtcFreeGenWorkbench({ seg, track, segIndex }: { seg: RtcSegment;
 								<PromptExpandButton
 									title={`${seg.name || "结果占位"} · 提示词`}
 									getValue={() => useRtcFreeGenStore.getState().draftOf(seg.id).prompt}
+									onMediaDrop={freePromptMediaDrop(seg.id)}
 									onSave={(v) => useRtcFreeGenStore.getState().patch(seg.id, { prompt: v })}
 									size={11}
 								/>
 							</div>
 							<DraftArea
+								onMediaDrop={freePromptMediaDrop(seg.id)}
 								value={prompt}
 								fill
 								placeholder={kind === "video" ? "描述这一段视频要拍什么…" : "描述这张图要画什么…"}
@@ -156,6 +173,8 @@ export function RtcFreeGenWorkbench({ seg, track, segIndex }: { seg: RtcSegment;
 						</div>
 
 						{/* 动作行 */}
+						{kind === "video" && <RtcGenerationDurationPicker duration={generationDuration} autoDuration={autoDuration} durations={durations}
+							onChange={value => useRtcStore.getState().commitActive(doc => patchSegmentDoc(doc, seg.id, { generationDuration: value }))} />}
 						<div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
 							<button
 								disabled={running || busy}
@@ -173,10 +192,11 @@ export function RtcFreeGenWorkbench({ seg, track, segIndex }: { seg: RtcSegment;
 									whiteSpace: "nowrap",
 								}}
 							>
-								{running ? "生成中…" : failed ? "重新生成" : "开始生成"}
+								{busy ? "准备中…" : running ? "生成中…" : failed ? "重新生成" : "开始生成"}
+								{!busy && !running && <RtcFreeGenerationCost segment={seg} />}
 							</button>
 							<span style={{ fontSize: 10, color: "rgba(255,255,255,0.35)" }}>
-								{running ? runLabel : "模型在右栏「属性」页选择"}
+								{running ? runLabel : "模型在下方「视频生成设置」中选择"}
 							</span>
 						</div>
 
@@ -220,9 +240,9 @@ export function RtcFreeGenWorkbench({ seg, track, segIndex }: { seg: RtcSegment;
 						{/* 参数说明（与右栏 AI 设置的分工提示） */}
 						<div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", lineHeight: 1.7, flexShrink: 0 }}>
 							{kind === "video"
-								? `时长按本占位长度（约 ${segSeconds(seg.targetDurationUs)}s）提交；`
+								? `生成时长 ${generationDuration === "auto" ? `Auto (${autoDuration}s)` : `${generationDuration}s`}；`
 								: "比例/分辨率/质量取「视频设置」；"}
-							模型与精确摆位（时间码）在右栏「属性」页调整。
+							模型在下方「视频生成设置」中选择，时间码在右栏「属性」页调整。
 						</div>
 					</>
 				)}

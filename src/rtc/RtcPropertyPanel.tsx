@@ -1,20 +1,8 @@
 /**
  * 实时剪辑 · 右栏单一窗口（顶部三页签：属性 / 剧本 / 分镜）。
- * 原中栏「AI 生成」子栏（四步工作台）整体并入本窗口——中栏只留单一预览视口。
- *
- * 页签信息架构：
- *   - 属性：既有分派视图原样——rtcStore.selection（时间轴片段）非空 → 片段视图优先：
- *       placeholder + shotRef → RtcShotWorkbench（中栏双页签改版后收敛为「AI 生成属性」：
- *         生图/生视频要求+同源开关；提示词/垫图/生成动作在中栏「AI 工作台」页 RtcShotAiWorkbench）；
- *       media → RtcMediaProps（名称/轨道/时间码只读 + speed/volume/muted 编辑 + 素材源）；
- *         ⚠ 第251轮：media **带 shotRef**（占位生成成功替换而来）时上方再叠一块 RtcShotWorkbench
- *           「AI 生成属性」——成片既是素材也仍绑着分镜，两类属性都要给（需求⑦：不丢工作台数据）；
- *       无 shotRef 的自由结果占位 → RtcFreeGenProps（第240轮收敛为 AI 设置：时间码/模型/生成·进度·重试；
- *         提示词/垫素材在中栏「AI 工作台」页 RtcFreeGenWorkbench 编辑）；
- *     其次 rtcAssetSelStore（左栏选中的项目资产）→ RtcAssetProps（出图不切回资产模式）；
- *     两边都空 → 引导提示（含原「开始剪辑」四步说明）。
- *   - 剧本：四步工作台 ①剧本编辑 + ②剧集拆分 + ③资产拆分（RtcFlowScriptPage）。
- *   - 分镜：④逐集 智能推理/智能拆分 + 生成占位入轨（RtcFlowShotsPage）。
+ * 属性只展示素材自身信息、摆位及剪辑参数；AI 生成设置统一在工具栏设置弹窗。
+ * 分镜提示词、垫图与单镜覆盖仍在中央工作台，生成设置不依赖属性栏的选中状态。
+ * 剧本/分镜页与后台任务恢复继续常驻于本窗口。
  *
  * 页签=会话级 UI 态（rtcPropsTabStore，默认「属性」，不持久化）；**新的选中动作**
  * （时间轴选片段 / 左栏选项目资产）自动切回「属性」——同一选中不重复切、取消选中不切，
@@ -29,11 +17,10 @@
 import { useEffect, useRef } from "react";
 import { useRtcSelected, type RtcSelected } from "./panel/useRtcSelected";
 import { RtcCompoundProps } from "./panel/RtcCompoundProps";
-import { RtcShotWorkbench } from "./panel/RtcShotWorkbench";
+import { RtcPlaceholderProps } from "./panel/RtcPlaceholderProps";
 import { RtcMediaProps } from "./panel/RtcMediaProps";
 import { RtcTextProps } from "./panel/RtcTextProps"; // 第三批：字幕片段属性视图
 import { RtcTransformProps } from "./panel/RtcTransformProps";
-import { RtcFreeGenProps } from "./panel/RtcFreeGenProps";
 import { RtcAssetProps } from "./asset/RtcAssetProps";
 import { useRtcAssetSelStore, type RtcAssetSel } from "./rtcAssetSelStore";
 import {
@@ -46,6 +33,7 @@ import { useRtcPropsTabStore } from "./panel/rtcPropsTabStore";
 import { RtcFlowScriptPage, RtcFlowShotsPage } from "./flow/RtcAiFlow";
 import { resumeAnalysisTask } from "./flow/flowActions";
 import { initRtcGenWatch } from "./panel/placeholderSwap";
+import { isRtcShotListSelection } from "./flow/rtcShotNavigation";
 
 const em = (text: string) => <span style={{ color: "rgba(255,255,255,0.75)" }}>{text}</span>;
 
@@ -55,9 +43,9 @@ function EmptyHint() {
 		<div style={{ padding: "24px 16px", fontSize: 12, color: "rgba(255,255,255,0.5)", lineHeight: 2 }}>
 			<div style={{ fontSize: 13, color: "rgba(255,255,255,0.8)", marginBottom: 6 }}>未选中片段</div>
 			在下方时间轴点击一个片段查看属性：
-			<br />· 选中{em("分镜占位符")} → 在这里选生图/生视频要求，提示词与垫图在中栏「AI 工作台」编辑（成片自动替换占位符）；
+			<br />· 选中{em("分镜占位符")} → 查看位置与时长；生成要求在下方工具栏{em("视频生成设置")}中调整；
 			<br />· 选中{em("素材片段")} → 调整变速 / 音量 / 静音，查看素材源；
-			<br />· 点击左栏{em("项目资产卡")} → 编辑出图提示词、生成基础形象（无需切回资产模式）。
+			<br />· 点击左栏{em("项目资产卡")} → 中栏选择分体与预览，右栏编辑提示词与生成。
 			<div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
 				<div style={{ fontSize: 13, color: "rgba(255,255,255,0.8)", marginBottom: 2 }}>开始剪辑</div>
 				从{em("素材面板")}拖素材到时间轴直接剪；或从剧本一路生成——
@@ -69,21 +57,14 @@ function EmptyHint() {
 	);
 }
 
-/** 分区小标题（同一片段叠了两类属性时用来分界，观感与各区块 groupHead 对齐） */
-function SectionLabel({ text }: { text: string }) {
-	return (
-		<div style={{ padding: "10px 12px 0", fontSize: 10.5, color: "rgba(255,255,255,0.4)", lineHeight: 1.6 }}>{text}</div>
-	);
-}
-
 /** 「属性」页正文：既有分派逻辑原样（片段视图 > 资产视图 > 引导） */
 function PropsPage({ sel, assetSel }: { sel: RtcSelected | null; assetSel: RtcAssetSel | null }) {
 	if (!sel) {
 		// 无片段选中：左栏选中的项目资产 → 资产属性视图；两边都空 → 引导
 		return assetSel ? <RtcAssetProps key={`${assetSel.cat}:${assetSel.id}`} cat={assetSel.cat} id={assetSel.id} /> : <EmptyHint />;
 	}
-	if (sel.seg.kind === "placeholder" && sel.seg.shotRef) {
-		return <RtcShotWorkbench episodeId={sel.seg.shotRef.episodeId} shotId={sel.seg.shotRef.shotId} />;
+	if (sel.seg.kind === "placeholder") {
+		return <RtcPlaceholderProps {...sel} />;
 	}
 	// 第三批：字幕片段（text 轨）→ 字幕编辑视图（在 media 分支之前——字幕片段 kind 也是 media）
 	if (sel.track.type === "text" && sel.seg.kind === "media") {
@@ -95,29 +76,14 @@ function PropsPage({ sel, assetSel }: { sel: RtcSelected | null; assetSel: RtcAs
 	}
 	if (sel.seg.kind === "media") {
 		// 画面数值区（缩放/位置/旋转/不透明度/镜像/对齐）自带守卫：非画面片段（音频）内部返回 null。
-		// ⚠ 第251轮需求⑦：**带 shotRef 的成片**（占位生成成功后就地替换而来）除了素材属性，
-		//   还要叠一块「AI 生成属性」——它既是素材也仍绑着分镜，两类属性都得有，
-		//   否则用户「出错了连修改的方案都没有」（提示词/垫图在中栏工作台，生成要求在这里）。
-		const shotRef = sel.seg.shotRef;
 		return (
 			<>
-				{shotRef && (
-					<>
-						<SectionLabel text="AI 生成属性（本片段仍绑着分镜，可在中栏工作台改提示词后重跑）" />
-						<RtcShotWorkbench episodeId={shotRef.episodeId} shotId={shotRef.shotId} />
-						<div style={{ height: 1, margin: "4px 12px 0", background: "rgba(255,255,255,0.1)" }} />
-						<SectionLabel text="素材属性" />
-					</>
-				)}
 				<RtcMediaProps seg={sel.seg} track={sel.track} segIndex={sel.segIndex} />
 				<RtcTransformProps segId={sel.seg.id} />
 			</>
 		);
 	}
-	// 无 shotRef 的「自由结果占位」（时间轴空白右键新建 / 超分·去字幕的结果坑位）：
-	// AI 设置视图（时间码/模型/生成·进度·重试，生成走 runPurpose 唯一路径见 freeGenActions）；
-	// 提示词/垫素材在中栏「AI 工作台」页 RtcFreeGenWorkbench 编辑（第240轮）
-	return <RtcFreeGenProps key={sel.seg.id} seg={sel.seg} track={sel.track} segIndex={sel.segIndex} />;
+	return null;
 }
 
 export function RtcPropertyPanel() {
@@ -136,13 +102,17 @@ export function RtcPropertyPanel() {
 	// 新的选中动作 → 自动切回「属性」（同一选中不重复切；取消选中不切；媒体卡预览选中不参与）
 	const segId = sel?.seg.id ?? null;
 	const assetKey = assetSelKey(assetSel);
+	// 与本次渲染的选中快照一起捕获来源，避免延后执行 effect 时读取下一次导航的来源。
+	const listSelection = isRtcShotListSelection();
 	const snapRef = useRef<PropsSelSnapshot>({ segId, assetKey });
 	useEffect(() => {
 		const prev = snapRef.current;
 		const next: PropsSelSnapshot = { segId, assetKey };
 		snapRef.current = next;
-		if (shouldAutoSwitchToProps(prev, next)) useRtcPropsTabStore.getState().setTab("props");
-	}, [segId, assetKey]);
+		if (shouldAutoSwitchToProps(prev, next) && !(!next.assetKey && listSelection)) {
+			useRtcPropsTabStore.getState().setTab("props");
+		}
+	}, [segId, assetKey, listSelection]);
 
 	return (
 		<aside className="w-[360px] shrink-0 min-h-0 flex flex-col bg-secondary/20 border-l border-white/5">

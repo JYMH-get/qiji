@@ -13,8 +13,10 @@ import { routingAvailability, routingEnabled, routingVersion, seedanceFamilyOf }
 import { onAvailabilityConfigChange } from './availabilityConfigEvents.ts';
 import { adjustedHistory, syncAdjustmentScopes, clearHistoryAdjustments, type HistoryScope } from './availabilityAdjustments.ts';
 import { routeFailureKind } from './routeObservations.ts';
+import { projectModelStatistics } from './store/modelStatisticsRules.ts';
+import { statisticsHistory } from './statisticsHistory.ts';
 import { AV_HISTORY_POINTS, AV_HISTORY_MS, AV_SAMPLE_MS, AV_SAMPLES_PER_POINT, availabilityRateHistory, sampleAvailabilityInterval, type AvailabilityRateState } from './availabilityHistory.ts';
-import { channelObservationRows, channelObservationRevision, importChannelObservation, readChannelObservationState, writeChannelObservationState, type ChannelObservation } from './store/channelObservations.ts';
+import { channelObservationRows, channelObservationRevision, importChannelObservation, readChannelObservationState, writeChannelObservationState, upgradeObservationEvidence, backfillChannelEvidence, type ChannelObservation } from './store/channelObservations.ts';
 
 export const AV_CAPABILITIES=MODEL_CATEGORIES;
 const capabilityOf=modelCategory;
@@ -34,11 +36,11 @@ export function availabilityFamily(m:Pick<ModelDef,'id'|'label'|'capability'|'up
  return{id:capabilityOf(m.capability)+'-other',name:'其他'};
 }
 export function aggregateAvailability(observations:ChannelObservation[], now:number) {
- const unique=new Map(observations.filter(o=>o.startedAt<=now).map(o=>[o.id,o]));
- const recent=[...unique.values()].filter(o=>o.startedAt>=now-3600000);
+ const unique=new Map(observations.filter(o=>o.startedAt<=now).map(o=>[o.id,o.finishedAt!==undefined&&o.finishedAt>now?{...o,status:'running' as const}:o]));
+ const recent=[...unique.values()].filter(o=>o.startedAt>=now-3600000).map(o=>({...o,...projectModelStatistics(o)}));
  const success=recent.filter(o=>o.status==='success').length,failed=recent.filter(o=>o.status==='failed').length;
  const last=[...unique.values()].filter(o=>o.status!=='running'&&o.failureKind!=='user').sort((a,b)=>(b.finishedAt??b.startedAt)-(a.finishedAt??a.startedAt))[0];
- return {requests:recent.length,success,failed,successRate:measuredSuccessRate(success,failed),
+ return {requests:recent.length,success,failed,excluded:recent.filter(o=>o.status==='excluded').length,successRate:measuredSuccessRate(success,failed),
   active:[...unique.values()].filter(o=>o.status==='running').length,
   status:last?.status==='success'?'available':last?.failureKind==='channel'?'unavailable':last?'attention':'unknown'};
 }
@@ -93,6 +95,7 @@ export function backfillChannelObservations(now=Date.now(),batchSize=20) {
   if(!capability||!AV_CAPABILITIES.includes(capabilityOf(capability) as any)||!['running','success','failed'].includes(l.status))continue;
   importChannelObservation({id:row.id,modelId,modelName:m?.label??r?.modelName??modelId,channelId:r?.channelId??d?.channelId??m?.channelId??'',capability,familyId:m?.familyId,
    startedAt,finishedAt:l.finishedAt?Date.parse(l.finishedAt):undefined,status:l.status,failureKind:r?.failureKind??(l.status==='failed'?routeFailureKind(l.error,row.id):undefined)});
+  upgradeObservationEvidence(row.id,l,r);
  }
  state.done=records.length<batchSize||state.cursor>=state.upper;
  writeChannelObservationState('legacy-v1',state);return state;
@@ -126,12 +129,15 @@ function reconcileRateTracking(now:number,reset:{resetModelId?:string;resetChann
  for(const [key,value] of Object.entries(rateHistory.models))archiveAvailability('model:'+JSON.parse(key)[1],value.history,now);
 }
 function withRateHistory(summary:ReturnType<typeof buildChannelAvailability>){
- return {...summary,rows:summary.rows.map(row=>({...row,history:adjustedHistory(availabilityRateHistory(rateHistory,row.id,summary.until),'model:'+row.modelId,summary.until)}))};
+ const records=(db.prepare('SELECT data FROM channel_observations WHERE finished_at>=? AND finished_at<=?').all(summary.until-AV_HISTORY_MS,summary.until) as {data:string}[]).map(({data})=>{const o=JSON.parse(data) as ChannelObservation;return {...o,...projectModelStatistics(o),finishedAt:o.finishedAt??o.startedAt,key:JSON.stringify([o.channelId,o.modelId])};});
+ return {...summary,rows:summary.rows.map(row=>({...row,history:adjustedHistory(statisticsHistory(availabilityRateHistory(rateHistory,row.id,summary.until),records.filter(r=>r.key===row.id),row.trackingSince??0),'model:'+row.modelId,summary.until)}))};
 }
 export function modelHistoryScope(modelId:string,now=Date.now()):HistoryScope{
  reconcileRateTracking(now);
  const model=listModels().find(m=>m.id===modelId),id=JSON.stringify([model?.channelId??'',modelId]),t=rateTracking?.active[id];
- return {scope:'model:'+modelId,epoch:JSON.stringify(t)??'',active:!!t&&(routingEnabled()?routingAvailability(now).some(b=>b.modelId===modelId&&b.status!=='disabled'):directModelEnabled(model,listChannels())),history:availabilityRateHistory(rateHistory,id,now)};
+ const history=availabilityRateHistory(rateHistory,id,now);
+ const records=(db.prepare("SELECT data FROM channel_observations WHERE finished_at>=? AND finished_at<=? AND json_extract(data,'$.modelId')=? AND json_extract(data,'$.channelId')=?").all(now-AV_HISTORY_MS,now,modelId,model?.channelId??'') as {data:string}[]).map(({data})=>{const o=JSON.parse(data) as ChannelObservation;return {...o,...projectModelStatistics(o),finishedAt:o.finishedAt??o.startedAt};});
+ return {scope:'model:'+modelId,epoch:JSON.stringify(t)??'',active:!!t&&(routingEnabled()?routingAvailability(now).some(b=>b.modelId===modelId&&b.status!=='disabled'):directModelEnabled(model,listChannels())),history,displayHistory:statisticsHistory(history,records,t?.since??0)};
 }
 export function resetModelRateHistory(modelId:string,now=Date.now()){
  const model=listModels().find(m=>m.id===modelId);if(!model)throw new Error('模型不存在');
@@ -177,10 +183,10 @@ function scheduleAvailabilityRefresh(sample=false){
  refreshTimer=setTimeout(()=>{refreshTimer=undefined;const capture=sampleOnRefresh;sampleOnRefresh=false;try{refreshChannelAvailability(Date.now(),capture);}catch(e){console.error('[availability] summary refresh failed',e instanceof Error?e.message:String(e));}},25);refreshTimer.unref();
 }
 function scheduleLegacyBackfill(){
- if(backfillTimer||readChannelObservationState<BackfillState>('legacy-v1')?.done)return;
+ if(backfillTimer||(readChannelObservationState<BackfillState>('legacy-v1')?.done&&readChannelObservationState<{done:boolean}>('statistics-evidence-v1')?.done))return;
  backfillTimer=setTimeout(()=>{
   backfillTimer=undefined;
-  try{const state=backfillChannelObservations();if(state.done)scheduleAvailabilityRefresh();else scheduleLegacyBackfill();}
+  try{const state=backfillChannelObservations(),evidence=backfillChannelEvidence();if(state.done&&evidence.done)scheduleAvailabilityRefresh();else scheduleLegacyBackfill();}
   catch(e){console.error('[availability] legacy backfill failed',e instanceof Error?e.message:String(e));}
  },25);backfillTimer.unref();
 }
@@ -197,13 +203,13 @@ export function parseAvailabilityRange(query:Record<string,unknown>,now=Date.now
  return {since:now-windows[window],until:now,label:labels[window]};
 }
 function rangeCounts(rows:AvailabilitySnapshot['rows'],range:AvailabilityRange,now:number){
- const observations=channelObservationRows(range.since,now),counts=new Map<string,{requests:number;success:number;failed:number}>();
+ const observations=channelObservationRows(range.since,now),counts=new Map<string,{requests:number;success:number;failed:number;excluded:number}>();
  for(const o of observations){
   if(o.startedAt<range.since||o.startedAt>range.until)continue;
   const key=JSON.stringify([o.channelId,o.modelId]),tracked=rateTracking?.active[key];if(!tracked||o.startedAt<tracked.since)continue;
-  const n=counts.get(key)??{requests:0,success:0,failed:0};n.requests++;if(o.status==='success')n.success++;else if(o.status==='failed')n.failed++;counts.set(key,n);
+  const n=counts.get(key)??{requests:0,success:0,failed:0,excluded:0},projected=projectModelStatistics(o.finishedAt!==undefined&&o.finishedAt>now?{...o,status:'running'}:o);n.requests++;if(projected.status==='success')n.success++;else if(projected.status==='failed')n.failed++;else if(projected.status==='excluded')n.excluded++;counts.set(key,n);
  }
- return rows.map(row=>{const n=counts.get(row.id)??{requests:0,success:0,failed:0};return{...row,...n,successRate:measuredSuccessRate(n.success,n.failed)};});
+ return rows.map(row=>{const n=counts.get(row.id)??{requests:0,success:0,failed:0,excluded:0};return{...row,...n,successRate:measuredSuccessRate(n.success,n.failed)};});
 }
 export function channelAvailability(now=Date.now(),range?:AvailabilityRange) {
  scheduleLegacyBackfill();
@@ -211,7 +217,7 @@ export function channelAvailability(now=Date.now(),range?:AvailabilityRange) {
  const changed=snapshotRevision!==channelObservationRevision();
  if(!snapshot||configChanged)refreshChannelAvailability(now);
  else if(changed||now-snapshot.until>=60000||snapshot.until>now)scheduleAvailabilityRefresh();
- return {...snapshot!,...(range?{rows:rangeCounts(snapshot!.rows,range,now),statsSince:range.since,statsUntil:range.until,statsLabel:range.label}:{}),refreshing:!!refreshTimer,backfilling:!readChannelObservationState<BackfillState>('legacy-v1')?.done};
+ return {...snapshot!,...(range?{rows:rangeCounts(snapshot!.rows,range,now),statsSince:range.since,statsUntil:range.until,statsLabel:range.label}:{}),refreshing:!!refreshTimer,backfilling:!readChannelObservationState<BackfillState>('legacy-v1')?.done||!readChannelObservationState<{done:boolean}>('statistics-evidence-v1')?.done};
 }
 /** Start after imports finish so logs and its compatibility migrations exist first. */
 const initial=setTimeout(()=>{scheduleLegacyBackfill();scheduleAvailabilityRefresh(true);},1000);initial.unref();

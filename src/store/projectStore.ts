@@ -17,6 +17,7 @@ import { isProjectWriter } from "@/services/windowSync";
 import { createProjectSaveQueue } from "./projectSaveQueue";
 import { enqueueProjectBackup, newCloudBackupId, readCloudBackupId } from "@/services/projectCloudBackup";
 import { recordClientDiagnostic, classifyClientDiagnosticError, type ClientDiagnosticEvent } from "@/services/clientDiagnostics";
+import { discoverLocalProjects, projectPathKey } from "@/services/projectDiscovery";
 
 /** 多画布：每个分集 = 一块画布，key = 分集 id（无主画布；项目恒有≥1集）。 */
 /** 解析「激活分集 key」（画布与实时剪辑共用一把尺）：目标集无效/为 null 则回退第一集 */
@@ -240,7 +241,7 @@ async function importAsNewProject(srcPath: string): Promise<boolean> {
 }
 
 const RECENT_KEY = "Qiji:recentProjects";
-const MAX_RECENT = 10;
+const HIDDEN_PROJECTS_KEY = "Qiji:hiddenProjects";
 
 export interface RecentProject {
   path: string;
@@ -259,6 +260,8 @@ interface ProjectState {
   savePath: string | null;
   isDirty: boolean;
   recentProjects: RecentProject[];
+  refreshProjects: () => Promise<void>;
+  removeRecentProject: (path: string) => void;
   isSaving: boolean;
   fileRefs: Record<string, string | null>;
   isProjectLoading: boolean;
@@ -396,13 +399,44 @@ interface ProjectState {
 function loadRecent(): RecentProject[] {
   try {
     const stored = localStorage.getItem(RECENT_KEY);
-    if (stored) return JSON.parse(stored);
+    const projects: unknown = stored ? JSON.parse(stored) : [];
+    if (Array.isArray(projects)) return projects.filter((p) =>
+      p && typeof p.path === "string" && typeof p.name === "string" && typeof p.openedAt === "string");
   } catch {}
   return [];
 }
 
 function saveRecent(projects: RecentProject[]) {
-  localStorage.setItem(RECENT_KEY, JSON.stringify(projects));
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(projects));
+  } catch {
+    // 封面占满浏览器缓存时仍保存完整路径列表；列表缓存失败不能使已落盘的项目误报保存失败。
+    try {
+      localStorage.setItem(RECENT_KEY, JSON.stringify(projects.map(({ cover: _cover, ...project }) => project)));
+    } catch (error) {
+      console.warn("[project] 项目列表缓存保存失败:", error);
+    }
+  }
+}
+
+function hiddenProjectPaths(): Set<string> {
+  try {
+    const paths: unknown = JSON.parse(localStorage.getItem(HIDDEN_PROJECTS_KEY) || "[]");
+    if (Array.isArray(paths)) return new Set(paths.filter((p): p is string => typeof p === "string").map(projectPathKey));
+  } catch {}
+  return new Set();
+}
+
+function setProjectHidden(path: string, hidden: boolean) {
+  const paths = hiddenProjectPaths();
+  const key = projectPathKey(path);
+  if (hidden) paths.add(key);
+  else if (!paths.delete(key)) return;
+  try {
+    localStorage.setItem(HIDDEN_PROJECTS_KEY, JSON.stringify([...paths]));
+  } catch (error) {
+    console.warn("[project] 项目隐藏记录保存失败:", error);
+  }
 }
 
 const projectSaveQueue = createProjectSaveQueue();
@@ -414,6 +448,41 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   cloudBackupId: newCloudBackupId(),
   isDirty: false,
   recentProjects: loadRecent(),
+  refreshProjects: async () => {
+    if (!isTauri()) return;
+    try {
+      const { appDataDir, join } = await import("@tauri-apps/api/path");
+      const activeDir = await useSettingsStore.getState().getActiveUserDataDir();
+      const roots = [await join(activeDir, "projects"), await join(await appDataDir(), "Qiji", "projects")];
+      // 保留仍有历史记录的旧保存目录，切换自定义目录后也能找回旧目录中的项目。
+      const known = get().recentProjects;
+      for (const project of known) {
+        const root = project.path.replace(/\\/g, "/").match(/^(.*\/projects)\/[^/]+\/[^/]+$/i)?.[1];
+        if (root) roots.push(root);
+      }
+      const discovered = await discoverLocalProjects(roots, known.map((p) => p.path));
+      const hidden = hiddenProjectPaths();
+      // 扫描期间可能新建、打开、改名或移除项目：合并完成时的列表，不能回写启动扫描时的快照。
+      const projects = new Map<string, RecentProject>();
+      for (const project of [...get().recentProjects, ...discovered]) {
+        const key = projectPathKey(project.path);
+        if (!hidden.has(key) && !projects.has(key)) projects.set(key, project);
+      }
+      const updated = [...projects.values()].sort((a, b) => b.openedAt.localeCompare(a.openedAt));
+      saveRecent(updated);
+      set({ recentProjects: updated });
+    } catch (error) {
+      console.warn("[project] 项目目录读取失败:", error);
+    }
+  },
+  removeRecentProject: (path) => {
+    const key = projectPathKey(path);
+    const projects = get().recentProjects.filter((p) => projectPathKey(p.path) !== key);
+    // 先释放该条目（尤其封面）的缓存空间，再写隐藏记录。
+    saveRecent(projects);
+    setProjectHidden(path, true);
+    set({ recentProjects: projects });
+  },
   isSaving: false,
   isProjectLoading: false,
   loadedOnStartup: false,
@@ -886,14 +955,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         void import("@/services/assetRefReport").then((m) => m.reportProjectAssetRefs()).catch(() => {});
 
         const recent = get().recentProjects;
-        const existing = recent.findIndex((p) => p.path === savePath);
+        const existing = recent.findIndex((p) => projectPathKey(p.path) === projectPathKey(savePath));
         const entry = { path: savePath, name: s.name, openedAt: new Date().toISOString(), cover: s.coverImage || undefined };
         const updated = existing >= 0
           ? [entry, ...recent.filter((_, i) => i !== existing)]
           : [entry, ...recent];
-        saveRecent(updated.slice(0, MAX_RECENT));
+        setProjectHidden(savePath, false);
+        saveRecent(updated);
         if (isCurrent()) {
-          set({ recentProjects: updated.slice(0, MAX_RECENT), isDirty: !notifySaved(saveRevision) });
+          set({ recentProjects: updated, isDirty: !notifySaved(saveRevision) });
           useSettingsStore.getState().setLastOpenedProjectPath(savePath);
         }
         stage = "finish";
@@ -1234,13 +1304,14 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       useSettingsStore.getState().setLastOpenedProjectPath(path);
 
       const recent = get().recentProjects;
-      const existing = recent.findIndex((p) => p.path === path);
+      const existing = recent.findIndex((p) => projectPathKey(p.path) === projectPathKey(path));
       const entry = { path, name: project.name || "未命名项目", openedAt: new Date().toISOString(), cover: project.coverImage || undefined };
       const updated = existing >= 0
         ? [entry, ...recent.filter((_, i) => i !== existing)]
         : [entry, ...recent];
-      saveRecent(updated.slice(0, MAX_RECENT));
-      set({ recentProjects: updated.slice(0, MAX_RECENT) });
+      setProjectHidden(path, false);
+      saveRecent(updated);
+      set({ recentProjects: updated });
 
       // Hydration is complete. Recovery and resumed task checkpoints must be allowed to save.
       set({ isProjectLoading: false });

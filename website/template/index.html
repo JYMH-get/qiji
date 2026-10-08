@@ -5,8 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Qiji 漫剧 · 万物皆为灵感，创作无限奇迹</title>
 <meta name="description" content="Qiji 漫剧是一款面向漫剧 / 短剧创作者的 AI 桌面创作工具：剧本推理、资产拆分、批量出图出片、多轨时间轴剪辑，一个软件走完全流程。">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap">
 <style>
 /* ── Nocturne 设计系统令牌（来自设计稿 _ds/styles.css，裁剪到本站用到的部分）── */
 :root{
@@ -385,19 +383,23 @@ img{display:block;max-width:100%}
 
 <script>
 "use strict";
-/* 服务端在 GET / 时把 data/site.json 的公开配置注入替换掉下面的占位串 */
+/* 构建时注入公开配置；官网运行时不请求业务服务端。 */
 var SITE = "__SITE_CONFIG__";
-if (typeof SITE === "string") SITE = {}; // 直开静态文件（未经服务端注入）时兜底
+if (typeof SITE === "string") SITE = {};
 
-/* 图片槽位 → 内置文件（与服务端 SITE_IMAGE_SLOTS 一致）；管理端替换过的槽位走 OSS 直链 */
-var BUILTIN = {
-  "logo-full": "logo-full.svg", "app-icon": "app-icon.png",
-  "cover-1": "cover-1.webp", "cover-2": "cover-2.webp", "cover-3": "cover-3.webp", "cover-4": "cover-4.webp",
-  "shot-assets": "shot-assets.webp", "shot-canvas": "shot-canvas.webp",
-  "shot-editor-1": "shot-editor-1.webp", "shot-editor-2": "shot-editor-2.webp", "shot-storyboard": "shot-storyboard.webp"
-};
+/* 内置图片在导出时使用相对路径，预览时使用 data URI。 */
+var BUILTIN = "__WEBSITE_BUILTIN_URLS__";
+if (typeof BUILTIN === "string") BUILTIN = {};
 function imgUrl(slot) {
-  return (SITE.images && SITE.images[slot]) || ("site-assets/" + (BUILTIN[slot] || slot));
+  return (SITE.images && SITE.images[slot]) || BUILTIN[slot] || "";
+}
+function setImage(el) {
+  var slot = el.dataset.img;
+  el.onerror = function () {
+    el.onerror = null;
+    if (BUILTIN[slot]) el.src = BUILTIN[slot];
+  };
+  el.src = imgUrl(slot);
 }
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
@@ -406,10 +408,11 @@ function esc(s) {
 }
 
 /* ── 图片槽位落位 ── */
-document.querySelectorAll("img[data-img]").forEach(function (el) { el.src = imgUrl(el.dataset.img); });
+document.querySelectorAll("img[data-img]").forEach(setImage);
 (function favicon() {
   var link = document.createElement("link");
   link.rel = "icon"; link.href = imgUrl("app-icon");
+  link.onerror = function () { link.onerror = null; link.href = BUILTIN["app-icon"]; };
   document.head.appendChild(link);
 })();
 
@@ -419,10 +422,11 @@ document.querySelectorAll("img[data-img]").forEach(function (el) { el.src = imgU
   for (var r = 0; r < 2; r++) {
     order.forEach(function (i) {
       html += '<div style="flex:none;width:206px;aspect-ratio:2/3;border-radius:var(--radius-md);overflow:hidden;box-shadow:var(--shadow-md);background:var(--color-surface)">' +
-        '<img src="' + esc(imgUrl("cover-" + i)) + '" alt="漫剧封面" loading="lazy" style="width:100%;height:100%;object-fit:cover;object-position:center 22%"></div>';
+        '<img data-img="cover-' + i + '" alt="漫剧封面" loading="lazy" style="width:100%;height:100%;object-fit:cover;object-position:center 22%"></div>';
     });
   }
   document.getElementById("coverStrip").innerHTML = html;
+  document.getElementById("coverStrip").querySelectorAll("img[data-img]").forEach(setImage);
 })();
 
 /* ── 配置驱动的区块 ── */
@@ -489,8 +493,17 @@ document.getElementById("annDlg").addEventListener("click", function (e) { if (e
 /* ── 页脚 ── */
 (function foot() {
   var y = new Date().getFullYear();
-  var t = "© " + y + " Qiji 漫剧" + (SITE.icp ? " · " + SITE.icp : "");
-  document.getElementById("footRight").textContent = t;
+  var foot = document.getElementById("footRight");
+  foot.textContent = "© " + y + " Qiji 漫剧";
+  if (SITE.icp) {
+    var link = document.createElement("a");
+    link.href = "https://beian.miit.gov.cn/";
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = SITE.icp;
+    foot.appendChild(document.createTextNode(" · "));
+    foot.appendChild(link);
+  }
 })();
 
 /* ── hash 路由（#home/#features/#download/#join/#changelog）── */
@@ -505,6 +518,17 @@ function setPage(p) {
 }
 window.addEventListener("hashchange", function () { setPage(location.hash.replace("#", "")); });
 setPage(location.hash.replace("#", "") || "home");
+// srcdoc 的相对链接以父后台地址为 base；预览内部切页，不让 # 链接重新加载后台。
+if (location.href.split("#")[0] === "about:srcdoc") {
+  document.querySelectorAll('a[href^="#"]').forEach(function (link) {
+    var page = link.getAttribute("href").slice(1);
+    if (PAGES.indexOf(page) < 0) return;
+    link.addEventListener("click", function (event) {
+      event.preventDefault();
+      setPage(page);
+    });
+  });
+}
 
 /* ── 界面图双击放大 ── */
 document.querySelectorAll(".zoomable").forEach(function (el) {

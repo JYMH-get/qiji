@@ -18,6 +18,10 @@ RUN npm ci --no-audit --no-fund
 # 2) 共享契约：必须落到 /app/src/contract.ts（被 server/src/contract.ts 以 ../../src 引用）
 COPY src/contract.ts /app/src/contract.ts
 
+# 官网模板仅用于管理员预览/导出，公开官网独立部署，不由业务端口承载。
+COPY website/render.ts /app/website/render.ts
+COPY website/template/ /app/website/template/
+
 # 3) 服务端源码（含 server/skills/ 提示词原稿，store/templates.ts 启动 seed 时 readSkill 读它取完整正文；
 #    node_modules / .env / data 已被根目录 .dockerignore 排除）
 COPY server/ ./

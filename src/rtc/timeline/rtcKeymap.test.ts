@@ -39,6 +39,30 @@ describe("rtcKeymap shouldIgnoreKeyTarget", () => {
 });
 
 describe("rtcKeymap comboFromEvent（组合键规范）", () => {
+	it("Tab 上方实体键兼容中文输入法，但不把别的 Process 事件或修饰组合当裸键", () => {
+		for (const key of ["`", "·", "Process", "Dead"]) {
+			const e = { key, code: "Backquote" };
+			expect(comboFromEvent(e)).toBe("`");
+			expect(resolveRtcShortcut(e)).toBe("toggleScriptTrack");
+		}
+		expect(resolveRtcShortcut({ key: "Process", code: "KeyA" })).toBeNull();
+		expect(resolveRtcShortcut({ key: "·", code: "Digit2" })).toBeNull();
+		expect(comboFromEvent({ key: "Process", code: "Backquote", ctrlKey: true })).toBe("Ctrl+`");
+		expect(resolveRtcShortcut({ key: "`", code: "Backquote", ctrlKey: true })).toBeNull();
+		expect(resolveRtcShortcut({ key: "~", code: "Backquote", shiftKey: true })).toBeNull();
+	});
+
+	it("原文实体键归一后仍遵守改绑与解绑，旧 O 不再是默认键", () => {
+		const e = { key: "Process", code: "Backquote" };
+		const rebound = comboTable(effectiveKeys({ toggleScriptTrack: ["F8"] }));
+		expect(resolveRtcShortcut(e, rebound)).toBeNull();
+		expect(resolveRtcShortcut({ key: "F8" }, rebound)).toBe("toggleScriptTrack");
+		expect(resolveRtcShortcut(e, comboTable(effectiveKeys({ toggleScriptTrack: [] })))).toBeNull();
+		expect(resolveRtcShortcut(e, comboTable(effectiveKeys({ playPause: ["`"] })))).toBe("playPause");
+		expect(resolveRtcShortcut({ key: "o" })).toBeNull();
+		expect(formatCombo(comboFromEvent(e)!)).toBe("·");
+	});
+
 	it("字母：大写归一 + 显式修饰键（Ctrl/Alt/Shift 顺序恒定；Meta 归一为 Ctrl）", () => {
 		expect(comboFromEvent({ key: "z", ctrlKey: true })).toBe("Ctrl+Z");
 		expect(comboFromEvent({ key: "Z", metaKey: true })).toBe("Ctrl+Z");
@@ -170,8 +194,9 @@ describe("rtcKeymap 覆盖层与生效表", () => {
 		expect(resolveRtcShortcut({ key: " " }, table)).toBeNull();
 	});
 
-	it("同组合被两个动作声明时先定义者生效（解析确定性）", () => {
-		const table = comboTable(effectiveKeys({ rotate: ["F"] })); // 与 mirror 默认的 F 撞
+	it("两个显式覆盖冲突时先定义者生效（默认键向显式改绑让位）", () => {
+		expect(comboTable(effectiveKeys({ rotate: ["F"] })).get("F")).toBe("rotate");
+		const table = comboTable(effectiveKeys({ mirror: ["F"], rotate: ["F"] }));
 		expect(table.get("F")).toBe("mirror"); // mirror 定义在前
 	});
 

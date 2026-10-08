@@ -109,10 +109,14 @@ function context(ref: AssetRef, model: ModelDef, up: Upstream, onUpstream?: OnUp
 }
 function scopeToken(ctx: Context): string { return ctx.policy.scopeKey ?? digest(scopeIdentity(ctx.scope)); }
 function isAssetMissing(status: number, data: any): boolean {
-	const { code } = errorParts(data);
+	// Authentication, throttling and provider outages cannot prove an asset was deleted.
+	if (status === 401 || status === 403 || status === 429 || status >= 500) return false;
+	const { code, message } = errorParts(data);
 	// Do not interpret an unknown gateway 404 or an unrelated NotFound as an expired asset.
 	return /^(?:NotFound\.asset_?id|AssetNotFound|ResourceNotFound(?:\.Asset)?)$/i.test(code)
-		|| (status === 404 && /asset/i.test(code) && /not.?found/i.test(code));
+		|| (status === 404 && /asset/i.test(code) && /not.?found/i.test(code))
+		// This provider also reports a missing GetAsset record inside an HTTP 200 response.
+		|| ((status === 200 || status === 404) && code === "404" && /^Asset not found[.!]?$/i.test(message));
 }
 function legacyBinding(ctx: Context): OfficialAssetBinding | undefined {
 	if (ctx.assetType !== 'Image') return;

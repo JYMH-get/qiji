@@ -54,9 +54,20 @@ export const isLocalAssetId = (id?: string | null): boolean => !!id && id.starts
 export async function uploadMediaToCanvasAsset(
 	file: File,
 	_prefix = "TP", // 懒上传后前缀在补传时由 ensurePublicUrl 统一用 TP；参数保留兼容旧调用面
+	opts?: { shouldContinue?: () => boolean },
 ): Promise<{ assetId: string; displayUri: string; localPath: string | null }> {
+	const owner = useProjectStore.getState().projectInstanceId;
+	const current = () => {
+		const state = useProjectStore.getState();
+		return state.projectInstanceId === owner && !state.isProjectLoading && opts?.shouldContinue?.() !== false;
+	};
+	const assertCurrent = () => {
+		if (!current()) throw new Error("项目或导入目标已变化，素材导入已取消");
+	};
+	assertCurrent();
 	// 去重：相同内容（sha256）此前已落过 且 本地原件还在 → 复用（免重复落盘）
 	const hash = await sha256Hex(file);
+	assertCurrent();
 	if (hash && isTauri()) {
 		const dup = Object.values(useProjectStore.getState().assetBlobs).find((b) => b.sha256 === hash);
 		if (dup?.localPath) {
@@ -64,13 +75,16 @@ export async function uploadMediaToCanvasAsset(
 				const { exists } = await import("@tauri-apps/plugin-fs");
 				if (await exists(dup.localPath)) {
 					const { convertFileSrc } = await import("@tauri-apps/api/core");
+					assertCurrent();
 					return { assetId: dup.id, displayUri: dup.localUri || convertFileSrc(dup.localPath), localPath: dup.localPath };
 				}
 			} catch { /* 探不了本地文件 → 按未命中处理，走重新落盘 */ }
 		}
 	}
+	assertCurrent();
 	const id = newLocalAssetId();
-	const blob = await saveUploadedLocal(file, id, undefined, file.name);
+	const blob = await saveUploadedLocal(file, id, undefined, file.name, { shouldContinue: current });
+	assertCurrent();
 	if (blob?.localUri) {
 		useProjectStore.getState().registerAssetBlob({ ...blob, sha256: hash || undefined });
 		return { assetId: id, displayUri: blob.localUri, localPath: blob.localPath ?? null };
@@ -99,6 +113,10 @@ export function pickFileToUploadNode(nodeId: string): void {
  * 媒体上传失败大声 alert（绝不静默留本地路径——否则上游请求拿不到公网 url）。
  */
 export async function applyFileToUploadNode(nodeId: string, file: File): Promise<void> {
+	const owner = useProjectStore.getState().projectInstanceId;
+	const current = () => useProjectStore.getState().projectInstanceId === owner
+		&& !useProjectStore.getState().isProjectLoading && !!useCanvasStore.getState().nodes[nodeId];
+	if (!current()) return;
 	const kind = uploadKindFromFile(file);
 	let assetId: string;
 	let displayUri: string;
@@ -106,18 +124,20 @@ export async function applyFileToUploadNode(nodeId: string, file: File): Promise
 	if (kind === "script") {
 		// 文本类不作上游媒体素材：本地落库即可（不占 OSS）
 		const stored = await storeDroppedFile(file);
-		if (!stored) return;
+		if (!current() || !stored) return;
 		assetId = stored.fileId;
 		displayUri = stored.fileUri;
 		localPath = stored.localPath;
 	} else {
 		useCanvasStore.getState().setRuntime(nodeId, { status: "uploading" }); // 节点显示「上传中…」转圈
 		try {
-			const up = await uploadMediaToCanvasAsset(file);
+			const up = await uploadMediaToCanvasAsset(file, "TP", { shouldContinue: current });
+			if (!current()) return;
 			assetId = up.assetId;
 			displayUri = up.displayUri;
 			localPath = up.localPath;
 		} catch (err) {
+			if (!current()) return;
 			useCanvasStore.getState().setRuntime(nodeId, { status: "failed", error: err instanceof Error ? err.message : "上传失败" });
 			alert(`本地上传失败（未做 OSS 存储）：${err instanceof Error ? err.message : "未知错误"}`);
 			return;

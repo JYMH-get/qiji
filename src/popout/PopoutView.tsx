@@ -7,6 +7,7 @@ import { getPopoutWhich } from "./popout";
 import JianyiWindow from "@/components/JianyiWindow";
 import AssetAssistant from "@/components/AssetAssistant";
 import Lightbox from "@/components/Lightbox";
+import ConfirmModal from "@/components/ConfirmModal";
 import { useJianyiStore } from "@/store/jianyiAssistantStore";
 
 /** 简一助手弹出：渲染单个对话窗口（占满整窗），会话取最近活跃或新建。 */
@@ -26,6 +27,7 @@ export function PopoutView() {
 			{which === "jianyi" && <JianyiPopout />}
 			{which === "asset" && <AssetAssistant popout />}
 			<Lightbox />
+			<ConfirmModal />
 		</>
 	);
 }

@@ -170,6 +170,7 @@ export function RtcCropEditor({ segId, uri, media, initial, naturalRatioHint, on
 
 	return (
 		<div
+			data-rtc-tab-navigation
 			style={{ position: "fixed", inset: 0, zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.6)" }}
 			onPointerDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
 		>

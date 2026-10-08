@@ -18,7 +18,7 @@
  */
 import type { Purpose } from "@/contract";
 import { useProjectStore, type AssetCat } from "@/store/projectStore";
-import type { PendingGen } from "@/services/projectFile";
+import type { PendingGen, RtcGenerationTarget } from "@/services/projectFile";
 import { runPurpose } from "./purposeRunner";
 import { trackTask } from "./taskCenter";
 import { saveRemoteAsset, uploadBlobToOss } from "./assetPersist";
@@ -28,6 +28,8 @@ import { extractPromptText, buildLegend, withLegend } from "@/lib/shotMaterials"
 import { resolvePresets } from "@/lib/presetSchemes";
 import { rememberGenerationReceipt, readGenerationReceipt, forgetGenerationReceipt, type GenerationOwner } from "./generationReceipts";
 import { isProjectWriter } from "./windowSync";
+import { rtcPendingReady, deliverRtcPending, failRtcPending, pendingRtcTarget } from "./rtcGenerationDelivery";
+import { forgetRtcGenerationResult, readRtcGenerationResult, rememberRtcGenerationResult } from "./rtcGenerationReceipts";
 
 type QueueOwner = GenerationOwner & { active?: () => boolean };
 const attempts = new Map<string, symbol>();
@@ -63,7 +65,10 @@ async function saveGenerationCheckpoint(owner: QueueOwner, id: string): Promise<
 	await useProjectStore.getState().save(true);
 	const state = useProjectStore.getState();
 	// save 会捕获磁盘错误；非写者仅转发保存且可能清 dirty，均不是落盘确认。
-	if (currentProject(owner) && isProjectWriter() && !state.isDirty && !state.pendingGens.some(x => x.id === id)) forgetGenerationReceipt(owner, id);
+	if (currentProject(owner) && isProjectWriter() && !state.isDirty && !state.pendingGens.some(x => x.id === id)) {
+		forgetGenerationReceipt(owner, id);
+		forgetRtcGenerationResult(owner, id);
+	}
 }
 
 const isTauri = (): boolean =>
@@ -87,6 +92,7 @@ export interface GenSpec {
 
 /** 分镜故事板/视频/提示词推理目标 */
 export interface ShotGenSpec {
+	rtcTarget?: RtcGenerationTarget;
 	episodeId: string;
 	shotId: string;
 	field: "storyboard" | "video" | "storyboardPrompt" | "videoPrompt";
@@ -170,9 +176,9 @@ function applyShotResult(target: NonNullable<PendingGen["shot"]>, uri: string): 
 			? { videoPrompt: text, videoPromptBase: text }
 			: { storyboardPrompt: text, storyboardPromptBase: text });
 	} else if (target.field === "storyboard") {
-		st.updateShot(target.episodeId, target.shotId, { storyboardUri: uri, storyboardImages: [...(sh.storyboardImages || []), uri] });
+		if (!(sh.storyboardImages || []).includes(uri)) st.updateShot(target.episodeId, target.shotId, { storyboardUri: uri, storyboardImages: [...(sh.storyboardImages || []), uri] });
 	} else {
-		st.updateShot(target.episodeId, target.shotId, { videoUri: uri, videoUris: [...(sh.videoUris || []), uri] });
+		if (!(sh.videoUris || []).includes(uri)) st.updateShot(target.episodeId, target.shotId, { videoUri: uri, videoUris: [...(sh.videoUris || []), uri] });
 	}
 }
 /** 该 shot 目标是否为文本推理（提示词），不走资产下载 */
@@ -210,13 +216,44 @@ function uploadPrefixOf(p: PendingGen): string {
 	return (p.cat && CAT_PREFIX[p.cat]) || "TP";
 }
 
-async function applyResult(owner: QueueOwner, id: string, status: "success" | "failed", resultUri?: string, error?: string, assetId?: string, opts?: { recoverable?: boolean; rawLink?: boolean; saveToOss?: boolean }): Promise<void> {
+const applyingResults = new Set<string>();
+const applyKey = (owner: QueueOwner, id: string) => JSON.stringify([owner.projectInstanceId, id]);
+
+async function applyResult(owner: QueueOwner, id: string, status: "success" | "failed", resultUri?: string, error?: string, assetId?: string, opts?: { recoverable?: boolean; rawLink?: boolean; saveToOss?: boolean }, hint?: PendingGen): Promise<void> {
+	if (owner.active?.() === false) return;
+	const currentPending = currentProject(owner) ? useProjectStore.getState().pendingGens.find(x => x.id === id) : undefined;
+	const evidence = currentPending ?? hint;
+	const target = evidence && (currentProject(owner) ? pendingRtcTarget(evidence) : evidence.rtcTarget);
+	if (evidence && (target || evidence.derived || (evidence.shot && !isPromptField(evidence))) && status === "success" && resultUri) {
+		const result = readRtcGenerationResult(owner, evidence)?.result ?? evidence.rtcResult ?? hint?.rtcResult ?? { uri: resultUri, assetId, taskId: evidence.taskId,
+			media: evidence.derived?.field === "storyboard" || evidence.shot?.field === "storyboard" ? "image" as const : "video" as const,
+			rawLink: opts?.rawLink, saveToOss: opts?.saveToOss };
+		rememberRtcGenerationResult(owner, evidence, target, result);
+	}
+	const key = applyKey(owner, id);
+	if (applyingResults.has(key)) return;
+	applyingResults.add(key);
+	try { await applyResultInner(owner, id, status, resultUri, error, assetId, opts); }
+	catch (err) { console.warn("[generation] 结果待保存，保留任务凭据", err); }
+	finally { applyingResults.delete(key); }
+}
+
+async function applyResultInner(owner: QueueOwner, id: string, status: "success" | "failed", resultUri?: string, error?: string, assetId?: string, opts?: { recoverable?: boolean; rawLink?: boolean; saveToOss?: boolean }): Promise<void> {
 	if (!currentProject(owner)) return;
 	clearJobProgress(id); // 已终态，进度/排队位次作废（重试/重连会重新登记）
 	const st = useProjectStore.getState();
-	const p = st.pendingGens.find((x) => x.id === id);
+	let p = st.pendingGens.find((x) => x.id === id);
 	if (!p) return; // 已切换项目/已被清除 → 丢弃（原项目重开时会续跑）
-	const current = () => currentProject(owner) && useProjectStore.getState().pendingGens.some(x => x.id === id && x.taskId === p.taskId);
+	const taskId = p.taskId, createdAt = p.createdAt;
+	const current = () => currentProject(owner) && useProjectStore.getState().pendingGens.some(x => x.id === id && x.createdAt === createdAt && x.taskId === taskId);
+	const receipt = readRtcGenerationResult(owner, p);
+	if (receipt && status === "success") {
+		p = { ...p, rtcTarget: receipt.target ?? p.rtcTarget, rtcResult: receipt.result };
+		st.updatePendingGen(id, { rtcTarget: p.rtcTarget, rtcResult: receipt.result });
+		// 原始产物先有持久凭据再开始下载/探时长；保存失败仍保留独立副本与 pending。
+		await st.save(true);
+		if (!current()) return;
+	}
 	if (status === "success" && resultUri) {
 		// 文本推理结果（提示词）：直接写分镜，不下载、不当资产
 		if (p.shot && isPromptField(p)) {
@@ -226,8 +263,9 @@ async function applyResult(owner: QueueOwner, id: string, status: "success" | "f
 			return;
 		}
 		// 本地落盘 + 三元映射；失败/非 Tauri 退回直接用 url
-		let displayUri = resultUri;
-		try {
+		let displayUri = p.rtcResult?.displayUri || resultUri;
+		let displayAssetId = p.rtcResult?.assetId || assetId;
+		try { if (!p.rtcResult?.displayUri) {
 			// rawLink（第158轮）：服务端未转存（meta.rehosted=false，resultUri=上游原始时效直链，
 			// 多为服务器到成片托管域网络不通）→ 客户端用本机网络快重试下载（图 3×30s / 视频 2×120s）
 			const dl = opts?.rawLink
@@ -237,7 +275,7 @@ async function applyResult(owner: QueueOwner, id: string, status: "success" | "f
 			if (!current()) return;
 			// 下载成功 → 把本地字节经上传接口传回服务端落 OSS，三元映射换成永久直链（原始直链会过期）；
 			// 带 taskId=顺带改写服务端任务响应体（rehosted→true，断连找回不再重复接力转存）
-			if (blob && opts?.rawLink && opts?.saveToOss !== false) blob = await uploadBlobToOss(blob, p.label, uploadPrefixOf(p), p.taskId);
+			if (blob && opts?.rawLink && opts?.saveToOss !== false) blob = await uploadBlobToOss(blob, p.label, uploadPrefixOf(p), p.taskId, { shouldContinue: current });
 			if (!current()) return;
 			// 兜底：直链未能落本地（如上游直链被 CORS/网络拦、服务端未转存 OSS）→
 			// 请管理端把该直链转存到 OSS，再从 OSS（同 S3、CORS 友好）下载到本地。
@@ -250,8 +288,9 @@ async function applyResult(owner: QueueOwner, id: string, status: "success" | "f
 			if (blob) {
 				st.registerAssetBlob(blob);
 				displayUri = blob.localUri || resultUri;
+				displayAssetId = blob.id;
 			}
-		} catch { /* 落盘失败：用 url 兜底 */ }
+		} } catch { /* 落盘失败：用 url 兜底 */ }
 		// 重新取最新状态（落盘是异步，期间可能变化）
 		if (!current()) return;
 		if (p.derived) applyDerivedResult(p.derived, true, displayUri);
@@ -261,15 +300,26 @@ async function applyResult(owner: QueueOwner, id: string, status: "success" | "f
 			useProjectStore.getState().addGenMeta(displayUri, { prompt: p.prompt, refs: p.refsMeta || [], at: Date.now() });
 			useProjectStore.getState().addAssetImage(p.cat as AssetCat, p.assetId as string, p.variantId ?? null, displayUri, true);
 		}
+		if (p.rtcResult) {
+			const rtcTarget = p.rtcTarget;
+			p = { ...p, rtcResult: { ...p.rtcResult, displayUri, assetId: displayAssetId } };
+			rememberRtcGenerationResult(owner, p, rtcTarget, p.rtcResult!);
+			useProjectStore.getState().updatePendingGen(id, { rtcResult: p.rtcResult });
+			if (!(await deliverRtcPending(owner, p, current))) return;
+		}
+		if (!current()) return;
 		useProjectStore.getState().removePendingGen(id);
 	} else if (p.derived) {
 		// 派生记录（超分/去字幕）失败：失败态标在记录本身（chip 变红），pending 直接清
 		//（重试=菜单里重新处理一次，同标号覆盖；不走 pending 的重试/重连 UI）
 		applyDerivedResult(p.derived, false, undefined, error);
+		await failRtcPending(owner, p, error || "处理失败");
+		if (!current()) return;
 		useProjectStore.getState().removePendingGen(id);
 	} else {
 		// recoverable（服务端丢任务的 lost 态）：标失败但带可重连标记，保留 taskId 供「重连原任务」
 		st.updatePendingGen(id, { status: "failed", error: error || "生成失败", recoverable: opts?.recoverable || false });
+		await failRtcPending(owner, p, error || "生成失败");
 	}
 	// 成功写回前始终保留 pending / taskId；存盘后才能清独立受理凭据。
 	await saveGenerationCheckpoint(owner, id);
@@ -320,7 +370,7 @@ function runFromPending(id: string): void {
 	run
 		.then((r) => {
 			finishLiveRun();
-			if (r.status === "success") void applyResult(owner, id, "success", r.resultUri, undefined, r.assetId, { rawLink: r.rawLink, saveToOss: r.saveToOss });
+			if (r.status === "success") void applyResult(owner, id, "success", r.resultUri, undefined, r.assetId, { rawLink: r.rawLink, saveToOss: r.saveToOss }, { ...p, taskId: live.taskId, adapterKey: live.adapterKey });
 			else if (r.status === "no_model") void applyResult(owner, id, "failed", undefined, "无可用模型：请检查「设置 → 管理端」连接与目录拉取后重试。");
 			// 服务端丢任务（lost）→ 可重连找回（前提是已拿到 taskId）
 			else void applyResult(owner, id, "failed", undefined, r.error, undefined, { recoverable: !!r.lost });
@@ -329,6 +379,22 @@ function runFromPending(id: string): void {
 			finishLiveRun();
 			void applyResult(owner, id, "failed", undefined, err instanceof Error ? err.message : "生成失败");
 		});
+}
+
+function startPendingRun(pending: PendingGen): void {
+	if (!pending.rtcTarget) { runFromPending(pending.id); return; }
+	const owner = claimRun(pending.id);
+	void (async () => {
+		const bound = await rtcPendingReady(pending, owner, true);
+		if (!currentProject(owner)) return;
+		if (!bound) { useProjectStore.getState().removePendingGen(pending.id); await saveGenerationCheckpoint(owner, pending.id); return; }
+		await useProjectStore.getState().save(true);
+		if (!currentProject(owner) || !useProjectStore.getState().pendingGens.some(p => p.id === pending.id)) return;
+		const ready = await rtcPendingReady(pending, owner);
+		if (!currentProject(owner)) return;
+		if (!ready) { useProjectStore.getState().removePendingGen(pending.id); await saveGenerationCheckpoint(owner, pending.id); return; }
+		runFromPending(pending.id);
+	})().catch(error => console.warn("[rtc] 提交准备未完成，保留任务记录", error));
 }
 
 /** 提交一次资产出图（异步，不阻塞调用方）；UI 由 pendingGens 持久占位驱动。 */
@@ -360,6 +426,7 @@ export function startShotGeneration(spec: ShotGenSpec): string {
 	const pending: PendingGen = {
 		id,
 		shot: { episodeId: spec.episodeId, shotId: spec.shotId, field: spec.field },
+		rtcTarget: spec.rtcTarget,
 		purpose: spec.purpose,
 		prompt: spec.prompt,
 		variables: spec.variables,
@@ -373,12 +440,13 @@ export function startShotGeneration(spec: ShotGenSpec): string {
 	};
 	useProjectStore.getState().addPendingGen(pending);
 	void useProjectStore.getState().save(true);
-	runFromPending(id);
+	startPendingRun(pending);
 	return id;
 }
 
 /** 媒体处理派生目标（视频超分/去字幕、故事板图像超分，火山 MediaKit）：结果写回 shot.videoDerived / sbDerived[recId] */
 export interface DerivedGenSpec {
+	rtcTarget?: RtcGenerationTarget;
 	episodeId: string;
 	shotId: string;
 	recId: string;
@@ -398,6 +466,7 @@ export function startDerivedGeneration(spec: DerivedGenSpec): string {
 	const pending: PendingGen = {
 		id,
 		derived: { episodeId: spec.episodeId, shotId: spec.shotId, recId: spec.recId, field: spec.field },
+		rtcTarget: spec.rtcTarget,
 		purpose: spec.purpose,
 		prompt: "",
 		params: spec.params,
@@ -409,7 +478,7 @@ export function startDerivedGeneration(spec: DerivedGenSpec): string {
 	};
 	useProjectStore.getState().addPendingGen(pending);
 	void useProjectStore.getState().save(true);
-	runFromPending(id);
+	startPendingRun(pending);
 	return id;
 }
 
@@ -419,9 +488,10 @@ export function retryGeneration(id: string): void {
 	const p = st.pendingGens.find((x) => x.id === id);
 	if (!p) return;
 	forgetGenerationReceipt(ownerOf(st), id);
-	st.updatePendingGen(id, { status: "running", error: undefined, recoverable: false, taskId: undefined, adapterKey: undefined });
+	forgetRtcGenerationResult(ownerOf(st), id);
+	st.updatePendingGen(id, { status: "running", error: undefined, recoverable: false, taskId: undefined, adapterKey: undefined, rtcResult: undefined });
 	void st.save(true);
-	runFromPending(id);
+	startPendingRun({ ...p, taskId: undefined, adapterKey: undefined, rtcResult: undefined });
 }
 
 /**
@@ -431,8 +501,11 @@ export function retryGeneration(id: string): void {
  */
 export function recallPendingGeneration(id: string): void {
 	const st = useProjectStore.getState();
-	const p = st.pendingGens.find((x) => x.id === id);
+	let p = st.pendingGens.find((x) => x.id === id);
 	if (!p) return;
+	const rtcTarget = pendingRtcTarget(p);
+	if (!p.rtcTarget && rtcTarget) { p = { ...p, rtcTarget }; st.updatePendingGen(id, { rtcTarget }); }
+	if (replayRtcCompletion(p)) return;
 	if (resumeLiveRun(p, st)) { void st.save(true); return; }
 	if (!p.taskId || !p.adapterKey) { retryGeneration(id); return; }
 	const owner = claimRun(id, st);
@@ -442,20 +515,43 @@ export function recallPendingGeneration(id: string): void {
 		taskId: p.taskId,
 		adapterKey: p.adapterKey,
 		onUpdate: (progress, status, resultUri, error, assetId, _partial, rawLink, extra) => {
+			if (status === "success") { void applyResult(owner, p.id, "success", resultUri, undefined, assetId, { rawLink, saveToOss: extra?.saveToOss }, p); return; }
 			if (!currentProject(owner)) return;
 			// 重连找回同样喂进度/排队位次（重连回来的单可能仍在服务端队列里）
 			if (status === "queued" || status === "running") setJobProgress(p.id, progress, extra);
-			if (status === "success") void applyResult(owner, p.id, "success", resultUri, undefined, assetId, { rawLink, saveToOss: extra?.saveToOss });
-			else if (status === "failed") void applyResult(owner, p.id, "failed", undefined, error);
+			if (status === "failed") void applyResult(owner, p.id, "failed", undefined, error);
 			else if (status === "lost") void applyResult(owner, p.id, "failed", undefined, error || "服务端异常：仍未找到原任务", undefined, { recoverable: true });
 		},
 	});
+}
+
+/** 已拿到终态时只重放该单产物，不重新挂轮询，更不重新付费提交。 */
+function replayRtcCompletion(pending: PendingGen): boolean {
+	const state = useProjectStore.getState(), baseOwner = ownerOf(state);
+	const stored = readRtcGenerationResult(baseOwner, pending);
+	const result = stored?.result ?? pending.rtcResult;
+	const target = pending.rtcTarget ?? stored?.target;
+	if (!result || (!target && !pending.derived && (!pending.shot || isPromptField(pending)))) return false;
+	if (applyingResults.has(applyKey(baseOwner, pending.id))) return true;
+	const owner = claimRun(pending.id, state);
+	const p = { ...pending, rtcTarget: target, rtcResult: result };
+	void applyResult(owner, p.id, "success", result.uri, undefined, result.assetId, { rawLink: result.rawLink, saveToOss: result.saveToOss }, p);
+	return true;
+}
+
+export function resumeRtcPendingResults(): void {
+	const state = useProjectStore.getState();
+	if (state.isProjectLoading) return;
+	for (const pending of state.pendingGens) replayRtcCompletion(pending);
 }
 
 /** App 启动调用：把上次未完成的在途任务接回来。 */
 export function resumePendingGenerations(): void {
 	const st = useProjectStore.getState();
 	for (let p of st.pendingGens) {
+		const rtcTarget = pendingRtcTarget(p);
+		if (!p.rtcTarget && rtcTarget) { p = { ...p, rtcTarget }; st.updatePendingGen(p.id, { rtcTarget }); }
+		if (replayRtcCompletion(p)) continue;
 		if (resumeLiveRun(p, st)) continue;
 		const owner = ownerOf(st) as QueueOwner;
 		const receipt = readGenerationReceipt(owner, p);
@@ -471,11 +567,11 @@ export function resumePendingGenerations(): void {
 				taskId: p.taskId,
 				adapterKey: p.adapterKey,
 				onUpdate: (progress, status, resultUri, error, assetId, _partial, rawLink, extra) => {
+					if (status === "success") { void applyResult(owner, p.id, "success", resultUri, undefined, assetId, { rawLink, saveToOss: extra?.saveToOss }, p); return; }
 					if (!currentProject(owner)) return;
 					// 重挂轮询的在途单同样喂进度/排队位次（重启后接回的单可能仍在服务端队列里）
 					if (status === "queued" || status === "running") setJobProgress(p.id, progress, extra);
-					if (status === "success") void applyResult(owner, p.id, "success", resultUri, undefined, assetId, { rawLink, saveToOss: extra?.saveToOss });
-					else if (status === "failed") void applyResult(owner, p.id, "failed", undefined, error);
+					if (status === "failed") void applyResult(owner, p.id, "failed", undefined, error);
 					// 服务端重启丢任务 → 标可重连，UI 提示「服务端异常」+「重连原任务」
 					else if (status === "lost") void applyResult(owner, p.id, "failed", undefined, error || "服务端异常：未找到原任务", undefined, { recoverable: true });
 				},
@@ -486,4 +582,9 @@ export function resumePendingGenerations(): void {
 		}
 	}
 	void st.save(true);
+	// 项目可在资产/画布页打开；自由占位的续接不能依赖 RTC 页面挂载。
+	if (Object.keys(st.rtcDocs ?? {}).length) {
+		const owner = ownerOf(st);
+		void import("@/rtc/panel/freeGenActions").then(({ resumeFreeGens }) => { if (currentProject(owner)) resumeFreeGens(); });
+	}
 }

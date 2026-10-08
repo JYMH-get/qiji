@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { Coins, TrendingUp, ShieldCheck } from "lucide-react";
 import { runAssetCheck, allProjectAssetTargets } from "@/services/assetCheck";
@@ -14,9 +14,10 @@ interface EditorHeaderProps {
     infoLabels?: string[];
     /** 资产界面：显示「检查所有资产」按钮（探全项目资产的 OSS 直链、死链自愈） */
     showAssetCheck?: boolean;
+    centerContent?: ReactNode;
 }
 
-const EditorHeader = ({ title, infoLabels = [], showAssetCheck = false }: EditorHeaderProps) => {
+const EditorHeader = ({ title, infoLabels = [], showAssetCheck = false, centerContent }: EditorHeaderProps) => {
     const navigate = useNavigate();
     const theme = useSettingsStore((s) => s.theme);
     const setTheme = useSettingsStore((s) => s.setTheme);
@@ -90,6 +91,7 @@ const EditorHeader = ({ title, infoLabels = [], showAssetCheck = false }: Editor
                             ))}
                         </div>
                     </div>
+                    {centerContent && <div style={{ flex: 1, minWidth: 0, display: "flex", margin: "0 20px" }}>{centerContent}</div>}
                     <div id="16_104" className="Pixso-frame-16_104">
                         <div className="frame-content-16_104">
                             {/* 积分：剩余 / 今日已用，点击打开个人中心 */}

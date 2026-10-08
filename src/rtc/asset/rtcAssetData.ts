@@ -74,6 +74,12 @@ export interface RtcAssetItem {
 	id?: string;
 	/** 无图占位符卡（资产已拆分尚未出图）：不可拖拽入轨/垫图，点击选中在右栏生成图片；出图后随 store 订阅自动变正常图卡（key 不变） */
 	placeholder?: boolean;
+	/** 生成任务卡：来自任务台账，不依赖时间轴占位；没有媒体时只显示状态，不可预览/拖拽。 */
+	generation?: {
+		status: "preparing" | "running" | "saving" | "failed";
+		label: string;
+		error?: string;
+	};
 	/** 该资产的全部已出图造型（基础+变体；仅项目五类图片卡携带）——数量>1 时卡片显示「N造型」角标并可右键选择 */
 	forms?: RtcAssetForm[];
 	/** 当前显示的造型（null=基础形象；右键造型选单 active 判定） */
@@ -184,8 +190,16 @@ export function collectProjectImageItems(
 /** 「图片」分类：素材库图片。缺省只收本地导入（origin=upload，画布本地素材库语义）；
  *  includeGenerated=true 时连画布生成物一并收（实时剪辑素材页——按分集过滤后不再乱） */
 export function collectLibraryImageItems(libraryAssets: LibraryAsset[], opts?: { includeGenerated?: boolean }): RtcAssetItem[] {
+	const seen = new Set<string>();
 	return libraryAssets
 		.filter((a) => a.kind === "image" && (a.origin === "upload" || !!opts?.includeGenerated) && !a.deletedByUser)
+		.filter((a) => {
+			const key = a.serverAssetId || a.id;
+			if (seen.has(key) || seen.has(a.uri)) return false;
+			seen.add(key);
+			seen.add(a.uri);
+			return true;
+		})
 		.map((a) => ({ key: a.serverAssetId || a.id, uri: a.uri, name: a.name, cat: "others" as const, media: "image" as const, id: a.serverAssetId || a.id }));
 }
 

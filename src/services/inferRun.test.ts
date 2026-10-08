@@ -7,6 +7,7 @@ vi.mock('./purposeRunner', () => ({ runPurpose: mocks.runPurpose }));
 vi.mock('./taskCenter', () => ({ trackTask: vi.fn() }));
 vi.mock('./generationQueue', () => ({ setJobProgress: vi.fn(), clearJobProgress: vi.fn() }));
 vi.mock('@/store/projectStore', () => ({ useProjectStore: { getState: () => mocks.state } }));
+vi.mock('@/store/rtcStore', () => ({ useRtcStore: { getState: () => ({}) } }));
 
 beforeEach(() => {
   mocks.runPurpose.mockReset().mockImplementation(() => new Promise(() => {}));

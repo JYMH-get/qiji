@@ -12,6 +12,8 @@ import { validateImageSizeMap } from '../imageSizes.ts';
 import { channelAvailability, modelHistoryScope, refreshChannelAvailability, parseAvailabilityRange, resetModelRateHistory } from '../channelAvailability.ts';
 import { lineHistoryScope, resetLineRateHistory } from '../lineAvailability.ts';
 import { adjustmentView, editHistory, HistoryEditError } from '../availabilityAdjustments.ts';
+import { getStatisticsRules, saveStatisticsRules } from '../store/modelStatisticsRules.ts';
+import { StatisticsRuleError } from '../statisticsRules.ts';
 import { validateTextPricing } from '../textPricing.ts';
 import { routingConfig, saveRoutingConfig, initialRoutingConfig, routingHealth, resetRouteHealth, accessModes, seedanceFamilyOf, lineModel, highestLinePrices, routingAvailability, routingChannelName, withImageRouting, withSeedanceVariantRouting, withDefaultRouting, routingFamilyOptions } from "../autoRouting.ts";
 import { routingHourlyStats } from '../routeObservations.ts';
@@ -98,6 +100,7 @@ import { isSmsConfigured } from "../services/smsAliyun.ts";
 import { previewUserTransfer, transferUsers, listUserTransfers } from "../services/userTransfer.ts";
 import { isOssConfigured, ossSelfTest, ossPut, ossPresignPut, ossPublicUrl } from "../store/oss.ts";
 import { getSiteConfig, updateSiteConfig, setSiteImage, SITE_IMAGE_SLOTS } from "../store/site.ts";
+import { registerSiteExportRoutes, siteImageSlots } from "./siteExport.ts";
 import { favoriteOwnersOverview, favoritedAssetCount, grantedBytes, addFavorite, removeFavorite } from "../store/favorites.ts";
 import { listStorageCodes, deleteStorageCode } from "../store/storageCodes.ts";
 import { sweepPreview, setRetentionDays } from "../store/retention.ts";
@@ -942,6 +945,13 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			reply.header('Cache-Control','no-store');
 			try{return groupPricesView((req.params as {id:string}).id);}catch(e){return reply.code((e as {statusCode?:number}).statusCode??400).send({error:{message:(e as Error).message}});}
 		});
+		api.get('/admin-api/models/:id/statistics-rules',async(req,reply)=>{
+			reply.header('Cache-Control','no-store');
+			try{return getStatisticsRules((req.params as {id:string}).id);}catch(e){if(e instanceof StatisticsRuleError)return reply.code(e.status).send({error:{message:e.message}});throw e;}
+		});
+		api.put('/admin-api/models/:id/statistics-rules',async(req,reply)=>{
+			try{return saveStatisticsRules((req.params as {id:string}).id,req.body);}catch(e){if(e instanceof StatisticsRuleError)return reply.code(e.status).send({error:{message:e.message}});throw e;}
+		});
 		api.put('/admin-api/agent-groups/:id/prices/:lineId',async(req,reply)=>{
 			const {id,lineId}=req.params as {id:string;lineId:string};
 			try{return updateGroupLinePrice(id,lineId,req.body);}catch(e){return reply.code((e as {statusCode?:number}).statusCode??400).send({error:{message:(e as Error).message}});}
@@ -1174,13 +1184,14 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 			}
 		});
 
-		// ── 网页管理（第244轮：官网主站 GET / 的内容管理）──
+		// ── 网页管理：内容保存与独立静态官网部署分开 ──
 		if (!isRelay()) registerClientUpdateAdmin(api);
-		api.get("/admin-api/site", async () => ({
-			config: getSiteConfig(),
-			ossConfigured: isOssConfigured(),
-			imageSlots: Object.entries(SITE_IMAGE_SLOTS).map(([slot, s]) => ({ slot, label: s.label, builtin: `/site-assets/${s.file}` })),
-		}));
+		registerSiteExportRoutes(api);
+		api.get("/admin-api/site", async (_req, reply) => {
+			const snapshot = structuredClone(getSiteConfig());
+			reply.header("Cache-Control", "no-store");
+			return { config: snapshot, ossConfigured: isOssConfigured(), imageSlots: await siteImageSlots() };
+		});
 		api.put("/admin-api/site", async (req) => ({ ok: true, config: updateSiteConfig((req.body ?? {}) as Record<string, unknown>) }));
 		// 图片槽位替换：multipart 原图 → OSS `site/img/`（原图原样保存，不压缩不改格式；旧版本对象保留）。
 		// ⚠ site/ 前缀刻意**不入资产台账**——官网素材没有用户归属/保留策略语义，也绝不能被清理任务扫到。

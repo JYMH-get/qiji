@@ -14,6 +14,12 @@ const Frame21 = () => {
     const recentProjects = useProjectStore((s) => s.recentProjects);
     const theme = useSettingsStore((s) => s.theme);
     const setTheme = useSettingsStore((s) => s.setTheme);
+    const settingsInitialized = useSettingsStore((s) => s.initialized);
+    const userDataDir = useSettingsStore((s) => s.userDataDir);
+
+    useEffect(() => {
+        if (settingsInitialized) void useProjectStore.getState().refreshProjects();
+    }, [settingsInitialized, userDataDir]);
 
     const [searchQuery, setSearchQuery] = useState("");
     // 项目设置弹窗（管理界面：改名/封面）当前编辑的项目
@@ -59,9 +65,7 @@ const Frame21 = () => {
 
     const handleRemoveRecent = (e: React.MouseEvent, path: string) => {
         e.stopPropagation();
-        const list = recentProjects.filter((r) => r.path !== path);
-        localStorage.setItem("Qiji:recentProjects", JSON.stringify(list));
-        useProjectStore.setState({ recentProjects: list });
+        useProjectStore.getState().removeRecentProject(path);
     };
 
     const filteredProjects = recentProjects.filter((p) =>
@@ -192,7 +196,7 @@ const Frame21 = () => {
                                             <div id="2_48" className="Pixso-vector-2_48"></div>
                                             <input
                                                 type="text"
-                                                placeholder="搜索项目名称或描述..."
+                                                placeholder="搜索项目名称或路径..."
                                                 value={searchQuery}
                                                 onChange={(e) => setSearchQuery(e.target.value)}
                                                 style={{
@@ -215,7 +219,7 @@ const Frame21 = () => {
                                                 {"最近更新"}
                                             </p>
                                             <p id="2_54" className="Pixso-paragraph-2_54">
-                                                {"按打开时间倒序排布"}
+                                                {"按最近使用时间排序"}
                                             </p>
                                         </div>
                                     </div>

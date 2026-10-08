@@ -22,7 +22,7 @@ import { addNodeMaterialFromAsset, findPickedNodeMaterial, toggleNodeMaterialFro
 import { addShotMaterialFromAsset, materialKindFromAssetCat } from "@/lib/shotMaterialOps";
 import { usePromptModalStore } from "@/store/promptModalStore";
 import { ensureDragThumb, ensureLocalOriginal, saveRemoteAsset } from "@/services/assetPersist";
-import { openLightbox } from "@/store/lightboxStore";
+import { useScopedLightboxGallery } from "@/hooks/useScopedLightboxGallery";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { Boxes, ChevronsRight, Star, Volume2 } from "lucide-react";
 import { useDockStore, startDockDrag, DOCK_BTN } from "@/store/dockStore";
@@ -37,6 +37,7 @@ import { openSharedPick } from "@/store/sharedPickStore";
 import { confirmDialog } from "@/lib/confirmDialog";
 import type { SharedLibraryInfo } from "@/contract";
 import { useUiStore } from "@/store/uiStore";
+import { SharedLibraryDeleteButton } from "@/components/SharedLibraryDeleteButton";
 
 function isTauriEnv(): boolean {
 	return typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
@@ -249,6 +250,7 @@ function pickRef(item: AssetItem): Parameters<typeof addNodeMaterialFromAsset>[1
 const selectedAssetStyle: React.CSSProperties = { outline: "2px solid #6890F8", outlineOffset: -2, boxShadow: "inset 0 0 0 5px rgba(104,144,248,0.25)" };
 
 export default function AssetAssistant({ popout = false }: { popout?: boolean }) {
+	const galleryOwner = useProjectStore(s => s.projectInstanceId);
 	const [open, setOpen] = useState(false);
 	const pickTargetNodeId = useUiStore((s) => s.assetLibraryTargetNodeId);
 	const pickMode = !!pickTargetNodeId && !popout;
@@ -345,6 +347,16 @@ export default function AssetAssistant({ popout = false }: { popout?: boolean })
 		return () => { cancelled = true; };
 	}, [major, favServerItems]);
 	const items = major === "project" ? projectItems : major === "favorite" ? favItems : [];
+	const galleryId = (item: AssetItem) => `${item.cat}:${item.id || item.uri}`;
+	const openGallery = useScopedLightboxGallery(`${galleryOwner}/${major}/${sub}`, {
+		getItems: () => {
+			const project = useProjectStore.getState();
+			if (!shown || pickMode || project.isProjectLoading || project.projectInstanceId !== galleryOwner) return null;
+			return items.map((item, index) => ({ id: galleryId(item), uri: item.uri, name: item.name, media: "image" as const,
+				label: String(index + 1), voiceUri: item.voiceUri, voiceName: item.voiceName }));
+		},
+		subscribe: listener => useProjectStore.subscribe(listener),
+	});
 
 	// 收藏拉取（P1）：面板打开时从服务端取一次（收藏是跨机的，本地不留权威副本），
 	// 并把旧的 localStorage 本地收藏一次性迁上去（反查得到 assetId 的部分）。
@@ -547,7 +559,7 @@ export default function AssetAssistant({ popout = false }: { popout?: boolean })
 							return (
 								<div key={i} draggable={!pickMode} onDragStart={(e) => { if (!pickMode) onCardDragStart(e, it); }}
 									onMouseDown={(e) => { if (e.button === 0 && pickMode) { e.preventDefault(); e.stopPropagation(); pickItem(it); } else startAssetDragToCanvas(e, it); }}
-									onDoubleClick={pickMode ? undefined : () => openLightbox({ uri: it.uri, name: it.name, media: "image", voiceUri: it.voiceUri, voiceName: it.voiceName })}
+									onDoubleClick={pickMode ? undefined : () => openGallery(galleryId(it))}
 									onContextMenu={(e) => { e.preventDefault(); setFormMenu({ x: e.clientX, y: e.clientY, item: it }); }}
 									title={`${it.name}（双击放大 / 拖到素材区=垫图 / 画布=新建图片节点 / 软件外=复制原图 / 右键：检查素材${hasForms ? `·选择造型（${forms.length}）` : ""}）`}
 									aria-pressed={pickMode ? selected : undefined}
@@ -656,6 +668,7 @@ const shRow: React.CSSProperties = { display: "flex", alignItems: "center", gap:
 type SharedView = { level: "libs" } | { level: "folders"; libId: string } | { level: "assets"; libId: string; folderId: string };
 
 function SharedPanel({ pickTargetNodeId }: { pickTargetNodeId: string | null }) {
+	const galleryOwner = useProjectStore(s => s.projectInstanceId);
 	useCanvasStore((s) => pickTargetNodeId ? s.nodes[pickTargetNodeId] : undefined);
 	const libs = useSharedLibStore((s) => s.libs);
 	const foldersByLib = useSharedLibStore((s) => s.foldersByLib);
@@ -665,6 +678,22 @@ function SharedPanel({ pickTargetNodeId }: { pickTargetNodeId: string | null }) 
 	const [view, setViewRaw] = useState<SharedView>({ level: "libs" });
 	// 文件夹内素材分类（第121轮）：按台账 id 前缀分 角色/场景/生物/群像/道具/其他；切换文件夹时回到「全部」
 	const [shCat, setShCat] = useState<"all" | SubCat>("all");
+	const openSharedGallery = useScopedLightboxGallery(JSON.stringify([galleryOwner, view, shCat]), {
+		getItems: () => {
+			const project = useProjectStore.getState();
+			if (view.level !== "assets" || pickTargetNodeId || project.isProjectLoading || project.projectInstanceId !== galleryOwner) return null;
+			const store = useSharedLibStore.getState();
+			if (!store.libs.some(lib => lib.id === view.libId)
+				|| !(store.foldersByLib[view.libId] ?? []).some(folder => folder.id === view.folderId)) return null;
+			return (store.assetsByFolder[view.folderId] ?? []).filter(rec => rec.localUri && (shCat === "all" || sharedCatOf(rec.assetId) === shCat))
+				.map((rec, index) => ({ id: rec.id, uri: rec.localUri || rec.url, name: rec.name, label: String(index + 1),
+					media: rec.mime?.startsWith("video/") ? "video" as const : rec.mime?.startsWith("audio/") ? "audio" as const : "image" as const }));
+		},
+		subscribe: listener => {
+			const stops = [useProjectStore.subscribe(listener), useSharedLibStore.subscribe(listener)];
+			return () => stops.forEach(stop => stop());
+		},
+	});
 	// 导航即记忆：写入 lastView（随缓存持久化），下次打开共享页恢复到上次所在的库/文件夹
 	const setView = (v: SharedView) => {
 		setViewRaw(v);
@@ -695,6 +724,12 @@ function SharedPanel({ pickTargetNodeId }: { pickTargetNodeId: string | null }) 
 		if (useSharedLibStore.getState().fetching[libId]) return;
 		void useSharedLibStore.getState().fetchFolders(libId).catch((e) => console.warn("[shared] 自动获取文件夹失败:", e));
 	}, [view]);
+	// 另一共享入口删除当前文件夹后，退出已失效的素材页。
+	useEffect(() => {
+		if (view.level === "assets" && !(foldersByLib[view.libId] ?? []).some(f => f.id === view.folderId)) {
+			setView({ level: "folders", libId: view.libId });
+		}
+	}, [view, foldersByLib]);
 
 	// 右键共享卡 → 绑定/添加到当前项目资产（复用画布「绑定到资产」弹窗与实现）
 	const [bindMenu, setBindMenu] = useState<{ x: number; y: number; rec: CachedSharedAsset; media: "image" | "audio" } | null>(null);
@@ -865,6 +900,7 @@ function SharedPanel({ pickTargetNodeId }: { pickTargetNodeId: string | null }) 
 						<Folder size={15} color="#fbbf24" />
 						<span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: "#fff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
 						<span style={{ fontSize: 11, color: "rgba(255,255,255,0.45)" }}>{f.count} 素材</span>
+						<SharedLibraryDeleteButton libId={view.libId} target={{ kind: "folder", folder: f }} />
 					</div>
 				))}
 			</div>
@@ -966,7 +1002,7 @@ function SharedPanel({ pickTargetNodeId }: { pickTargetNodeId: string | null }) 
 										toggleNodeMaterialFromAsset(pickTargetNodeId, ref);
 									} else if (media === "image") startAssetDragToCanvas(e, item);
 								}}
-								onDoubleClick={pickTargetNodeId ? undefined : () => openLightbox({ uri: rec.localUri || rec.url, name: rec.name, media })}
+								onDoubleClick={pickTargetNodeId ? undefined : () => openSharedGallery(rec.id)}
 								onContextMenu={media !== "video" ? (e) => { e.preventDefault(); setBindMenu({ x: e.clientX, y: e.clientY, rec, media: media as "image" | "audio" }); } : undefined}
 								title={`${rec.name}（双击放大 / 拖到素材区=垫图 / 画布=新建图片节点${media !== "video" ? " / 右键：添加到项目资产" : ""}）`}
 								aria-pressed={pickTargetNodeId ? selected : undefined}
@@ -974,6 +1010,7 @@ function SharedPanel({ pickTargetNodeId }: { pickTargetNodeId: string | null }) 
 								{selected && <span style={{ position: "absolute", left: 4, top: 4, zIndex: 1, color: "white", background: "#6890F8", borderRadius: 4, padding: "0 4px", pointerEvents: "none" }}>✓</span>}
 								{media === "video" && <video src={rec.localUri} style={{ width: "100%", height: "100%", objectFit: "cover" }} muted preload="metadata" />}
 								{media === "audio" && <span style={{ fontSize: 22 }}>🎵</span>}
+								<SharedLibraryDeleteButton libId={view.libId} target={{ kind: "asset", folderId: view.folderId, asset: rec }} overlay />
 								<span style={{ position: "absolute", left: 0, right: 0, bottom: 0, fontSize: 10, color: "#fff", background: "rgba(0,0,0,0.55)", padding: "2px 5px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{rec.name}</span>
 							</div>
 						);

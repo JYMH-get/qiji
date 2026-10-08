@@ -74,6 +74,26 @@ export interface AssetVariantLite {
   images?: string[];   // 历史生成图
 }
 
+/** RTC 交付地址与任务结果：属于任务本身，不从分镜最新历史推断。 */
+export interface RtcGenerationTarget {
+  episodeId: string;
+  segId: string;
+  subDocId?: string;
+}
+
+export interface RtcGenerationResult {
+  uri: string;
+  assetId?: string;
+  media: "image" | "video" | "audio";
+  taskId?: string;
+  rawLink?: boolean;
+  saveToOss?: boolean;
+  /** 本地下载完成后的显示地址；没有它时仍可凭原始 uri 重新落地。 */
+  displayUri?: string;
+  durationSec?: number;
+  sourceWindow?: { sourceStartUs: number; sourceDurationUs: number };
+}
+
 /** 在途生成任务（断连保护：持久化到项目，切页/重启后续跑或重试） */
 export interface PendingGen {
   id: string;                 // 本地唯一 id
@@ -88,6 +108,9 @@ export interface PendingGen {
   shot?: { episodeId: string; shotId: string; field: "storyboard" | "video" | "storyboardPrompt" | "videoPrompt" };
   /** 媒体处理派生记录目标（超分/去字幕）：结果写回 shot.videoDerived / sbDerived（field=storyboard）里 recId 对应记录 */
   derived?: { episodeId: string; shotId: string; recId: string; field?: "video" | "storyboard" };
+  rtcTarget?: RtcGenerationTarget;
+  /** 终态产物凭据。写入目标并确认项目保存前必须保留，重开只投递，不重新提交。 */
+  rtcResult?: RtcGenerationResult;
   purpose: string;            // Purpose
   prompt: string;
   /** 模板变量（推理用 variables 而非自由 prompt；存盘以便重试/续跑沿用同一输入） */
@@ -120,6 +143,8 @@ export interface InferTask {
   /** 图视同源模式：推理产出同源提示词（写 shot.unifiedPrompt），找回时凭此决定回填字段 */
   sameSource?: boolean;
   shotId?: string;            // single 模式的目标分镜
+  /** RTC 整集推理显式启用；已处理镜头随任务保存，删轨/撤销后续流式回包不重建。 */
+  rtcPlacement?: { handledShotIds: string[] };
   taskId?: string;            // 上游任务 id（提交确认后才有 → 找回关键）
   adapterKey?: string;        // 续跑轮询用
   status: "running" | "failed";
@@ -185,6 +210,8 @@ export interface ShotMaterial {
   uri: string;                                            // 缩略图/图片/视频/音频（公网 url 或本地 uri）
   /** 本分镜中的引用用途；角色图片缺省 identity，用户可显式改为 reference；不改变全局资产身份。 */
   usage?: "reference" | "identity";
+  /** RTC 视频工作台显式首尾帧引用；素材本身仍是普通图片。 */
+  rtcFrameRole?: "first" | "last";
   /** 该素材若是「角色声音参考」音频：指向所属角色的资产 id（用于图例配对「@ImageN的声音参考@AudioM」）。 */
   voiceForAssetId?: string;
 }
@@ -258,8 +285,12 @@ export interface StoryboardShot {
    *  占位阶段派生记录与源是同一 uri，仅凭 videoUri 无法区分选中的是哪条——靠它精确高亮/回溯源标号；
    *  与 videoUri 对不上时（如新生成视频直接改了 videoUri）自动失效回退 uri 比较。 */
   videoActiveKey?: string;
-  /** 补镜头：编号派生自上一个主镜号（如上一镜「分镜3」→ 本镜「分镜3-1」），影响命名/导出 */
+  /** 补镜头：旧数据按数组前一主镜编号；RTC 显式绑定父镜时以 supplementParentId 为准。 */
   isSupplement?: boolean;
+  /** RTC 根据素材时间位置绑定的主镜身份；同分集 shot.id，不依赖数组相邻关系。缺省兼容旧行为。 */
+  supplementParentId?: string;
+  /** 显式父镜下的稳定正整数后缀；新增同父补镜取现有最大值 + 1。 */
+  supplementIndex?: number;
   /** 单分镜局部覆盖（模板/模型/参数）；未设置回退全局视频设置 */
   overrides?: ShotOverrides;
 }
@@ -279,6 +310,10 @@ export interface MediaSettings {
   /** 资产模式视频页手动发送到画布的项目级偏好。 */
   canvasSend?: Partial<CanvasSendSettings>;
   inferenceStrategy?: import('@/lib/inferenceStrategy').InferenceStrategy;
+  /** 整集推理/拆分的时长范围，与视频生成时长独立。 */
+  inferenceDurationPreset?: import('@/lib/inferenceStrategy').InferenceDurationPreset;
+  /** 保留自定义草稿；非法或未填写的值由请求入口校验，不回退预设。 */
+  inferenceCustomDuration?: import('@/lib/inferenceStrategy').InferenceCustomDuration;
   /** 剧集拆分方式（第243轮，新建项目可预设）：快拆 __quick_* id（见 lib/splitChoices）或 catalog「剧集」类模板 id；空=默认 快速·n-n */
   episodeTplId?: string;
   /** 资产拆分模板 id（script.analyze，第243轮起持久化；空=catalog 默认款 isDefault） */

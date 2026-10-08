@@ -5,13 +5,14 @@
  * 退出语义（第88轮锁定）：**默认保存**——点空白遮罩 / X / Esc / Ctrl+Enter 均保存后关闭；
  * 只有「取消」按钮丢弃修改。
  */
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo, type SetStateAction } from "react";
 import { createPortal } from "react-dom";
 import { X, Sparkles } from "lucide-react";
 import { usePromptModalStore, type PromptModalApi } from "@/store/promptModalStore";
 import PromptMentionEditor, { type PromptMentionHandle } from "@/components/PromptMentionEditor";
 import { AssetImportDropdown } from "@/components/AssetImportDropdown";
-import { effectiveModelKey } from "@/components/ModelPicker";
+import { effectiveModelKey, useEffectiveModelKey } from "@/components/ModelPicker";
+import { GenerationCost } from "@/components/GenerationCost";
 import { runPurpose } from "@/services/purposeRunner";
 import { computeChangedFlags } from "@/lib/wordDiff";
 import { presetTag } from "@/lib/presetSchemes";
@@ -19,6 +20,7 @@ import type { ShotMaterial } from "@/services/projectFile";
 import { useCanvasStore } from "@/store/canvasStore";
 import { formatNodeMaterialPrompt } from "@/canvas/nodeMaterials";
 import { materialPromptState } from "@/lib/materialPrompt";
+import { promptMediaDropHandlers } from "@/lib/promptMediaDrop";
 
 /** 剥掉模型可能包裹的 ```代码块``` 与首尾空白 */
 function cleanProposal(s: string): string {
@@ -62,10 +64,26 @@ function renderFindHighlight(text: string, find: string): React.ReactNode {
 }
 
 export default function PromptModal() {
-	const { open, title, value, placeholder, readOnly, onSave, extra, mentions, onImport, onMatchAssets, presets, close, nodeId } = usePromptModalStore();
+	const textModelKey = useEffectiveModelKey("text");
+	const { open, sessionId, title, value, placeholder, readOnly, onSave, extra, mentions, onImport, onMatchAssets, onMediaDrop, presets, close, nodeId } = usePromptModalStore();
 	const node = useCanvasStore(s => nodeId ? s.nodes[nodeId] : undefined);
 	useCanvasStore(s => nodeId ? s.edges : undefined);
-	const [draft, setDraft] = useState(value);
+	const [draftState, setDraftState] = useState({ sessionId, text: value });
+	const draft = draftState.sessionId === sessionId ? draftState.text : value;
+	const draftRef = useRef({ sessionId, text: draft });
+	draftRef.current = { sessionId, text: draft };
+	const [, refreshMedia] = useState(0);
+	const isCurrentSession = useCallback(() => {
+		const state = usePromptModalStore.getState();
+		return state.open && state.sessionId === sessionId;
+	}, [sessionId]);
+	const setDraft = useCallback((next: SetStateAction<string>) => {
+		if (!isCurrentSession()) return;
+		const current = draftRef.current.sessionId === sessionId ? draftRef.current.text : value;
+		const text = typeof next === "function" ? next(current) : next;
+		draftRef.current = { sessionId, text };
+		setDraftState({ sessionId, text });
+	}, [isCurrentSession, sessionId, value]);
 	const taRef = useRef<HTMLTextAreaElement>(null);
 	const editorRef = useRef<PromptMentionHandle>(null);
 	// 富文本模式(有素材)下：输入 @ 时的待选框屏幕坐标（null=不显示）
@@ -99,20 +117,29 @@ export default function PromptModal() {
 
 	// 供素材栏/拖拽把 @ImageN 插到光标处：富文本走胶囊插入，纯文本走文本插入
 	const insertAtCursor = useCallback((text: string) => {
+		if (!isCurrentSession()) return;
 		if (rich) { editorRef.current?.insertMaterial(text.trim(), false); return; }
 		const el = taRef.current;
 		if (!el) { setDraft((d) => d + text); return; }
 		const start = el.selectionStart ?? el.value.length;
 		const end = el.selectionEnd ?? start;
 		setDraft((d) => d.slice(0, start) + text + d.slice(end));
-		requestAnimationFrame(() => { el.focus(); const p = start + text.length; el.setSelectionRange(p, p); });
-	}, [rich]);
-	const api: PromptModalApi = { insertAtCursor, getValue: () => draft, setValue: setDraft };
+		requestAnimationFrame(() => { if (!isCurrentSession()) return; el.focus(); const p = start + text.length; el.setSelectionRange(p, p); });
+	}, [rich, isCurrentSession, setDraft]);
+	const api: PromptModalApi = {
+		insertAtCursor: text => { if (!readOnly && isCurrentSession()) insertAtCursor(text); },
+		getValue: () => isCurrentSession() ? draftRef.current.text : "",
+		setValue: text => {
+			if (readOnly || !isCurrentSession()) return;
+			setDraft(text);
+			refreshMedia(revision => revision + 1); // 素材变了但正文相同时，也重新读取 mentions。
+		},
+	};
 	const presentation = materialPromptState(node?.data.params.materialPrompt);
 	const modeSignature = JSON.stringify(presentation);
 	useEffect(() => {
 		if (open && nodeId) setDraft(text => formatNodeMaterialPrompt(nodeId, text));
-	}, [open, nodeId, mkey, modeSignature]);
+	}, [open, nodeId, mkey, modeSignature, setDraft]);
 
 	// 插入预设胶囊：富文本走胶囊、纯文本落标记文本（提交时由 resolvePresets 展开成完整预设词）
 	const insertPreset = useCallback((id: string, name: string) => {
@@ -122,7 +149,7 @@ export default function PromptModal() {
 
 	useEffect(() => {
 		if (open) { setDraft(value); setMentionPos(null); setImportPos(null); setPresetPos(null); setChatInput(""); setProposal(null); setChatBusy(false); setChatErr(null); setReplOpen(false); setFindStr(""); setReplStr(""); setMatchMsg(null); }
-	}, [open, value]);
+	}, [open, value, sessionId, setDraft]);
 
 	// @ 候选框开着时：数字键 1-9 快速选中对应候选（capture 拦截，防数字字符落进编辑器）
 	useEffect(() => {
@@ -319,7 +346,11 @@ export default function PromptModal() {
 
 				{/* 主体：左=编辑器；有 AI 建议时右侧并排对比 */}
 				<div style={{ flex: 1, position: "relative", display: "flex", minHeight: 0 }}>
-					<div style={{ flex: 1, display: "flex", minHeight: 0, minWidth: 0, borderRight: proposal !== null ? "1px solid rgba(255,255,255,0.08)" : "none" }}>
+					<div
+						{...promptMediaDropHandlers(!readOnly && !(replOpen && findStr) && onMediaDrop
+							? transfer => isCurrentSession() && onMediaDrop(transfer, api)
+							: undefined)}
+						style={{ flex: 1, display: "flex", minHeight: 0, minWidth: 0, borderRight: proposal !== null ? "1px solid rgba(255,255,255,0.08)" : "none" }}>
 						{replOpen && findStr ? (
 							/* 一键替换的命中高亮预览（只读）：黄色=将被替换的内容；清空查找串/收起替换栏即恢复编辑 */
 							<div className="Qiji-scroll-thin" style={{ flex: 1, overflowY: "auto", padding: 16, fontSize: 16, lineHeight: 1.7, color: "#e6e6e6", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
@@ -389,6 +420,7 @@ export default function PromptModal() {
 							<button onClick={() => void askAI()} disabled={chatBusy || !chatInput.trim()}
 								style={{ ...btn, display: "inline-flex", alignItems: "center", gap: 5, background: chatBusy || !chatInput.trim() ? "rgba(139,92,246,0.4)" : "#8b5cf6", color: "#fff", borderColor: "#8b5cf6", cursor: chatBusy || !chatInput.trim() ? "not-allowed" : "pointer", flexShrink: 0 }}>
 								{chatBusy ? <span className="sb-spin">↻</span> : <Sparkles size={13} />}{chatBusy ? "思考中" : "发送"}
+								{!chatBusy && <GenerationCost modelKey={textModelKey} />}
 							</button>
 						</div>
 						<span style={{ fontSize: 11, color: "rgba(255,255,255,0.4)" }}>AI 会按指令改写「当前提示词」，产出建议在右侧对比，点「采用」替换 · 关闭即保存（Esc/点空白/X 均保存），丢弃修改请点「取消」</span>

@@ -12,10 +12,33 @@
  * 「N造型」角标（与 AssetAssistant 同规）：主体卡收敛全部造型不单独占格，>1 个造型时显示角标，
  * 右键弹造型选单（面板层挂 onContextMenu）。
  */
-import { Music, Play, Pause, Film } from "lucide-react";
+import { Music, Play, Pause, Film, AlertCircle } from "lucide-react";
+import type { ReactNode } from "react";
 import type { RtcAssetItem } from "./rtcAssetData";
 
 const ACCENT = "#8b5cf6";
+
+/** 任务卡没有媒体地址，不挂任何预览、选中或拖拽媒体事件。 */
+function GenerationCard({ item }: { item: RtcAssetItem }) {
+	const task = item.generation!;
+	const failed = task.status === "failed";
+	const color = failed ? "#fca5a5" : "#c4b5fd";
+	const detail = failed ? task.error || "生成失败，请查看任务详情" : task.label;
+	return <div
+		role="group" aria-label={`${item.name} · ${task.label}`} data-rtc-generation={item.key}
+		draggable={false} onDragStart={event => event.preventDefault()}
+		title={`${item.name}\n${task.label}${failed ? `\n${detail}` : ""}`}
+		style={{ position: "relative", aspectRatio: "1/1", borderRadius: 8, overflow: "hidden", cursor: "default",
+			border: `1px solid ${failed ? "rgba(248,113,113,0.35)" : "rgba(139,92,246,0.35)"}`,
+			background: failed ? "rgba(248,113,113,0.06)" : "rgba(139,92,246,0.08)",
+			display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 5, padding: "22px 6px 23px", color }}>
+		<span style={{ position: "absolute", top: 4, left: 5, fontSize: 9, opacity: 0.8 }}>{item.media === "video" ? "视频生成" : "图片生成"}</span>
+		{failed ? <AlertCircle size={17} style={{ flexShrink: 0 }} /> : <span className="sb-spin" aria-hidden="true" style={{ fontSize: 19, lineHeight: 1 }}>↻</span>}
+		<span style={{ fontSize: 10, lineHeight: 1.4, textAlign: "center", width: "100%", overflow: "hidden", overflowWrap: "anywhere",
+			display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 2 }}>{detail}</span>
+		<span style={{ position: "absolute", left: 0, right: 0, bottom: 0, fontSize: 10, color: "#fff", background: "rgba(0,0,0,0.4)", padding: "2px 5px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.name}</span>
+	</div>;
+}
 
 export function RtcAssetCard({
 	item,
@@ -27,6 +50,7 @@ export function RtcAssetCard({
 	onPreview,
 	onTogglePlay,
 	onContextMenu,
+	action,
 }: {
 	item: RtcAssetItem;
 	selected: boolean;
@@ -42,7 +66,10 @@ export function RtcAssetCard({
 	onTogglePlay?: (item: RtcAssetItem) => void;
 	/** 右键（项目资产卡「选择造型」选单；面板层判定 >1 造型才弹） */
 	onContextMenu?: (e: React.MouseEvent, item: RtcAssetItem) => void;
+	/** 面板提供的卡片操作；操作控件自行阻止选中、预览及拖拽事件冒泡。 */
+	action?: ReactNode;
 }) {
+	if (item.generation) return <GenerationCard item={item} />;
 	const isVideo = item.media === "video";
 	const isAudio = item.media === "audio";
 	const isPh = !!item.placeholder;
@@ -112,7 +139,7 @@ export function RtcAssetCard({
 					onClick={(e) => { e.stopPropagation(); onTogglePlay(item); }}
 					onDoubleClick={(e) => e.stopPropagation()}
 					title={playing ? "暂停" : "试听"}
-					style={{ position: "absolute", top: 3, right: 3, width: 22, height: 22, borderRadius: "50%", background: playing ? "rgba(139,92,246,0.95)" : "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
+					style={{ position: "absolute", top: 3, ...(action ? { left: 3 } : { right: 3 }), width: 22, height: 22, borderRadius: "50%", background: playing ? "rgba(139,92,246,0.95)" : "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
 					{playing ? <Pause size={11} color="#fff" /> : <Play size={11} color="#fff" />}
 				</span>
 			)}
@@ -120,6 +147,7 @@ export function RtcAssetCard({
 			<span style={{ position: "absolute", left: 0, right: 0, bottom: 0, fontSize: 10, color: "#fff", background: "rgba(0,0,0,0.55)", padding: "2px 5px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
 				{item.name}
 			</span>
+			{action}
 		</div>
 	);
 }

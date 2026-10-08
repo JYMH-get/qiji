@@ -7,7 +7,8 @@ import { useMemo } from "react";
 import { activeRtcDoc, useRtcStore } from "@/store/rtcStore";
 import { useProjectStore } from "@/store/projectStore";
 import { mainTrackSegAt } from "./rtcCenterTabCore";
-import { chooseWorkbenchSegment, workbenchEditable } from "./rtcWorkbenchTargetCore";
+import { chooseWorkbenchSegment, workbenchEditable, workbenchFocusMatches, workbenchSelectedId } from "./rtcWorkbenchTargetCore";
+import { isRtcShotListSelection, rtcShotListTarget, useRtcShotNavigation } from "../flow/rtcShotNavigation";
 import type { RtcSegment, RtcTrack } from "@/types/rtc";
 import type { StoryboardShot, VideoEpisode } from "@/services/projectFile";
 
@@ -36,8 +37,8 @@ export function useRtcSelected(): RtcSelected | null {
 
 /**
  * 中栏「AI 工作台」的绑定目标（第240轮补充3 用户定稿「默认显示当前时间的 ai 界面」）：
- * **播放头下主轨的可编辑片段优先**；播放头处为空白/纯素材时，才回退显式选中的可编辑片段——
- * 播放跨过分镜边界时即使旧选中仍停在上一镜，工作台也必须切到当前分镜。
+ * **新选中的可编辑片段临时优先**，方便编辑叠在主轨上方的补镜/新版本；之后播放头移动即恢复
+ * 主轨优先。播放头处为空白/纯素材时仍回退选中，旧选中不会阻止连续播放跨镜。
  *
  * ⚠ 「可编辑」的判据（第251轮需求⑦，勿收回成 `kind === "placeholder"`）：
  *   **占位符 或 带 shotRef 的片段**。用户实报「占位符变成成品后丢失了 AI 工作台数据，
@@ -47,14 +48,22 @@ export function useRtcSelected(): RtcSelected | null {
  * ⚠ 播放头选择器只返回 doc 里的稳定 seg 引用（帧级 playheadUs 变化下结果不变=不重渲染）。
  */
 export function useWorkbenchTarget(): RtcSelected | null {
-	const sel = useRtcSelected();
 	const doc = useRtcStore(activeRtcDoc);
+	const selectedId = useRtcStore(workbenchSelectedId);
+	const listSelection = useRtcShotNavigation((s) => s.listSelection);
+	const preferSelection = useRtcStore((s) => workbenchFocusMatches(s.workbenchFocus, s));
 	const phSeg = useRtcStore((s) => {
 		const m = mainTrackSegAt(activeRtcDoc(s), s.playheadUs);
 		return m && workbenchEditable(m.seg) ? m.seg : null;
 	});
 	return useMemo(() => {
-		const targetSeg = chooseWorkbenchSegment(sel?.seg ?? null, phSeg);
+		if (listSelection && isRtcShotListSelection()) return rtcShotListTarget();
+		let sel: RtcSelected | null = null;
+		for (const track of doc?.tracks ?? []) {
+			const segIndex = track.segments.findIndex(s => s.id === selectedId);
+			if (segIndex >= 0) { sel = { seg: track.segments[segIndex], track, segIndex }; break; }
+		}
+		const targetSeg = chooseWorkbenchSegment(sel?.seg ?? null, phSeg, preferSelection);
 		if (!targetSeg) return null;
 		if (sel?.seg.id === targetSeg.id) return sel;
 		if (!doc) return null;
@@ -63,7 +72,7 @@ export function useWorkbenchTarget(): RtcSelected | null {
 			if (segIndex >= 0) return { seg: track.segments[segIndex], track, segIndex };
 		}
 		return null;
-	}, [sel, doc, phSeg]);
+	}, [selectedId, listSelection, doc, phSeg, preferSelection]);
 }
 
 /** 片段 shotRef → 关联的分集/分镜（实时订阅 projectStore；分镜被删=shot undefined） */

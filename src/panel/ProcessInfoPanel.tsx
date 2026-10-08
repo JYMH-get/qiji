@@ -19,6 +19,7 @@ import { getPlugin } from "@/nodes/pluginRegistry";
 import { optLabel } from "@/components/VideoProcessModal";
 import MediaCompareModal from "@/components/MediaCompareModal";
 import { isProcessNodeParams } from "@/lib/sharedNodeParams";
+import { NodeGenerationCost } from "@/components/NodeGenerationCost";
 
 /** 该节点是否应使用锁定面板（判定单一来源：sharedNodeParams.isProcessNodeParams） */
 export function isProcessResultNode(params: Record<string, unknown> | undefined): boolean {
@@ -142,7 +143,7 @@ export function ProcessInfoPanel({ nodeId }: { nodeId: string }) {
 						</div>
 					))}
 				</div>
-				<div className="flex items-center justify-between gap-3 px-5 py-2.5 border-t border-white/5">
+				<div className="flex flex-wrap items-center justify-between gap-3 px-5 py-2.5 border-t border-white/5">
 					<span className="text-[10px] text-muted-foreground leading-relaxed">
 						{rerunnable ? "源素材来自上游连线；「重新处理」按上方参数重跑（重新扣费）" : "本地截取产物；如需调整请在源节点重新分段"}
 					</span>
@@ -165,6 +166,7 @@ export function ProcessInfoPanel({ nodeId }: { nodeId: string }) {
 							>
 								<Play className="h-3 w-3" />
 								{running ? "处理中…" : "重新处理"}
+								<NodeGenerationCost nodeId={nodeId} />
 							</button>
 						)}
 					</div>

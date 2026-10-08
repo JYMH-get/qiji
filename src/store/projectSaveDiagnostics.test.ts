@@ -3,6 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const m = vi.hoisted(() => ({
   record: vi.fn(), create: vi.fn(), commits: {} as Record<string, any>,
   write: vi.fn(), exists: vi.fn(), rename: vi.fn(), invoke: vi.fn(), read: vi.fn(),
+  discover: vi.fn(),
+}));
+vi.mock("@/services/projectDiscovery", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/services/projectDiscovery")>(),
+  discoverLocalProjects: m.discover,
 }));
 vi.mock("@/services/clientDiagnostics", () => ({
   recordClientDiagnostic: m.record, classifyClientDiagnosticError: () => "type_error",
@@ -14,7 +19,9 @@ vi.mock("./commitStore", () => ({
 vi.mock("@tauri-apps/plugin-fs", () => ({
   writeTextFile: m.write, readTextFile: m.read, exists: m.exists, rename: m.rename, mkdir: vi.fn(), remove: vi.fn(),
 }));
-vi.mock("@tauri-apps/api/path", () => ({ join: async (...parts: string[]) => parts.join("/") }));
+vi.mock("@tauri-apps/api/path", () => ({
+  join: async (...parts: string[]) => parts.join("/"), appDataDir: async () => "D:/appdata",
+}));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: m.invoke, convertFileSrc: (path: string) => `asset:${path}` }));
 vi.mock("@/services/assetRefReport", () => ({ reportProjectAssetRefs: vi.fn() }));
 vi.mock("@/services/projectAssetHeal", () => ({ healProjectAssetBlobs: vi.fn() }));
@@ -34,22 +41,87 @@ describe("原生保存诊断与快照隔离", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     cancelAllSaves();
-    for (const mock of [m.record, m.create, m.write, m.exists, m.rename, m.invoke, m.read]) mock.mockReset();
+    for (const mock of [m.record, m.create, m.write, m.exists, m.rename, m.invoke, m.read, m.discover]) mock.mockReset();
+    m.discover.mockResolvedValue([]);
     m.record.mockResolvedValue(undefined); m.create.mockResolvedValue("head");
     m.write.mockResolvedValue(undefined); m.exists.mockResolvedValue(true);
     m.rename.mockResolvedValue(undefined); m.invoke.mockResolvedValue(undefined);
     m.commits = {};
     vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
-    vi.stubGlobal("localStorage", { setItem: vi.fn(), getItem: vi.fn(), removeItem: vi.fn() });
+    const storage = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      setItem: vi.fn((key, value) => { storage.set(key, value); }),
+      getItem: vi.fn((key) => storage.get(key) ?? null), removeItem: vi.fn((key) => storage.delete(key)),
+    });
     useProjectStore.setState({ projectInstanceId: "fixture-a", name: "fixture", savePath: "D:/fixture/project.Qiji",
       isProjectLoading: false, isSaving: false, isDirty: true, fileRefs: {}, recentProjects: [],
-      canvases: {}, episodes: [], assetBlobs: {}, genMeta: {}, assetRefImages: {}, rtcDocs: {} });
+      canvases: {}, episodes: [], assetBlobs: {}, genMeta: {}, assetRefImages: {}, rtcDocs: {}, coverImage: "" });
     useCanvasStore.setState({ nodes: {}, edges: {}, groups: {}, runtime: {}, past: [], future: [] });
     useLibraryStore.setState({ assets: {} });
     useSettingsStore.setState({ enableCloudSync: false });
     vi.spyOn(useSettingsStore.getState(), "setLastOpenedProjectPath").mockImplementation(() => {});
   });
   afterEach(() => { cancelAllSaves(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  it("保存及打开项目后仍保留超过10条的全部项目，并持久化列表", async () => {
+    const projects = Array.from({ length: 25 }, (_, i) => ({
+      path: `D:/projects/${i}/project.Qiji`, name: `项目${i}`, openedAt: "2026-10-01T00:00:00.000Z",
+    }));
+    useProjectStore.setState({ recentProjects: projects });
+    await useProjectStore.getState().save();
+    expect(useProjectStore.getState().recentProjects).toHaveLength(26);
+    expect(JSON.parse(localStorage.getItem("Qiji:recentProjects")!)).toHaveLength(26);
+    m.read.mockResolvedValue(JSON.stringify({ version: "2.0", name: "another", nodes: {}, edges: {}, groups: {}, commits: {} }));
+    expect(await useProjectStore.getState().loadFromPath("D:/another/project.Qiji")).toBe(true);
+    expect(useProjectStore.getState().recentProjects).toHaveLength(27);
+    expect(JSON.parse(localStorage.getItem("Qiji:recentProjects")!)).toHaveLength(27);
+    expect(useProjectStore.getState().recentProjects.slice(2)).toEqual(projects);
+  });
+
+  it("目录扫描合并最新列表，保留扫描期间的改名/新增，并尊重移除记录", async () => {
+    const entry = (name: string) => ({ path: `D:/custom/projects/${name}/project.Qiji`, name, openedAt: "2026-10-01T00:00:00.000Z" });
+    vi.spyOn(useSettingsStore.getState(), "getActiveUserDataDir").mockResolvedValue("D:/custom");
+    useProjectStore.setState({ recentProjects: [entry("known"), entry("removed")] });
+    let finish!: (projects: ReturnType<typeof entry>[]) => void;
+    m.discover.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const refreshing = useProjectStore.getState().refreshProjects();
+    await vi.waitFor(() => expect(m.discover).toHaveBeenCalled());
+    useProjectStore.getState().removeRecentProject(entry("removed").path);
+    useProjectStore.setState({ recentProjects: [{ ...entry("known"), name: "已改名" }, entry("new")] });
+    finish([entry("known"), entry("removed"), entry("discovered")]);
+    await refreshing;
+    expect(m.discover.mock.calls[0][0]).toEqual(expect.arrayContaining(["D:/custom/projects", "D:/appdata/Qiji/projects"]));
+    expect(useProjectStore.getState().recentProjects.map(p => p.name)).toEqual(["已改名", "new", "discovered"]);
+    m.discover.mockResolvedValue([entry("removed")]);
+    await useProjectStore.getState().refreshProjects();
+    expect(useProjectStore.getState().recentProjects.some(p => p.name === "removed")).toBe(false);
+  });
+
+  it("主动重新打开已移除项目会恢复列表，并按Windows路径去重", async () => {
+    const path = "D:/fixture/project.Qiji";
+    useProjectStore.getState().removeRecentProject(path);
+    m.read.mockResolvedValue(JSON.stringify({ version: "2.0", name: "reopened", nodes: {}, edges: {}, groups: {}, commits: {} }));
+    expect(await useProjectStore.getState().loadFromPath(path)).toBe(true);
+    expect(JSON.parse(localStorage.getItem("Qiji:hiddenProjects")!)).toEqual([]);
+    expect(await useProjectStore.getState().loadFromPath("d:\\fixture\\project.qiji")).toBe(true);
+    expect(useProjectStore.getState().recentProjects).toHaveLength(1);
+  });
+
+  it("封面导致缓存配额不足时仍持久化全部项目路径，已落盘保存保持成功", async () => {
+    const projects = Array.from({ length: 25 }, (_, i) => ({ path: `D:/${i}.Qiji`, name: `${i}`, openedAt: "2026-10-01", cover: "data:image/old" }));
+    useProjectStore.setState({ recentProjects: projects, coverImage: "data:image/new" });
+    const setItem = vi.mocked(localStorage.setItem).getMockImplementation()!;
+    vi.spyOn(localStorage, "setItem").mockImplementation((key, value) => {
+      if (key === "Qiji:recentProjects" && value.includes('"cover":')) throw new Error("QuotaExceededError");
+      setItem(key, value);
+    });
+    await useProjectStore.getState().save();
+    const persisted = JSON.parse(localStorage.getItem("Qiji:recentProjects")!);
+    expect(persisted).toHaveLength(26);
+    expect(persisted.every((p: { cover?: string }) => p.cover === undefined)).toBe(true);
+    expect(useProjectStore.getState().isDirty).toBe(false);
+    expect(m.record.mock.calls[m.record.mock.calls.length - 1]?.[0].kind).toBe("save_success");
+  });
 
   it("序列化开始前已有原生日志，写盘前已有大小与阶段，成功包含同一saveId", async () => {
     m.write.mockImplementation(async () => {

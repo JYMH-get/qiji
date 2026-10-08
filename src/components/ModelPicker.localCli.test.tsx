@@ -63,7 +63,8 @@ describe('bound local CLI families with automatic routing enabled', () => {
     const html = renderToStaticMarkup(<ModelPicker cap="video" />);
     expect(html).toContain('title="线路"');
     expect(html).not.toContain('模型（本线路款式）');
-    expect(html.match(/<select/g)).toHaveLength(2);
+    expect(html.match(/<select/g)).toHaveLength(1);
+    expect(html).toContain('data-route-select');
   });
   it('shows only the bound provider and uses it as the default', () => {
     state.libtv.authed = false;

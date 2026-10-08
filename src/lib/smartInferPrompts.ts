@@ -43,10 +43,10 @@ export interface InferCard {
 /** 从任意形态的时长值里抽秒数（3 / 3.0 / "3.0秒" / "3s"）；抽不出/非正数返回 undefined */
 function parseDuration(v: unknown): number | undefined {
 	if (v === null || v === undefined) return undefined;
-	const m = String(v).match(/\d+(?:\.\d+)?/);
+	const m = String(v).match(/-?\d+(?:\.\d+)?/);
 	if (!m) return undefined;
 	const n = Number(m[0]);
-	return n > 0 ? n : undefined;
+	return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
 function toCard(o: any, i: number): InferCard {

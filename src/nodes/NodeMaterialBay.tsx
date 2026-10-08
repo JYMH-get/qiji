@@ -2,8 +2,8 @@ import { AccelerationMaterialStatus } from '@/components/AccelerationMaterialSta
 import { useEffect, useRef, useState } from "react";
 import { useCanvasStore } from "@/store/canvasStore";
 import { useLibraryStore } from "@/store/libraryStore";
-import { useProjectStore } from "@/store/projectStore";
-import { openLightbox } from "@/store/lightboxStore";
+import { resolveEpisodeKey, useProjectStore } from "@/store/projectStore";
+import { nodeMaterialGalleryEntries, openNodeMaterialLightbox } from "@/canvas/nodeMaterialLightbox";
 import { TAG_BADGE, BADGE_BG } from "@/lib/shotMaterials";
 import { mediaFilesFromDataTransfer } from "@/lib/clipboardMedia";
 import { addNodeMaterialFiles, removeNodeMaterial, removeUpstreamMaterial, listNodeMaterials, cycleNodeMaterialPrompt, syncNodeLegend, type NodeMatEntry } from "@/canvas/nodeMaterials";
@@ -28,15 +28,15 @@ export function removeMaterialOnContextMenu(
 /**
  * 素材区单格：显示 uri 经 useDisplayUri 自愈解析（远程 https 在 Tauri 下被 CSP 拦、死 blob: 凭三元映射
  * 反查换源）——与 ResultView/素材库 LibTile 同一把尺，不再裸用 it.uri（裸用=垫图黑块「无法播放」观感）。
- * 双击放大也用解析后的 uri（灯箱同样要能播）。
+ * 双击打开节点实时素材图库，灯箱沿同一显示 URI 解析链查看。
  */
-function MatTile({ it, doRemove, identity, modelId }: { modelId?: string; it: NodeMatEntry; doRemove: (() => void) | null; identity?: { active: boolean; toggle: () => void; modelId?: string } }) {
+function MatTile({ it, doRemove, identity, modelId, onPreview }: { modelId?: string; it: NodeMatEntry; doRemove: (() => void) | null; identity?: { active: boolean; toggle: () => void; modelId?: string }; onPreview: () => void }) {
 	const uri = useDisplayUri(it.uri || it.url);
 	return (
 		<div
 			className="relative w-11 h-11 rounded-xl border border-white/10 bg-white/5 overflow-hidden shrink-0 group cursor-zoom-in"
 			title={`${TAG_BADGE[it.media]}${it.n}${it.name ? `·${it.name}` : ""}${it.self ? "（双击放大 / 右键删除）" : "（上游素材·双击放大 / 右键删除=断开连线）"}`}
-			onDoubleClick={() => uri && openLightbox({ uri, media: it.media, name: it.name || "" })}
+			onDoubleClick={(e) => { e.stopPropagation(); onPreview(); }}
 			onContextMenu={doRemove ? (e) => removeMaterialOnContextMenu(e, doRemove) : undefined}
 		>
 			{it.media === "video" ? (
@@ -92,6 +92,8 @@ export function NodeMaterialBay({
 	useCanvasStore((s) => s.nodes);
 	useLibraryStore((s) => s.assets);
 	useProjectStore((s) => s.assetBlobs);
+	const owner = useProjectStore((s) => s.projectInstanceId);
+	const canvasKey = useProjectStore((s) => resolveEpisodeKey(s.canvasEpisodeId, s.episodes));
 	const fileRef = useRef<HTMLInputElement>(null);
 	const menuRef = useRef<HTMLDivElement>(null);
 	const [menuOpen, setMenuOpen] = useState(false);
@@ -111,7 +113,7 @@ export function NodeMaterialBay({
 	if (!node) return null;
 
 	// 加入顺序 + 与图例/提交一致的编号；名字为友好名（绑定资产名/节点标题，非机器文件名）
-	const items = listNodeMaterials(nodeId);
+	const items = nodeMaterialGalleryEntries(nodeId);
 
 	const onDropFiles = (e: React.DragEvent) => {
 		const files = mediaFilesFromDataTransfer(e.dataTransfer);
@@ -120,7 +122,7 @@ export function NodeMaterialBay({
 
 	return (
 		<div className="flex flex-row flex-wrap gap-2 mb-3 shrink-0" data-node-material-bay={nodeId} onDragOver={(e) => e.preventDefault()} onDrop={onDropFiles}>
-			{items.map((it) => {
+			{items.map(({ entry: it, id }) => {
 				// 删除语义：自加素材=从 input 移除；上游素材=断开对应连线（提示词 @ 引用均自动重编号）
 				const doRemove = it.self
 					? () => removeNodeMaterial(nodeId, it.self!.group, it.self!.idx)
@@ -131,7 +133,7 @@ export function NodeMaterialBay({
 				const identity = identityEnabled
 					? { modelId: identityModelId, active: imageIndex >= 0 ? identityIndexes.includes(imageIndex) : true, toggle: () => { if (imageIndex >= 0) onToggleIdentity?.(imageIndex); } }
 					: undefined;
-				return <MatTile modelId={identityModelId} key={it.key} it={it} doRemove={doRemove} identity={identity} />;
+				return <MatTile modelId={identityModelId} key={id} it={it} doRemove={doRemove} identity={identity} onPreview={() => openNodeMaterialLightbox(nodeId, id, { owner, canvasKey, promptApi })} />;
 			})}
 			{/* 在途上传占位：转圈，表示正在传 OSS */}
 			{Array.from({ length: uploading }).map((_, i) => (

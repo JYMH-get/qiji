@@ -8,7 +8,8 @@ import { supportsOfficialMaterials } from "@/services/materialPolicy";
  */
 import { useRef } from "react";
 import { useProjectStore } from "@/store/projectStore";
-import { openLightbox } from "@/store/lightboxStore";
+import { usePromptModalStore, type PromptModalApi } from "@/store/promptModalStore";
+import { openShotMaterialLightbox } from "@/lib/shotMaterialLightbox";
 import { materialTags, mediaOf, TAG_BADGE, BADGE_BG } from "@/lib/shotMaterials";
 import { addLocalShotMaterials, removeShotMaterial } from "@/lib/shotMaterialOps";
 import { isIdentityShotMaterial, setShotMaterialIdentity } from "@/lib/shotMaterialOps";
@@ -21,11 +22,15 @@ export function ShotMaterialStrip({
 	episodeId,
 	shotId,
 	identityEnabled,
+	promptApi,
 }: {
 	episodeId: string;
 	shotId: string;
 	identityEnabled?: boolean;
+	promptApi?: PromptModalApi;
 }) {
+	const owner = useProjectStore((s) => s.projectInstanceId);
+	const promptSessionId = usePromptModalStore((s) => promptApi ? s.sessionId : undefined);
 	const shot = useProjectStore((s) => s.episodes.find((e) => e.id === episodeId)?.shots.find((x) => x.id === shotId));
 	const materials = shot?.materials ?? [];
 	const projectVideoModel = useEffectiveModelKey("video");
@@ -48,7 +53,7 @@ export function ShotMaterialStrip({
 						key={m.id}
 						className="group"
 						title={`${tags[m.id]}${m.name ? `·${m.name}` : ""}（双击放大 / 右键删除）`}
-						onDoubleClick={() => m.uri && openLightbox({ uri: m.uri, media: md, name: m.name || "" })}
+						onDoubleClick={() => openShotMaterialLightbox(episodeId, shotId, m.id, { owner, promptApi, promptSessionId })}
 						onContextMenu={(e) => { e.preventDefault(); removeShotMaterial(episodeId, shotId, m.id); }}
 						style={{ position: "relative", width: 44, height: 44, borderRadius: 8, overflow: "hidden", border: "1px solid rgba(255,255,255,0.12)", flexShrink: 0, background: "rgba(255,255,255,0.05)", cursor: "zoom-in" }}
 					>

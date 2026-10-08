@@ -1,0 +1,113 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+if(!import.meta.url.includes('qiji-line-availability-'))throw Error('Sandbox only');
+globalThis.fetch=async()=>{throw Error('No external network in this sandbox');};
+const {db,closeSqlite}=await import('../src/store/sqlite.ts');
+const logs=await import('../src/store/logs.ts');
+const models=await import('../src/store/models.ts'),channels=await import('../src/store/channels.ts'),families=await import('../src/store/families.ts');
+const routing=await import('../src/autoRouting.ts');
+channels.createChannel({id:'fixture-channel',name:'Secret upstream',enabled:true});
+channels.createChannel({id:'fixture-channel-b',name:'Secret upstream B',enabled:true});
+families.createFamily({id:'fixture-family',name:'统计规则测试',capability:'text'});
+for(const id of ['fixture-a','fixture-b'])models.createModel({id,label:id,capability:'text',protocol:'openai-chat',familyId:'fixture-family',channelId:id==='fixture-a'?'fixture-channel':'fixture-channel-b',enabled:true,cost:1,params:[]});
+const member=modelId=>({modelId,enabled:true,priority:0,concurrencyWeight:1,failureThreshold:3,failureWindowSec:60,cooldownSec:60,failureRetainPercent:50,defaults:{}});
+routing.saveRoutingConfig({...routing.routingConfig(),lines:[{id:'fixture-line',name:'测试',familyId:'fixture-family',modelVersion:'fixture-family',capability:'text',enabled:true,cost:12,members:[member('fixture-a'),member('fixture-b')]}]});
+let now=Math.ceil(Date.now()/600000)*600000+3600000;
+const obs=await import('../src/store/channelObservations.ts');
+const stats=await import('../src/channelAvailability.ts'),lines=await import('../src/lineAvailability.ts');
+stats.stopChannelAvailabilityBackground();lines.stopLineAvailabilityBackground();
+const rulesStore=await import('../src/store/modelStatisticsRules.ts');
+const {buildCatalog}=await import('../src/catalog.ts');
+const {default:Fastify}=await import('fastify');const app=Fastify();
+await app.register((await import('../src/routes/admin.ts')).registerAdminRoutes);await app.ready();
+stats.stopChannelAvailabilityBackground();lines.stopLineAvailabilityBackground();
+const admin={authorization:'Bearer admin-dev'},path='/admin-api/models/fixture-a/statistics-rules';
+let checks=0;const eq=(a,b,label)=>{assert.deepEqual(a,b,label);checks++;};
+const rule=(id,field,operator,value,action='exclude')=>({id,enabled:true,field,operator,value,action});
+const get=async()=>{const r=await app.inject({url:path,headers:admin});eq(r.statusCode,200,'read rule API');eq(r.headers['cache-control'],'no-store','rule revisions never cached');return r.json();};
+const put=(view,rules,headers=admin)=>app.inject({method:'PUT',url:path,headers,payload:{version:view.version,rules}});
+const historyView=async(target='line:fixture-line')=>{
+ const clock=Date.now;Date.now=()=>now;
+ try{const r=await app.inject({url:'/admin-api/models/fixture-a/rate-history?target='+encodeURIComponent(target),headers:admin});eq(r.statusCode,200,'read actual history editor API');return r.json();}finally{Date.now=clock;}
+};
+const publicRow=()=>lines.publicLineAvailability(buildCatalog(),undefined,undefined,now).rows.find(r=>r.id==='route:fixture-line');
+const modelRow=()=>stats.channelAvailability(now,{since:now-3600000,until:now,label:'test'}).rows.find(r=>r.modelId==='fixture-a');
+let seq=0;
+function fixture(status,error='',durationMs=60000,modelId='fixture-a',extra={}){
+ const id='rule-log-'+(++seq),start=now-180000,finish=status==='running'?undefined:start+durationMs,startedAt=new Date(start).toISOString();
+ const meta={id,model:'route:fixture-line',startedAt,status,finishedAt:finish===undefined?undefined:new Date(finish).toISOString(),durationMs:finish===undefined?undefined:durationMs,error:error||undefined,cost:7};
+ db.prepare('INSERT INTO logs(id,day,started_at,owner,meta) VALUES(?,?,?,?,?)').run(id,startedAt.slice(0,10),startedAt,'',JSON.stringify(meta));
+ obs.importChannelObservation({id,modelId,modelName:modelId,modelCreatedAt:models.getModelDef(modelId).createdAt,channelId:models.getModelDef(modelId).channelId,capability:'text',startedAt:start,finishedAt:finish,status,durationMs:finish===undefined?undefined:durationMs,errorEvidence:error||undefined,errorEvidenceComplete:true,evidenceVersion:1,...extra});return id;
+}
+try{
+ for(let i=0;i<10;i++)fixture('success');
+ for(let i=0;i<3;i++)fixture('failed','内容审核失败');
+ for(let i=0;i<2;i++)fixture('failed','the request must be less than or equal to 15.2 for model doubao-seedance-2-0 in r2v.');
+ fixture('failed','busy',5000);for(let i=0;i<4;i++)fixture('failed','busy');
+ obs.writeChannelObservationState('legacy-v1',{done:true});obs.writeChannelObservationState('statistics-evidence-v1',{done:true});
+ stats.refreshChannelAvailability(now,true);lines.refreshLineAvailability(now,true);
+ eq(modelRow().successRate,.5,'raw model baseline');eq(publicRow().rateWindows.map(w=>w.successRate),[.5,.5,.5,.5],'raw four windows');
+ const rawArchive=db.prepare('SELECT * FROM availability_snapshot_archive ORDER BY scope,until').all();
+ const rawLogs=db.prepare('SELECT meta FROM logs ORDER BY id').all();
+ let view=await get();eq(view.rules,[],'no automatic examples');
+ const rules=[rule('cn','error','contains','内容审核'),rule('en','error','contains','the request must be less than or equal to 15.2 for model doubao-seedance-2-0 in r2v.'),rule('short','durationSec','lt',10)];
+ let res=await put(view,rules);eq(res.statusCode,200,'save rule API');let saved=res.json();
+ eq((await put(view,[])).statusCode,409,'late version rejected');
+ const row=modelRow();eq([row.requests,row.success,row.failed,row.excluded,row.successRate],[20,10,4,6,10/14],'current model immediately projected');
+ eq(publicRow().rateWindows.map(w=>[w.requests,w.success,w.failed,w.excluded,w.successRate]),Array(4).fill([20,10,4,6,10/14]),'four windows immediately projected');
+ eq(publicRow().history.at(-1).successRate,10/14,'public history projected');eq(row.history.at(-1).excluded,6,'channel history excludes same six');
+ for(const target of ['line:fixture-line','model']){
+  const slot=(await historyView(target)).slots.find(p=>p.original);
+  eq([slot.original.successRate,slot.edit,slot.display.successRate,slot.display.rulesApplied,slot.display.excluded],[.5,null,10/14,true,6],'history editor keeps original and shows rule projection '+target);
+ }
+ eq(stats.channelAvailability(now,{since:now-180001,until:now-120000,label:'custom'}).rows.find(r=>r.modelId==='fixture-a').excluded,6,'custom submission range uses same rules');
+ eq(/modelCreatedAt|errorEvidence|doubao-seedance|内容审核/.test(JSON.stringify(publicRow())),false,'public statistics do not expose raw rule evidence');
+ eq(db.prepare('SELECT * FROM availability_snapshot_archive ORDER BY scope,until').all(),rawArchive,'raw archived snapshots immutable');eq(db.prepare('SELECT meta FROM logs ORDER BY id').all(),rawLogs,'real statuses and charges immutable');
+ const controls=(await app.inject({url:'/admin-api/models/fixture-a/rate-history',headers:admin})).json();eq(controls.targets.map(t=>t.key),['line:fixture-line','model'],'existing adjustment targets unchanged');
+ eq((await app.inject({url:path})).statusCode,401,'anonymous denied');eq((await put(saved,[],{authorization:'Bearer user-fake'})).statusCode,401,'nonadmin denied');
+ const {config}=await import('../src/config.ts');config.role='relay';const relay=Fastify();await relay.register((await import('../src/routes/admin.ts')).registerAdminRoutes);await relay.ready();
+ eq((await relay.inject({url:path,headers:admin})).statusCode,403,'relay admin cannot read source rules');eq((await relay.inject({url:path,method:'PUT',headers:admin,payload:{version:saved.version,rules:[]}})).statusCode,403,'relay admin cannot write source rules');await relay.close();config.role='source';
+ eq((await app.inject({url:'/admin-api/models/missing/statistics-rules',headers:admin})).statusCode,404,'missing model rejected');
+ for(const r of [{...rules[0],operator:'regex'},{...rules[0],bogus:1},{...rules[2],value:'10'},{...rules[2],value:-1}])eq((await put(saved,[r])).statusCode,400,'invalid rule rejected');
+ eq((await app.inject({method:'PUT',url:path,headers:admin,payload:{version:saved.version,rules:[],other:true}})).statusCode,400,'unknown envelope field rejected');
+ fixture('failed','内容审核失败',60000,'fixture-b');fixture('running','内容审核失败');
+ lines.refreshLineAvailability(now);stats.refreshChannelAvailability(now);
+ eq([publicRow().requests,publicRow().success,publicRow().failed,publicRow().running,publicRow().excluded],[22,10,5,1,6],'same route other model and running isolated');
+ const beforeHealth=JSON.stringify(routing.routingHealth());
+ saved=(await put(saved,[rule('force','status','equals','failed','success')])).json();
+ eq([modelRow().success,modelRow().failed,modelRow().excluded],[20,0,0],'force success only statistics');
+ eq([publicRow().success,publicRow().failed,publicRow().running],[20,1,1],'force status follows underlying model');eq(JSON.stringify(routing.routingHealth()),beforeHealth,'scheduler penalty untouched');
+ saved=(await put(saved,[rule('force','status','equals','success','failed')])).json();eq([modelRow().success,modelRow().failed,modelRow().successRate],[0,20,0],'zero success is measured');
+ saved=(await put(saved,[rule('all','status','equals','failed')])).json();eq([modelRow().success,modelRow().failed,modelRow().successRate],[10,0,1],'ten retained completions reaches threshold');
+ saved=(await put(saved,[rule('all','status','equals','success'),rule('all2','status','equals','failed')])).json();eq([modelRow().excluded,modelRow().successRate],[20,null],'all excluded becomes insufficient');
+ saved=(await put(saved,rules)).json();
+ const edit=await import('../src/availabilityAdjustments.ts'),target=lines.lineHistoryScope('fixture-line',now),original=target.history.at(-1);
+ const manual=edit.editHistory(target,[{until:original.until,successRate:.93,source:'correction',reason:'test manual evidence'}],now);
+ eq(publicRow().history.at(-1).successRate,.93,'manual adjustment remains explicit overlay');
+ const manualSlot=(await historyView()).slots.find(p=>p.original);eq([manualSlot.original.successRate,manualSlot.edit.successRate,manualSlot.display.successRate,manualSlot.display.source],[.5,.93,.93,'correction'],'history editor keeps original and prioritizes manual edit');
+ const storedEdit=manual.slots.find(s=>s.until===original.until).edit;
+ edit.editHistory(target,[{until:original.until,restore:true,expectedId:storedEdit.id}],now);
+ eq(publicRow().history.at(-1).successRate,10/15,'restoring manual edit reveals rules projection including other model');
+ const restoredSlot=(await historyView()).slots.find(p=>p.original);eq([restoredSlot.original.successRate,restoredSlot.edit,restoredSlot.display.successRate,restoredSlot.display.rulesApplied],[.5,null,10/15,true],'history editor restore returns to rules projection');
+ // Raw hook must use submission time including queue, and capture unsanitized finish evidence.
+ const live=logs.startLog({req:{model:'fixture-a',purpose:'chat.reply'}});live.startedAt=new Date(Date.now()-60000).toISOString();
+ obs.beginChannelObservation({id:live.id,modelId:'fixture-a',modelName:'A',channelId:'fixture-channel',capability:'text'},Date.now()-1000);
+ logs.finishLog(live.id,{status:'failed',error:'RAW_ORIGINAL: 内容审核失败',queuedMs:59000});
+ const evidence=obs.channelObservationRows(Date.now()-120000,now).find(r=>r.id===live.id);
+ eq(evidence.durationMs>=59000,true,'duration includes queue and precedes dispatch');eq(evidence.errorEvidence,'RAW_ORIGINAL: 内容审核失败','original pre-scrub error retained');eq(evidence.errorEvidenceComplete,true,'new complete raw error');
+ const bulk=logs.startLog({req:{model:'fixture-a',purpose:'chat.reply'}});obs.beginChannelObservation({id:bulk.id,modelId:'fixture-a',modelName:'A',channelId:'fixture-channel',capability:'text'});logs.finishLogsBulk([{id:bulk.id,status:'failed',error:'bulk original'}]);
+ eq(obs.channelObservationRows(Date.now()-120000,now).find(r=>r.id===bulk.id).errorEvidence,'bulk original','bulk reconciled terminal retains evidence');
+ const old=fixture('failed','legacy',60000,'fixture-a',{durationMs:undefined,errorEvidence:undefined,errorEvidenceComplete:undefined,evidenceVersion:undefined});
+ obs.writeChannelObservationState('statistics-evidence-v1',null);let state=obs.backfillChannelEvidence(1);eq(state.done,false,'legacy evidence bounded batch');while(!state.done)state=obs.backfillChannelEvidence(3);
+ const older=obs.channelObservationRows(now-3600000,now).find(o=>o.id===old);eq(older.durationMs,60000,'legacy duration from light index');eq(older.errorEvidenceComplete,false,'legacy error incomplete');
+ // Persist a separate model's configuration for restart and test replacement identity isolation on A.
+ let keep=rulesStore.getStatisticsRules('fixture-b');keep=rulesStore.saveStatisticsRules('fixture-b',{version:keep.version,rules});
+ lines.resetLineRateHistory('fixture-line',now);eq(publicRow().history,[],'reset clears projected history cache');eq(rulesStore.getStatisticsRules('fixture-a').rules,rules,'history reset preserves configured rules');
+ const previous=await get(),oldIdentity=models.getModelDef('fixture-a').createdAt;
+ models.deleteModel('fixture-a');await new Promise(resolve=>setTimeout(resolve,3));models.createModel({id:'fixture-a',label:'replacement',capability:'text',protocol:'openai-chat',familyId:'fixture-family',channelId:'fixture-channel',enabled:true,params:[]});
+ const fresh=await get();eq(fresh.rules,[],'replacement starts without rules');eq(fresh.version!==previous.version,true,'replacement has distinct revision');eq((await put(previous,rules)).statusCode,409,'old editor cannot write recreated model');
+ let replacement=(await put(fresh,[rule('bad','status','equals','failed','success')])).json();
+ eq(rulesStore.projectModelStatistics({modelId:'fixture-a',modelCreatedAt:oldIdentity,status:'failed'}).status,'failed','old request never adopts replacement rules');
+ fs.writeFileSync('data/statistics-rules-restart.json',JSON.stringify({now,keep,replacement,oldIdentity,audit:db.prepare('SELECT COUNT(*) AS n FROM model_statistics_rule_audit').get().n}));
+ console.log(`STATISTICS_RULE_API ${checks} checks passed`);
+}finally{stats.stopChannelAvailabilityBackground();lines.stopLineAvailabilityBackground();await app.close();(await import('../src/store/db.ts')).flushPendingSaves();closeSqlite();}

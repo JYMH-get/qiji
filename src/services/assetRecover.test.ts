@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { recoverAsset, recoveredUrlOf, _resetAliveCache, type RecoverDeps } from "@/services/assetRecover";
+import { useProjectStore } from "@/store/projectStore";
 
 type Blob0 = { url?: string; localPath?: string; mime?: string; ext?: string };
 
@@ -22,7 +23,48 @@ function mkDeps(over: Partial<RecoverDeps> & { blob?: Blob0 } = {}): RecoverDeps
 const NO_CACHE = { cache: "none" as const, retryDelayMs: 0 };
 
 describe("assetRecover 单资产恢复", () => {
-	beforeEach(() => _resetAliveCache());
+	beforeEach(() => {
+		_resetAliveCache();
+		useProjectStore.setState({ projectInstanceId: "recover-a", isProjectLoading: false });
+	});
+
+	it("探活期间切项目，不采用回执 URL，也不继续恢复", async () => {
+		const adoptUrl = vi.fn();
+		const reput = vi.fn();
+		const deps = mkDeps({ adoptUrl, reput, alive: async () => {
+			useProjectStore.setState({ projectInstanceId: "recover-b" });
+			return { alive: true, url: "https://oss/new.png" };
+		} });
+		expect((await recoverAsset("C00000001", { deps })).status).toBe("failed");
+		expect(adoptUrl).not.toHaveBeenCalled();
+		expect(reput).not.toHaveBeenCalled();
+	});
+
+	it("扫描原件期间取消原目标，不登记旧原件或继续重传", async () => {
+		let targetExists = true;
+		const registerLocal = vi.fn();
+		const reput = vi.fn();
+		const deps = mkDeps({ registerLocal, reput, findLocalById: async () => {
+			targetExists = false;
+			return { localPath: "/old/a.png", ext: "png" };
+		} });
+		expect((await recoverAsset("C00000001", { deps, shouldContinue: () => targetExists })).status).toBe("failed");
+		expect(registerLocal).not.toHaveBeenCalled();
+		expect(reput).not.toHaveBeenCalled();
+	});
+
+	it("重传期间切项目，不写回或把失效尝试标记为会话缓存命中", async () => {
+		const adoptUrl = vi.fn();
+		const alive = vi.fn(async () => ({ alive: false }));
+		const deps = mkDeps({ blob: { localPath: "/a.png" }, alive, adoptUrl, reput: async () => {
+			useProjectStore.setState({ projectInstanceId: "recover-b" });
+			return { ok: true, id: "C00000001", url: "https://oss/new.png" };
+		} });
+		expect((await recoverAsset("C00000001", { deps })).status).toBe("failed");
+		expect(adoptUrl).not.toHaveBeenCalled();
+		await recoverAsset("C00000001", { deps: mkDeps({ alive }) });
+		expect(alive).toHaveBeenCalledTimes(2);
+	});
 
 	it("非台账 id（disp/bk/LC-）：missing，不发任何请求", async () => {
 		const alive = vi.fn(async () => ({ alive: false }));

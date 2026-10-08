@@ -322,11 +322,14 @@ function mimeOfExt(ext?: string): string {
  * taskId：来源任务 id——上传成功后回报服务端改写该任务响应体（原始直链→真 OSS 资产，
  * rehosted→true）：断连找回/重连原任务再取结果拿到永久直链，不再重复「下载+上传」；best-effort。
  */
-export async function uploadBlobToOss(blob: AssetBlob, name?: string, prefix?: string, taskId?: string): Promise<AssetBlob> {
-	if (!isTauri() || !blob.localPath) return blob;
+export async function uploadBlobToOss(blob: AssetBlob, name?: string, prefix?: string, taskId?: string, opts?: { shouldContinue?: () => boolean }): Promise<AssetBlob> {
+	const current = () => opts?.shouldContinue?.() !== false;
+	if (!current() || !isTauri() || !blob.localPath) return blob;
 	try {
 		const fs = await import("@tauri-apps/plugin-fs");
+		if (!current()) return blob;
 		const bytes = await fs.readFile(blob.localPath);
+		if (!current()) return blob;
 		const mime = blob.mime || mimeOfExt(blob.ext);
 		const file = new Blob([bytes as unknown as BlobPart], { type: mime });
 		const filename = `${(name || blob.id).replace(/[\\/:*?"<>|]/g, "_")}.${blob.ext || "bin"}`;
@@ -335,6 +338,7 @@ export async function uploadBlobToOss(blob: AssetBlob, name?: string, prefix?: s
 		// 两次都失败才放弃（返回原 blob——映射里暂留时效原链，本地副本在，过期后可经「检查素材」重传）
 		let up: { id: string; url: string } | null = null;
 		for (let attempt = 1; attempt <= 2 && !up; attempt++) {
+			if (!current()) return blob;
 			try {
 				up = await managedClient.uploadAsset(file, filename, prefix);
 			} catch (e) {
@@ -343,6 +347,7 @@ export async function uploadBlobToOss(blob: AssetBlob, name?: string, prefix?: s
 			}
 		}
 		if (up?.id && up?.url) {
+			if (!current()) return blob;
 			// 本地文件改名为 OSS 台账 id（§12.2「文件名=id」惯例——下载时用的是 img-<taskId> 合成名）；
 			// 改名失败沿用原文件名，三元映射（id↔url↔localPath）仍正确
 			let localPath = blob.localPath;
@@ -350,6 +355,7 @@ export async function uploadBlobToOss(blob: AssetBlob, name?: string, prefix?: s
 			try {
 				const { join, dirname } = await import("@tauri-apps/api/path");
 				const dest = await join(await dirname(blob.localPath), `${up.id}.${blob.ext || "bin"}`);
+				if (!current()) return blob;
 				if (dest !== blob.localPath) {
 					await fs.rename(blob.localPath, dest);
 					localPath = dest;
@@ -357,9 +363,10 @@ export async function uploadBlobToOss(blob: AssetBlob, name?: string, prefix?: s
 					localUri = convertFileSrc(dest);
 				}
 			} catch { /* 改名失败：不影响映射正确性 */ }
+			if (!current()) return { ...blob, id: up.id, url: up.url, localPath, localUri };
 			await registerWithServer(up.id, localPath);
 			// 回报服务端改写任务响应体（best-effort：失败只影响断连找回时多走一次接力转存，映射已正确）
-			if (taskId) await managedClient.rewriteTaskResult(taskId, up.id).catch(() => false);
+			if (taskId && current()) await managedClient.rewriteTaskResult(taskId, up.id).catch(() => false);
 			return { ...blob, id: up.id, url: up.url, localPath, localUri };
 		}
 	} catch (e) {

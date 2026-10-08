@@ -5,7 +5,7 @@
  */
 import type { ReactNode } from "react";
 import { Maximize2 } from "lucide-react";
-import { usePromptModalStore, type PromptModalApi, type MentionCandidate, type ImportAssetFn, type MatchAssetsFn } from "@/store/promptModalStore";
+import { usePromptModalStore, type PromptModalApi, type MentionCandidate, type ImportAssetFn, type MatchAssetsFn, type PromptModalMediaDrop } from "@/store/promptModalStore";
 import type { PresetOption } from "@/lib/presetSchemes";
 
 export function PromptExpandButton({
@@ -23,6 +23,7 @@ export function PromptExpandButton({
 	getMentions,
 	onImport,
 	onMatchAssets,
+	onMediaDrop,
 	getPresets,
 }: {
 	title?: string;
@@ -43,6 +44,8 @@ export function PromptExpandButton({
 	onImport?: ImportAssetFn;
 	/** 「匹配资产」：委托宿主现成匹配逻辑（画布/资产模式各自的匹配函数） */
 	onMatchAssets?: MatchAssetsFn;
+	/** 在放大编辑器拖入素材时，委托宿主加入素材区并同步当前草稿。 */
+	onMediaDrop?: PromptModalMediaDrop;
 	/** 提示词预设方案（每次读最新）：有则弹窗显示「预设方案」插入按钮 */
 	getPresets?: () => PresetOption[];
 }) {
@@ -66,6 +69,7 @@ export function PromptExpandButton({
 					mentions: getMentions,
 					onImport,
 					onMatchAssets,
+					onMediaDrop,
 					presets: getPresets,
 				});
 			}}

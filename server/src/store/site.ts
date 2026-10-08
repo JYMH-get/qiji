@@ -1,5 +1,5 @@
 /**
- * 官网站点配置（第244轮）：官网页面 GET / 的唯一内容数据源，落盘 data/site.json。
+ * 官网站点配置：独立静态官网的内容草稿，落盘 data/site.json；导出并部署后对外生效。
  * 管理端「网页管理」页维护：站点开关、下载链接/安装包、联系方式、备案号、公告、更新记录、
  * 图片资产替换（原图存 OSS `site/img/` 前缀，未替换=用随包内置图 /site-assets/*）。
  *
@@ -43,7 +43,7 @@ export const SITE_IMAGE_SLOTS: Record<string, { file: string; label: string }> =
 };
 
 export interface SiteConfig {
-	/** 站点开关：关=GET / 返回简单占位页（不 404，避免误判服务挂了） */
+	/** 导出站点开关：关=导出维护页，部署此包后对外生效。 */
 	enabled: boolean;
 	/** 客户端当前版本号（下载卡展示） */
 	version: string;

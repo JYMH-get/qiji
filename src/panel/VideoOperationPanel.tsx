@@ -26,8 +26,8 @@ import { useDreaminaStore } from "@/store/dreaminaStore";
 import { useConnectionStore } from "@/store/connectionStore";
 import { useSettingsStore } from "@/store/settingsStore";
 import { listPresetOptions, listPresetSchemes } from "@/lib/presetSchemes";
-import { estimateCost as estimateCreditCost } from "@/lib/genParams";
-import { useRefVideoSeconds } from "@/store/videoDurationStore";
+import { NodeGenerationCost } from "@/components/NodeGenerationCost";
+import { useRouteSuccessRates } from "@/components/RouteSuccessRate";
 import { METHOD_LABELS, modelMethods, clampMethod } from "@/lib/videoMethods";
 import { adaptParamsToSchema, schemaForNodeModel, type ParamFieldLike } from "@/lib/modelParamAdapt";
 import { modelNoteText } from "@/lib/modelNote";
@@ -40,6 +40,7 @@ const panelTransition = { duration: 0.18 };
  * 匹配截图设计：顶部 tabs + 中间大文本区 + 底部参数胶囊行
  */
 export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
+	const rateForModel = useRouteSuccessRates();
 	const node = useCanvasStore((s) => s.nodes[nodeId]);
 	const runtime = useCanvasStore((s) => s.runtime[nodeId]);
 
@@ -110,8 +111,7 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 				? adapter.modes.find((m) => m.key === params.mode)!
 				: adapter.modes[0])
 			: null;
-		const cost = adapter && mode ? adapter.estimateCost(mode.key, params) : 0;
-		return { def, params, adapter, modeKey: mode?.key ?? "", mode, cost };
+		return { def, params, adapter, modeKey: mode?.key ?? "", mode };
 	}, [node, channelModelOptions]);
 
 	const prompt = typeof (node?.data?.params?.prompt) === "string" ? node.data.params.prompt : "";
@@ -121,21 +121,6 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 		const key = view?.adapter?.key;
 		return key ? s.catalog?.models.find((mm) => mm.id === key) : undefined;
 	});
-	// 参考视频计费秒数（第143轮）：模型声明 refVideoSecondsWeight 才收集视频素材（上游连线+自加合并序；
-	// 订阅画布签名——连线/素材增删即刷新；时长本地读元数据，读出后角标自动更新。实扣以服务端探测为准）
-	const refWeight = Number(catModel?.refVideoSecondsWeight) || 0;
-	const vidUriSig = useCanvasStore(() =>
-		refWeight > 0 && node
-			? getNodeMaterialItems(nodeId).filter((it) => it.media === "video").map((it) => it.uri).join("\n")
-			: "",
-	);
-	const refVideoSeconds = useRefVideoSeconds(vidUriSig ? vidUriSig.split("\n") : []);
-	// 按时长精确预估积分（与管理端实际扣费同公式）：视频按 (duration + 系数×参考视频秒) × 每秒价。无 catalog 时回退适配器估算。
-	const creditEstimate = useCatalogStore((s) => {
-		const key = view?.adapter?.key;
-		const m = key ? s.catalog?.models.find((mm) => mm.id === key) : undefined;
-		return estimateCreditCost(m, view?.params ?? {}, refVideoSeconds);
-	});
 
 	// 视口坐标（⚠ hooks 必须全部在下方 early return 之前：面板开着时节点被删，node 变 undefined
 	// 走 early return，若此 hook 在 return 之后会触发 "Rendered fewer hooks" 崩溃——存量 bug，勿移回）
@@ -143,7 +128,7 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 	const canvasMode = useUiStore((s) => s.canvasMode);
 
 	if (!node || !view) return null;
-	const { def, params, adapter, mode, cost } = view;
+	const { def, params, adapter, mode } = view;
 	const running = runtime?.status === "running" || runtime?.status === "queued";
 
 	const setParam = (patch: Record<string, unknown>) =>
@@ -381,7 +366,7 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 						{selection.channels.length > 0 && (
 							<div className="relative shrink-0">
 								<button
-									title="线路"
+									title={`线路 · ${rateForModel(adapter?.key).expanded}`}
 									onClick={(e) => {
 										e.stopPropagation();
 										setParamPanelExpanded(false);
@@ -389,7 +374,8 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 									}}
 									className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-white/5 border border-white/5 text-foreground cursor-pointer whitespace-nowrap transition-colors ${activePopoverKey === "line" ? "bg-white/10 border-white/10" : "hover:bg-white/8"}`}
 								>
-									{srcCh?.channel ?? "选择线路"}
+									<span className="min-w-0 max-w-[140px] truncate">{srcCh?.channel ?? "选择线路"}</span>
+									{srcCh && <span className="shrink-0 tabular-nums">{rateForModel(adapter?.key).compact}</span>}
 									<ChevronDown className="h-3 w-3 text-muted-foreground" />
 								</button>
 								<AnimatePresence>
@@ -411,7 +397,7 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 												boxShadow: "0 8px 32px rgba(0, 0, 0, 0.6)",
 												zIndex: 1010,
 											}}
-											className="rounded-xl overflow-visible min-w-[180px] py-1"
+											className="rounded-xl overflow-visible min-w-[280px] py-1"
 											onClick={(e) => e.stopPropagation()}
 										>
 											{selection.channels.map((ch) => {
@@ -427,7 +413,7 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 															? "bg-white/10 text-white font-medium"
 															: "text-muted-foreground hover:bg-white/5 hover:text-foreground"}`}
 													>
-														<span className="flex-1 pr-2">{ch.channel}</span>
+														<span className="flex-1 pr-2">{ch.channel}（{rateForModel(modelForLine(`src:${ch.channel}`, adapter?.key, allFamilies ?? [])).expanded}）</span>
 														{selected && <span className="text-green-400 text-[10px] ml-2">✓</span>}
 													</button>
 												);
@@ -595,21 +581,20 @@ export function VideoOperationPanel({ nodeId }: { nodeId: string }) {
 					<div className="flex items-center gap-2.5 shrink-0">
 						<span
 							className="flex items-center gap-1 text-xs text-muted-foreground font-semibold"
-							title={`预计消耗积分（视频按时长计费${refVideoSeconds > 0 ? `，含参考视频 ${refVideoSeconds} 秒·不足1秒算1秒` : ""}）`}
 						>
 							{/* 悬浮图标=当前模型备注（第166轮）：管理端备注优先，未设默认显示参考素材上限 */}
 							<span className="flex items-center cursor-help" title={modelNoteText(catModel) || undefined}>
 								<Sparkles className="h-3.5 w-3.5 text-amber-400" />
 							</span>
-							<span>{creditEstimate ?? cost}</span>
 						</span>
 						<button
 							onClick={onRun}
 							disabled={running}
-							className="h-8 w-8 rounded-full p-0 flex items-center justify-center cursor-pointer bg-white text-black hover:opacity-90 disabled:opacity-50 transition-all shadow-md active:scale-95"
+							className="min-h-8 rounded-full px-3 py-1.5 flex items-center justify-center gap-1 text-xs font-semibold cursor-pointer bg-white text-black hover:opacity-90 disabled:opacity-50 transition-all shadow-md active:scale-95"
 							title="运行节点"
 						>
 							<Play className="h-4 w-4" fill="currentColor" />
+							生成<NodeGenerationCost nodeId={nodeId} />
 						</button>
 					</div>
 				</div>

@@ -31,6 +31,8 @@ import { adaptParamsToSchema, schemaForNodeModel, type ParamFieldLike } from "@/
 import { listPresetOptions, listPresetSchemes } from "@/lib/presetSchemes";
 import { modelNoteText } from "@/lib/modelNote";
 import { smartInferContext } from "@/lib/inferUpstream";
+import { NodeGenerationCost } from "@/components/NodeGenerationCost";
+import { useRouteSuccessRates } from "@/components/RouteSuccessRate";
 
 const panelTransition = { duration: 0.18 };
 
@@ -41,6 +43,7 @@ const panelTransition = { duration: 0.18 };
  * - 参数精简化折叠，通过中间胶囊汇总按钮向下展开二级面板。
  */
 export function OperationPanel({ nodeId }: { nodeId: string }) {
+	const rateForModel = useRouteSuccessRates();
 	const dualModeEnabled = useDualModeFeature();
 	const node = useCanvasStore((s) => s.nodes[nodeId]);
 	const runtime = useCanvasStore((s) => s.runtime[nodeId]);
@@ -121,8 +124,7 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 				? adapter.modes.find((m) => m.key === params.mode)!
 				: adapter.modes[0])
 			: null;
-		const cost = adapter && mode ? adapter.estimateCost(mode.key, params) : 0;
-		return { def, params, adapter, modelKey, modeKey: mode?.key ?? "", mode, cost };
+		return { def, params, adapter, modelKey, modeKey: mode?.key ?? "", mode };
 	}, [node, channelModelOptions]);
 
 	// 监听视口坐标以计算屏幕绝对位置
@@ -182,7 +184,7 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 	}, [paramSchemaForSummary, paramsForSummary, summaryValuesOnly]);
 
 	if (!node || !view) return null;
-	const { def, params, adapter, mode, cost } = view;
+	const { def, params, adapter, mode } = view;
 	// 生成节点先选线路，再选该线路支持的家族。
 	// 视频节点走独立 VideoOperationPanel，同样采用线路优先选择。
 	const allFamilies = ["image","text","audio"].includes(def.capability??"")
@@ -438,7 +440,7 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 						{!isScript && selection.channels.length > 0 && (
 							<div className="relative shrink-0">
 								<button
-									title="线路"
+									title={`线路 · ${rateForModel(adapter?.key).expanded}`}
 									onClick={(e) => {
 										e.stopPropagation();
 										setParamPanelExpanded(false);
@@ -446,7 +448,8 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 									}}
 									className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-white/5 border border-white/5 text-foreground cursor-pointer whitespace-nowrap transition-colors ${activePopoverKey === "line" ? "bg-white/10 border-white/10" : "hover:bg-white/8"}`}
 								>
-									{srcCh?.channel ?? "选择线路"}
+									<span className="min-w-0 max-w-[140px] truncate">{srcCh?.channel ?? "选择线路"}</span>
+									{srcCh && <span className="shrink-0 tabular-nums">{rateForModel(adapter?.key).compact}</span>}
 									<ChevronDown className="h-3 w-3 text-muted-foreground" />
 								</button>
 								<AnimatePresence>
@@ -468,7 +471,7 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 												boxShadow: "0 8px 32px rgba(0, 0, 0, 0.6)",
 												zIndex: 1010,
 											}}
-											className="rounded-xl overflow-visible min-w-[180px] py-1"
+											className="rounded-xl overflow-visible min-w-[280px] py-1"
 											onClick={(e) => e.stopPropagation()}
 										>
 											{selection.channels.map((ch) => {
@@ -483,7 +486,7 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 															? "bg-white/10 text-white font-medium"
 															: "text-muted-foreground hover:bg-white/5 hover:text-foreground"}`}
 													>
-														<span className="flex-1 pr-2">{ch.channel}</span>
+														<span className="flex-1 pr-2">{ch.channel}（{rateForModel(modelForLine(`src:${ch.channel}`, adapter?.key, allFamilies ?? [])).expanded}）</span>
 														{selected && <span className="text-green-400 text-[10px] ml-2">✓</span>}
 													</button>
 												);
@@ -679,15 +682,15 @@ export function OperationPanel({ nodeId }: { nodeId: string }) {
 							<span className="flex items-center cursor-help" title={modelNoteText(noteModel) || undefined}>
 								<Sparkles className="h-3.5 w-3.5 text-amber-400" />
 							</span>
-							<span>{noteModel?.tokenPricing?.enabled ? "预扣10积分" : cost+"积分"}</span>
 						</span>
 						<button
 							onClick={onRun}
 							disabled={running || !!inferenceRangeError}
-							className="h-8 w-8 rounded-full p-0 flex items-center justify-center cursor-pointer bg-[color:var(--node-accent)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+							className="min-h-8 rounded-full px-3 py-1.5 flex items-center justify-center gap-1 text-xs font-semibold cursor-pointer bg-[color:var(--node-accent)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
 							title={inferenceRangeError || '运行节点'}
 						>
 							<Play className="h-4 w-4" fill="currentColor" />
+							运行<NodeGenerationCost nodeId={nodeId} />
 						</button>
 					</div>
 				</div>

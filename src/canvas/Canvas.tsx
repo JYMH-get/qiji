@@ -21,6 +21,7 @@ import { SnapGuideLines } from "./SnapGuideLines";
 import { NodeCountWarnToast } from "./NodeCountWarnToast";
 import { RunSelectionFeedback } from "./RunSelectionFeedback";
 import { runSelectedNodes } from "./runSelection";
+import { NodeSelectionGenerationCost } from "@/components/NodeGenerationCost";
 import { isRunnableNode } from "@/command/nodeRunEligibility";
 import { listPlugins } from "@/nodes/pluginRegistry";
 import { reactFlowNodeTypes } from "@/nodes/registry";
@@ -1050,7 +1051,7 @@ function SelectionToolbar() {
             className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 hover:bg-secondary cursor-pointer transition-colors font-medium text-[11px]"
           >
             <Play className="h-3.5 w-3.5 text-emerald-400" fill="currentColor" />
-            <span>全部启动</span>
+            <span>全部启动<NodeSelectionGenerationCost nodeIds={selectedNodeIds} /></span>
           </button>}
           <button
             onClick={onMatchSelected}

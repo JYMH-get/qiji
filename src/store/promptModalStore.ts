@@ -17,6 +17,9 @@ export interface PromptModalApi {
 	setValue?: (text: string) => void;
 }
 
+/** 宿主接管素材拖放；返回 true 表示消费拖放，正文保持由宿主明确更新。 */
+export type PromptModalMediaDrop = (transfer: DataTransfer, api: PromptModalApi) => boolean;
+
 /** 输入 @ 时的可选素材（待选框列出）：tag=@ImageN，附缩略图/名字 */
 export interface MentionCandidate {
 	tag: string;
@@ -53,12 +56,15 @@ export interface PromptModalConfig {
 	onImport?: ImportAssetFn;
 	/** 「匹配资产」按钮：委托宿主现成匹配逻辑（省略则不显示按钮） */
 	onMatchAssets?: MatchAssetsFn;
+	onMediaDrop?: PromptModalMediaDrop;
 	/** 出图预设方案（每次读最新）：有则弹窗显示「预设方案」插入按钮 + 把 【预设:id】 渲染成 pill */
 	presets?: () => PresetOption[];
 }
 
 interface PromptModalState {
 	nodeId?: string;
+	/** 每次打开均递增，旧异步素材回调不能写入后来打开的编辑器。 */
+	sessionId: number;
 	open: boolean;
 	title: string;
 	value: string;
@@ -69,6 +75,7 @@ interface PromptModalState {
 	mentions?: () => MentionCandidate[];
 	onImport?: ImportAssetFn;
 	onMatchAssets?: MatchAssetsFn;
+	onMediaDrop?: PromptModalMediaDrop;
 	presets?: () => PresetOption[];
 	openPrompt: (cfg: PromptModalConfig) => void;
 	close: () => void;
@@ -76,6 +83,7 @@ interface PromptModalState {
 
 export const usePromptModalStore = create<PromptModalState>((set) => ({
 	open: false,
+	sessionId: 0,
 	title: "编辑提示词",
 	value: "",
 	placeholder: "",
@@ -85,10 +93,12 @@ export const usePromptModalStore = create<PromptModalState>((set) => ({
 	mentions: undefined,
 	onImport: undefined,
 	onMatchAssets: undefined,
+	onMediaDrop: undefined,
 	presets: undefined,
 	openPrompt: (cfg) =>
-		set({
+		set(state => ({
 			open: true,
+			sessionId: state.sessionId + 1,
 			nodeId: cfg.nodeId,
 			title: cfg.title ?? "编辑提示词",
 			value: cfg.value ?? "",
@@ -99,7 +109,8 @@ export const usePromptModalStore = create<PromptModalState>((set) => ({
 			mentions: cfg.mentions,
 			onImport: cfg.onImport,
 			onMatchAssets: cfg.onMatchAssets,
+			onMediaDrop: cfg.onMediaDrop,
 			presets: cfg.presets,
-		}),
-	close: () => set({ open: false, onSave: undefined, extra: undefined, mentions: undefined, onImport: undefined, onMatchAssets: undefined, presets: undefined }),
+		})),
+	close: () => set({ open: false, onSave: undefined, extra: undefined, mentions: undefined, onImport: undefined, onMatchAssets: undefined, onMediaDrop: undefined, presets: undefined }),
 }));

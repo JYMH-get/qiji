@@ -1,211 +1,174 @@
 import { getDualModeFeature } from '@/store/connectionStore';
-import { supportsOfficialMaterials } from "@/services/materialPolicy";
-/**
- * shotGenActions —— 实时剪辑右栏/舞台对「分镜占位符」的三个 AI 动作：
- *   推理提示词（单镜） / 生成故事板（生图） / 生成视频。
- *
- * ⚠ 红线（勿回退）：生成请求**只走库内唯一路径**——
- *   出图/出视频 = generationQueue.startShotGeneration（断连保护/任务态/结果落分镜全由它承载）；
- *   提示词推理 = inferRun.startInfer（锁定/找回同理）。
- *   本文件不拼任何提示词正文模板、不改写生成参数语义——参数组装逐行对齐 Frame161195
- *   的 genStoryboard/genVideo/inferShot（同一分镜行为的属性化视图，两处必须同尺）。
- *
- * ⚠ 档位一把尺（第251轮，勿回退成 `catalog.models.find(...)`）：所有「已知模型 key → 取档位」
- *   一律走 [modelOptions](@/lib/modelOptions)（videoReqOptionsForKey/imageResolutionOptionsForKey/
- *   modelMethodsForKey）——它对 ComfyUI 直连 / LibTV / 即梦 这类**不在 catalog 里**的本地渠道模型
- *   会回退到适配器自己的 paramsSchema，否则显示与提交都会掉回内置三档并把 720p 发给只收 768p 的上游。
- *   出图请求只发比例/分辨率/质量，具体上游 size 由服务端转换。
- */
-import { useProjectStore } from "@/store/projectStore";
-import { useCatalogStore } from "@/store/catalogStore";
-import { startShotGeneration } from "@/services/generationQueue";
-import { effectiveModelKey } from "@/components/ModelPicker";
-import { ensurePublicUrl } from "@/lib/publicUrl";
-import { mediaOf } from "@/lib/shotMaterials";
-import { identityIndexesForMaterials, isIdentityShotMaterial } from "@/lib/shotMaterialOps";
-import { buildAssetListVars } from "@/lib/assetVars";
-import { buildNeighborVars } from "@/lib/inferContext";
-import { resolvePresets, countUnifiedShots, gridPresetForShotCount, presetBody, hasGridInstruction } from "@/lib/presetSchemes";
-import { clampMethod, clampToOptions, clampDurationTo } from "@/lib/videoMethods";
-import { clampDuration, clampImageResolution, buildImageParams } from "@/lib/genParams";
-import { imageResolutionOptionsForKey, modelMethodsForKey, videoReqOptionsForKey } from "@/lib/modelOptions";
-import { SMART_INFER_SINGLE_TPL, SMART_INFER_UNIFIED_SINGLE_TPL } from "@/lib/smartInferPrompts";
-import type { StoryboardShot } from "@/services/projectFile";
-import { armPlaceholderSwap } from "./placeholderSwap";
+import { supportsOfficialMaterials } from '@/services/materialPolicy';
+import { useProjectStore } from '@/store/projectStore';
+import { useCatalogStore } from '@/store/catalogStore';
+import { startShotGeneration } from '@/services/generationQueue';
+import { effectiveModelKey } from '@/components/ModelPicker';
+import { ensurePublicUrl } from '@/lib/publicUrl';
+import { mediaOf } from '@/lib/shotMaterials';
+import { isIdentityShotMaterial } from '@/lib/shotMaterialOps';
+import { buildAssetListVars } from '@/lib/assetVars';
+import { buildNeighborVars } from '@/lib/inferContext';
+import { resolvePresets, countUnifiedShots, gridPresetForShotCount, presetBody, hasGridInstruction } from '@/lib/presetSchemes';
+import { buildImageParams } from '@/lib/genParams';
+import { imageResolutionOptionsForKey, modelMethodsForKey, videoReqOptionsForKey } from '@/lib/modelOptions';
+import { inferenceDurationLimit, normalInferenceStrategy, projectInferenceStrategy, resolveStrategyTemplate, type InferenceStrategy } from '@/lib/inferenceStrategy';
+import { armPlaceholderSwap } from './placeholderSwap';
+import { claimShotPreparation, currentRtcTarget, type ShotPreparation, type ShotSubmissionField } from './rtcShotSubmission';
+import { resolveRtcGenerationDuration } from './rtcGenerationDuration';
+import { isRtcFrameReference, planRtcVideoFrames } from './rtcFrameMaterials';
+import type { ShotMaterial } from '@/services/projectFile';
 
-/** 项目是否图视同源模式（故事板/视频共用 unifiedPrompt） */
+/** RTC generation uses the shared queue; preparation owns a frozen request and a project-scoped lock. */
 export function isSameSource(): boolean {
-	return (!getDualModeFeature() || (!!useProjectStore.getState().mediaSettings?.imgVideoSameSource));
+	return !getDualModeFeature() || !!useProjectStore.getState().mediaSettings?.imgVideoSameSource;
 }
-
-/** 实时取最新分镜（组件传入的 shot 可能是陈旧快照） */
-function liveShot(episodeId: string, shotId: string): StoryboardShot | undefined {
-	return useProjectStore.getState().episodes.find((e) => e.id === episodeId)?.shots.find((s) => s.id === shotId);
-}
-
-/** 该分镜是否有单镜推理在途（锁定/按钮态用，非 hook——组件侧另行订阅 inferTasks） */
 export function shotInferRunning(shotId: string): boolean {
-	return useProjectStore.getState().inferTasks.some((t) => t.shotId === shotId && t.mode === "single" && t.status === "running");
+	return useProjectStore.getState().inferTasks.some(t => t.shotId === shotId && t.mode === 'single' && t.status === 'running');
+}
+export interface ShotGenerationOptions {
+	swapSegId?: string;
+	/** Regeneration claims before creating its version placeholder. */
+	preparation?: ShotPreparation;
+}
+async function withPreparation(
+	episodeId: string, shotId: string, field: ShotSubmissionField,
+	opts: ShotGenerationOptions | undefined, run: (claim: ShotPreparation) => Promise<boolean>,
+): Promise<boolean> {
+	const claim = opts?.preparation ?? claimShotPreparation(episodeId, shotId, field);
+	if (!claim) return false;
+	if (claim.episodeId !== episodeId || claim.shotId !== shotId || claim.field !== field) return false;
+	try {
+		if (!claim.alive() || (opts?.swapSegId && !claim.bindTarget(opts.swapSegId))) return false;
+		return await run(claim);
+	} catch (err) {
+		if (claim.alive()) alert(err instanceof Error ? err.message : '素材准备失败，请重试。');
+		return false;
+	} finally { claim.release(); }
 }
 
-/**
- * 推理提示词（单镜）：与 Frame161195.inferShot 同尺——覆盖语义（先清空该镜提示词），
- * 模板=视频设置所选（空=单卡默认；同源模式用同源单卡模板），走 startInfer 持久化运行。
- */
-export async function inferShotPrompts(episodeId: string, shotId: string): Promise<void> {
-	const shot = liveShot(episodeId, shotId);
-	if (!shot) return;
-	const text = (shot.scriptSegment || shot.prompt || "").trim();
-	if (!text) { alert("该分镜没有原文，无法推理。请先在原文分段填写本镜内容。"); return; }
-	if (shotInferRunning(shotId)) return; // 已在推理中 → 锁定
-	const st = useProjectStore.getState();
-	const sameSource = isSameSource();
-	st.updateShot(episodeId, shotId, sameSource ? { unifiedPrompt: "" } : { storyboardPrompt: "", videoPrompt: "" }); // 覆盖：清空提示词
-	const { startInfer } = await import("@/services/inferRun");
-	const ms = useProjectStore.getState().mediaSettings;
-	const stpl = sameSource ? (ms.unifiedSingleTplId || SMART_INFER_UNIFIED_SINGLE_TPL) : (ms.singleTplId || SMART_INFER_SINGLE_TPL);
-	const freshShots = useProjectStore.getState().episodes.find((e) => e.id === episodeId)?.shots ?? [];
-	startInfer({
-		episodeId,
-		mode: "single",
-		sameSource,
-		shotId,
-		templateId: stpl,
-		variables: { 原文: text, ...buildAssetListVars(), ...buildNeighborVars(freshShots, shotId, sameSource) },
-		modelKey: effectiveModelKey("text") || undefined,
-	});
-}
-
-/**
- * 生成故事板（生图）：与 Frame161195.genStoryboard 同尺——
- * 提示词=同源/故事板提示词（回退原文）+ 预设胶囊展开 + 同源宫格补丁；
- * 垫图=素材区全部**图像**素材（保序对齐 @ImageN，⚠ 一张都不许静默丢——不可用即明确报错不发请求）；
- * params={aspect_ratio,resolution,quality}，模型=生效图像模型。返回是否已提交。
- * opts.swapSegId：**图片占位**片段 id——提交后登记「成功即原位替换为 image 片段」监听
- * （placeholderSwap 对 field=storyboard 的台账天然落图片，与视频 swap 同一条机制，补充6）。
- */
-export async function genShotStoryboard(episodeId: string, shotId: string, opts?: { swapSegId?: string }): Promise<boolean> {
-	const shot = liveShot(episodeId, shotId);
-	if (!shot) return false;
-	const ms = useProjectStore.getState().mediaSettings;
-	const sameSource = isSameSource();
-	let prompt = resolvePresets((sameSource ? shot.unifiedPrompt : shot.storyboardPrompt) || shot.scriptSegment || "");
-	// 图视同源宫格补丁（仅故事板图）：有推理产出的同源提示词、且未含宫格指令时按镜头数自动补
-	if (sameSource && (shot.unifiedPrompt || "").trim() && !hasGridInstruction(prompt)) {
-		const gid = gridPresetForShotCount(countUnifiedShots(prompt));
-		const body = gid ? presetBody(gid) : undefined;
-		if (body) prompt = `${prompt}\n\n${body}`;
-	}
-	if (!prompt.trim()) { alert(sameSource ? "该分镜还没有同源提示词，请先「推理提示词」生成，或手动填写。" : "该分镜还没有故事板提示词，请先「推理提示词」生成，或手动填写。"); return false; }
-	// 垫图须公网可达；仅图像素材（保序对齐 @ImageN）。⚠ 不可用素材明确报错、请求不发出（编号错位红线）
-	const imgs: { url: string; name?: string }[] = [];
-	for (const m of shot.materials) {
-		if (mediaOf(m) !== "image") continue;
-		if (!m.uri) { alert(`素材「${m.name}」没有图片（资产未出图或上传失败）。垫图与提示词 @ 编号按位对应，缺一张会整体错位——请补图或删除该素材后重试。`); return false; }
-		const u = await ensurePublicUrl(m.uri, { name: m.name });
-		if (!u) { alert(`素材「${m.name}」无法取得公网直链（原文件失效或网络异常），请重新上传该素材或删除后重试。`); return false; }
-		imgs.push({ url: u, name: m.name });
-	}
-	// 分辨率档按当前生效图像模型收敛（catalog 优先、本地渠道回退适配器 schema——modelOptions 一把尺）
-	const modelKey = effectiveModelKey("image") || "";
-	const resOptions = imageResolutionOptionsForKey(modelKey);
-	const imageAspect = ms.imageAspect ?? "16:9";
-	const imageResolution = clampImageResolution(ms.imageResolution, resOptions);
-	const pendingId = startShotGeneration({
-		episodeId, shotId, field: "storyboard",
-		purpose: "asset.scene.image",
-		prompt, // → variables.prompt（视觉风格由 generationQueue 注入）
-		params: buildImageParams({ aspect: imageAspect, resolution: imageResolution, quality: ms.imageQuality ?? "high" }),
-		input: imgs.length ? { images: imgs } : undefined,
-		modelKey: modelKey || undefined,
-		label: `${shot.title || "分镜"}·故事板`,
-	});
-	// 图片占位：故事板生成成功 → 占位原位替换为 image 片段（target 不动；机制与视频 swap 同一条）
-	if (opts?.swapSegId) armPlaceholderSwap(pendingId, episodeId, shotId, opts.swapSegId);
-	return true;
-}
-
-/**
- * 生成视频：与 Frame161195.genVideo 同尺——
- * 单镜覆盖（overrides）优先、「要求」按当前模型 catalog 档位收敛；首尾帧前置校验；
- * 素材按模态分组保序（@ImageN/@VideoN/@AudioN），不可用即明确报错不发请求。
- * opts.swapSegId：占位符片段 id——提交后登记「成功即原位替换为 media 片段」监听。返回是否已提交。
- */
-export async function genShotVideo(episodeId: string, shotId: string, opts?: { swapSegId?: string }): Promise<boolean> {
-	const shot = liveShot(episodeId, shotId);
-	if (!shot) return false;
-	const ms = useProjectStore.getState().mediaSettings;
-	const sameSource = isSameSource();
-	const genWithAsset = ms.genWithAsset ?? true;
-	const genWithStory = ms.genWithStory ?? false;
-	const prompt = resolvePresets((sameSource ? shot.unifiedPrompt : shot.videoPrompt) || shot.scriptSegment || "");
-	if (!prompt.trim()) { alert(sameSource ? "该分镜还没有同源提示词，请先「推理提示词」生成，或手动填写。" : "该分镜还没有视频提示词，请先「推理提示词」生成，或手动填写。"); return false; }
-	if (genWithStory && !shot.storyboardUri) { alert("已开启「带故事板」但该分镜尚未生成故事板，请先生成故事板（或到视频设置关闭「带故事板」）。"); return false; }
-	// 模型→方法→要求（档位走 modelOptions：catalog 优先、本地渠道回退适配器 schema；
-	// 方法只认 catalog——本地渠道本就只有全能参考）
-	const ov = shot.overrides || {};
-	const vModelKey = ov.videoModelKey || effectiveModelKey("video") || "";
-	const vModel = useCatalogStore.getState().model(vModelKey); // 仅用于 officialAssets 标记
-	const methods = modelMethodsForKey(vModelKey);
-	const method = clampMethod(ov.method || ms.videoMethod, methods);
-	if (method === "frames") {
-		// 首尾帧前置校验（与服务端同尺）：首帧=故事板图或素材第 1 张图；尾帧=素材下一张图
-		const imgCount = genWithAsset ? shot.materials.filter((m) => { const md = mediaOf(m); return md !== "video" && md !== "audio"; }).length : 0;
-		const frameSrc = (genWithStory && shot.storyboardUri ? 1 : 0) + imgCount;
-		if (frameSrc < 2) {
-			alert("「首尾帧」方法需要两张图：首帧（故事板图或素材第 1 张图片）+ 尾帧（素材下一张图片）。请补齐图片素材后重试。");
-			return false;
+export async function inferShotPrompts(episodeId: string, shotId: string, options?: { strategy?: InferenceStrategy }): Promise<void> {
+	await withPreparation(episodeId, shotId, 'infer', undefined, async claim => {
+		const shot = claim.shot, ms = claim.mediaSettings;
+		const text = (shot.scriptSegment || shot.prompt || '').trim();
+		if (!text) throw new Error('该分镜没有原文，无法推理。请先在原文分段填写本镜内容。');
+		const sameSource = isSameSource();
+		const templates = useCatalogStore.getState().catalog?.templates ?? [];
+		const strategy = structuredClone(normalInferenceStrategy(options?.strategy ?? projectInferenceStrategy(ms), templates));
+		const template = resolveStrategyTemplate(templates, strategy.templateId);
+		if (strategy.source === 'skill' ? !strategy.skillText?.trim() : !template) {
+			throw new Error(strategy.source === 'skill' ? '请先导入或填写外部 Skills 内容' : '请选择可用的推理方案');
 		}
-	}
-	// 故事板 → 整体首帧参考；素材按模态分组（公网 url + name，保序对齐 @tag）
-	let firstFrameUrl = "";
-	if (genWithStory && shot.storyboardUri) firstFrameUrl = await ensurePublicUrl(shot.storyboardUri, { name: "故事板" });
-	const images: { id?: string; url: string; name?: string; usage?: "reference" | "identity" }[] = [];
-	const videos: { url: string; name?: string }[] = [];
-	const audios: { url: string; name?: string }[] = [];
-	if (genWithAsset) {
-		let imageIndex = 0;
+		const templateId = strategy.source === 'skill' ? '' : template!.id;
+		const inference = {
+			source: strategy.source ?? 'template' as const,
+			skillText: strategy.skillText,
+			skillName: strategy.skillName,
+			guidance: [strategy.guidance, shot.plotGuidance].filter(Boolean).join('\n\n'),
+			durationLimit: inferenceDurationLimit(shot.overrides?.duration ?? shot.durationSec ?? ms.maxDuration),
+		};
+		const shots = structuredClone(useProjectStore.getState().episodes.find(e => e.id === episodeId)?.shots ?? []);
+		const variables = { 原文: text, 视觉风格: useProjectStore.getState().visualStyle || '', ...buildAssetListVars(), ...buildNeighborVars(shots, shotId, sameSource) };
+		const modelKey = effectiveModelKey('text') || undefined;
+		const { startInfer } = await import('@/services/inferRun');
+		if (!claim.alive()) return false;
+		useProjectStore.getState().updateShot(episodeId, shotId, sameSource ? { unifiedPrompt: '' } : { storyboardPrompt: '', videoPrompt: '' });
+		startInfer({ episodeId, mode: 'single', sameSource, shotId, templateId, inference, variables, modelKey });
+		return true;
+	});
+}
+
+export async function genShotStoryboard(episodeId: string, shotId: string, opts?: ShotGenerationOptions): Promise<boolean> {
+	return withPreparation(episodeId, shotId, 'storyboard', opts, async claim => {
+		const shot = claim.shot, ms = claim.mediaSettings, sameSource = isSameSource();
+		let prompt = resolvePresets((sameSource ? shot.unifiedPrompt : shot.storyboardPrompt) || shot.scriptSegment || '');
+		if (sameSource && (shot.unifiedPrompt || '').trim() && !hasGridInstruction(prompt)) {
+			const gid = gridPresetForShotCount(countUnifiedShots(prompt)), body = gid ? presetBody(gid) : undefined;
+			if (body) prompt = `${prompt}\n\n${body}`;
+		}
+		if (!prompt.trim()) throw new Error(sameSource ? '该分镜还没有同源提示词，请先「推理提示词」生成，或手动填写。' : '该分镜还没有故事板提示词，请先「推理提示词」生成，或手动填写。');
+		// Model, options and all user input are fixed before the first upload awaits.
+		const modelKey = effectiveModelKey('image') || undefined;
+		const params = buildImageParams({ aspect: ms.imageAspect ?? '16:9', ...(ms.imageResolution !== undefined ? { resolution: ms.imageResolution } : {}), quality: ms.imageQuality ?? 'high' }, imageResolutionOptionsForKey(modelKey || ''));
+		const imgs: { url: string; name?: string }[] = [];
 		for (const m of shot.materials) {
-			if (!m.uri) { alert(`素材「${m.name}」没有文件（资产未出图或上传失败）。垫素材与提示词 @ 编号按位对应，缺一条会整体错位——请补图或删除该素材后重试。`); return false; }
-			const u = await ensurePublicUrl(m.uri, { name: m.name });
-			if (!u) { alert(`素材「${m.name}」无法取得公网直链（原文件失效或网络异常），请重新上传该素材或删除后重试。`); return false; }
-			const md = mediaOf(m);
-			const fileId = useProjectStore.getState().blobByUri(m.uri)?.id;
-			const baseRef = { url: u, name: m.name, ...(fileId && !fileId.startsWith("LC-") ? { id: fileId } : {}) };
-			if (md === "video") videos.push(baseRef);
-			else if (md === "audio") audios.push(baseRef);
-			else {
-				const identity = isIdentityShotMaterial(m, imageIndex, ov.officialAssetIndexes);
-				images.push({ ...baseRef, usage: identity ? "identity" : "reference" });
-				imageIndex++;
+			if (mediaOf(m) !== 'image') continue;
+			if (!m.uri) throw new Error(`素材「${m.name}」没有图片，请补图或删除该素材后重试。`);
+			if (!claim.alive()) return false;
+			const url = await ensurePublicUrl(m.uri, { name: m.name, shouldContinue: claim.alive });
+			if (!claim.alive()) return false;
+			if (!url) throw new Error(`素材「${m.name}」无法取得公网直链，请重新上传该素材或删除后重试。`);
+			imgs.push({ url, name: m.name });
+		}
+		if (!claim.alive()) return false;
+		const pendingId = startShotGeneration({ episodeId, shotId, field: 'storyboard', purpose: 'asset.scene.image', prompt, params,
+			input: imgs.length ? { images: imgs } : undefined, modelKey, label: `${shot.title || '分镜'}·故事板`, rtcTarget: claim.rtcTarget });
+		if (opts?.swapSegId) armPlaceholderSwap(pendingId, episodeId, shotId, opts.swapSegId);
+		return true;
+	});
+}
+
+export async function genShotVideo(episodeId: string, shotId: string, opts?: ShotGenerationOptions): Promise<boolean> {
+	return withPreparation(episodeId, shotId, 'video', opts, async claim => {
+		const shot = claim.shot, ms = claim.mediaSettings, sameSource = isSameSource();
+		const genWithAsset = ms.genWithAsset ?? true, genWithStory = ms.genWithStory ?? false;
+		const prompt = resolvePresets((sameSource ? shot.unifiedPrompt : shot.videoPrompt) || shot.scriptSegment || '');
+		if (!prompt.trim()) throw new Error(sameSource ? '该分镜还没有同源提示词，请先「推理提示词」生成，或手动填写。' : '该分镜还没有视频提示词，请先「推理提示词」生成，或手动填写。');
+		const explicitFirst = shot.materials.some(material => isRtcFrameReference(material) && material.rtcFrameRole === 'first');
+		if (genWithStory && !shot.storyboardUri && !explicitFirst) throw new Error('已开启「带故事板」但该分镜尚未生成故事板，请先生成故事板（或到视频设置关闭「带故事板」）。');
+		const ov = shot.overrides || {}, modelKey = ov.videoModelKey || effectiveModelKey('video') || undefined;
+		const model = useCatalogStore.getState().model(modelKey || '');
+		const methods = modelMethodsForKey(modelKey || ''), req = videoReqOptionsForKey(modelKey || '');
+		const method = ov.method ?? ms.videoMethod ?? methods[0];
+		const seg = claim.rtcTarget ? currentRtcTarget(claim.rtcTarget) : undefined;
+		const params: Record<string, unknown> = {
+			duration: resolveRtcGenerationDuration(seg?.generationDuration, seg?.targetDurationUs, req.durations, ov.duration ?? shot.durationSec ?? ms.maxDuration ?? req.durations[0] ?? 15),
+			resolution: ov.resolution ?? ms.resolution ?? req.resolutions[0] ?? '720p',
+			aspect_ratio: ov.aspect ?? ms.aspect ?? req.aspects[0] ?? '16:9',
+			...(method !== undefined ? { method } : {}),
+		};
+		let originalImageIndex = 0;
+		const materials = shot.materials.map(material => mediaOf(material) === 'image'
+			? { ...material, usage: isIdentityShotMaterial(material, originalImageIndex++, ov.officialAssetIndexes) ? 'identity' as const : 'reference' as const } : material);
+		const storyboard: ShotMaterial | undefined = genWithStory && shot.storyboardUri
+			? { id: 'rtc-storyboard-reference', kind: 'local', media: 'image', name: '故事板', uri: shot.storyboardUri, usage: 'reference' } : undefined;
+		const frames = planRtcVideoFrames(materials, prompt, { method, includeReferences: genWithAsset, storyboard });
+		if (method === 'frames') {
+			const imgCount = frames.refs.filter(m => mediaOf(m) === 'image').length;
+			if ((!frames.explicitFrames && storyboard ? 1 : 0) + imgCount < 2) throw new Error('「首尾帧」方法需要两张图：首帧（故事板图或素材第 1 张图片）+ 尾帧（素材下一张图片）。请补齐图片素材后重试。');
+		}
+		if (storyboard && !frames.explicitFrames) {
+			const firstFrameUrl = await ensurePublicUrl(storyboard.uri, { name: '故事板', shouldContinue: claim.alive });
+			if (!claim.alive()) return false;
+			if (!firstFrameUrl) throw new Error('故事板无法取得公网直链，请重新上传或生成故事板后重试。');
+			params.firstFrameUrl = firstFrameUrl;
+		}
+		const images: { id?: string; url: string; name?: string; usage?: 'reference' | 'identity' }[] = [];
+		const videos: { id?: string; url: string; name?: string }[] = [], audios: { id?: string; url: string; name?: string }[] = [];
+		{
+			for (const m of frames.refs) {
+				if (!m.uri) throw new Error(`素材「${m.name}」没有文件，请补齐或删除该素材后重试。`);
+				if (!claim.alive()) return false;
+				const url = await ensurePublicUrl(m.uri, { name: m.name, shouldContinue: claim.alive });
+				if (!claim.alive()) return false;
+				if (!url) throw new Error(`素材「${m.name}」无法取得公网直链，请重新上传该素材或删除后重试。`);
+				const md = mediaOf(m), fileId = useProjectStore.getState().blobByUri(m.uri)?.id;
+				const base = { url, name: m.name, ...(fileId && !fileId.startsWith('LC-') ? { id: fileId } : {}) };
+				if (md === 'video') videos.push(base);
+				else if (md === 'audio') audios.push(base);
+				else images.push({ ...base, usage: m.usage });
 			}
 		}
-	}
-	const input: Record<string, unknown> = {};
-	if (images.length) input.images = images;
-	if (videos.length) input.videos = videos;
-	if (audios.length) input.audios = audios;
-	const req = videoReqOptionsForKey(vModelKey);
-	const officialIdx = supportsOfficialMaterials(vModel)
-		? identityIndexesForMaterials(shot.materials, ov.officialAssetIndexes).filter((i) => i >= 0 && i < images.length)
-		: [];
-	const pendingId = startShotGeneration({
-		episodeId, shotId, field: "video",
-		purpose: "video.generate",
-		prompt,
-		params: {
-			duration: clampDurationTo(clampDuration(ov.duration || shot.durationSec || (ms.maxDuration ?? 15)), req.durations),
-			resolution: clampToOptions(ov.resolution || (ms.resolution ?? "720p"), req.resolutions),
-			aspect_ratio: clampToOptions(ov.aspect || (ms.aspect ?? "16:9"), req.aspects),
-			...(firstFrameUrl ? { firstFrameUrl } : {}),
-			...(methods.length > 1 ? { method } : {}),
-			...(officialIdx.length ? { officialAssetIndexes: officialIdx } : {}),
-		},
-		input: Object.keys(input).length ? input : undefined,
-		modelKey: vModelKey || undefined,
-		label: `${shot.title || "分镜"}·视频`,
+		const input: Record<string, unknown> = {};
+		if (images.length) input.images = images;
+		if (videos.length) input.videos = videos;
+		if (audios.length) input.audios = audios;
+		const officialIdx = supportsOfficialMaterials(model) ? images.flatMap((image, index) => image.usage === 'identity' ? [index] : []) : [];
+		if (officialIdx.length) params.officialAssetIndexes = officialIdx;
+		if (!claim.alive()) return false;
+		const pendingId = startShotGeneration({ episodeId, shotId, field: 'video', purpose: 'video.generate', prompt: frames.prompt, params,
+			input: Object.keys(input).length ? input : undefined, modelKey, label: `${shot.title || '分镜'}·视频`, rtcTarget: claim.rtcTarget });
+		if (opts?.swapSegId) armPlaceholderSwap(pendingId, episodeId, shotId, opts.swapSegId);
+		return true;
 	});
-	// 视频生成成功 → 占位符原位替换为 media 片段（target 不动，source=[0,视频时长]）
-	if (opts?.swapSegId) armPlaceholderSwap(pendingId, episodeId, shotId, opts.swapSegId);
-	return true;
 }

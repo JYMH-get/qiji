@@ -291,11 +291,22 @@ export interface SuccessRateSnapshot {
   insufficientSamples?:boolean; completedRequests?:number; method?:'interval';
   source?:'self-test'|'correction';
   editedAt?:number;
+  excluded?:number; rulesApplied?:boolean;
+}
+export interface RouteSuccessRateWindow {
+  hours: 1 | 5 | 10 | 24;
+  requests: number; success: number; failed: number; running: number;
+  excluded?: number;
+  /** Fraction 0–1; null when fewer than 10 requests have ended. */
+  successRate: number | null;
+  insufficientSamples: boolean;
 }
 export interface RoutePriceAvailabilityRow {
   id:string; name:string; familyId:string; familyName:string; capability:Capability;
   requests:number; success:number; failed:number; running:number; successRate:number|null; trackingSince:number;
+  excluded?:number;
   history:SuccessRateSnapshot[];
+  rateWindows?: RouteSuccessRateWindow[];
   pricing?:Pick<CatalogModel,'cost'|'costField'|'costPerUnit'|'costRules'|'tokenPricing'|'params'|'refVideoSecondsWeight'>;
   discountPercent?:number;
 }

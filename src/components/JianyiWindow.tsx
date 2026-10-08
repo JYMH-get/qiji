@@ -37,9 +37,13 @@ import {
 	formatConversation,
 } from "@/lib/jianyiContext";
 import { useCatalogStore } from "@/store/catalogStore";
+import { GenerationCost } from "@/components/GenerationCost";
 import { managedClient } from "@/services/managedClient";
 import { runPurpose } from "@/services/purposeRunner";
-import { openLightbox } from "@/store/lightboxStore";
+import { RouteSelect } from "@/components/RouteSelect";
+import { useScopedLightboxGallery } from "@/hooks/useScopedLightboxGallery";
+import { createGalleryIdentity, moveGalleryItem } from "@/lib/materialGallery";
+import { remapBodyTags } from "@/lib/shotMaterials";
 import { confirmDialog } from "@/lib/confirmDialog";
 import { usePromptModalStore } from "@/store/promptModalStore";
 import { mediaFilesFromClipboard } from "@/lib/clipboardMedia";
@@ -252,6 +256,8 @@ function buildConversationPrompt(msgs: JyMessage[]): string {
 }
 
 interface RowProps {
+	sessionId: string;
+	modelKey: string;
 	msg: JyMessage;
 	streaming: boolean;
 	isLastAssistant: boolean;
@@ -261,7 +267,16 @@ interface RowProps {
 	onRollback: () => void;
 }
 
-function MessageRow({ msg, streaming, isLastAssistant, copiedId, onCopy, onRegen, onRollback }: RowProps) {
+function MessageRow({ sessionId, modelKey, msg, streaming, isLastAssistant, copiedId, onCopy, onRegen, onRollback }: RowProps) {
+	const imageId = useMemo(() => createGalleryIdentity<JyImage>(), [sessionId, msg.id]);
+	const openImages = useScopedLightboxGallery(`${sessionId}/${msg.id}`, {
+		getItems: () => {
+			const current = useJianyiStore.getState().getSession(sessionId)?.messages.find(message => message.id === msg.id);
+			return current ? (current.images ?? []).map((im, index) => ({ id: imageId(im), uri: im.previewUrl || im.url,
+				name: im.name, media: "image" as const, label: String(index + 1) })) : null;
+		},
+		subscribe: listener => useJianyiStore.subscribe(listener),
+	});
 	const isUser = msg.role === "user";
 	const hasText = !!msg.content;
 	const showActions = hasText && !(isLastAssistant && streaming); // 流式中的占位不显示
@@ -276,7 +291,7 @@ function MessageRow({ msg, streaming, isLastAssistant, copiedId, onCopy, onRegen
 								key={i}
 								src={shown}
 								alt={im.name || "图片"}
-								onDoubleClick={() => openLightbox({ uri: shown, name: im.name || "图片", media: "image" })}
+								onDoubleClick={() => openImages(imageId(im))}
 								title="双击放大"
 								style={{ width: 84, height: 84, objectFit: "cover", borderRadius: 8, border: "1px solid rgba(255,255,255,0.12)", cursor: "zoom-in" }}
 							/>
@@ -327,8 +342,9 @@ function MessageRow({ msg, streaming, isLastAssistant, copiedId, onCopy, onRegen
 					</button>
 					{isLastAssistant && !streaming && (
 						<>
-							<button title="重新回答" onClick={onRegen} style={rowBtn}>
+							<button title="重新回答" onClick={onRegen} style={{ ...rowBtn, width: "auto", gap: 4, padding: "0 5px", fontSize: 10 }}>
 								<RefreshCw size={12} />
+								<GenerationCost modelKey={modelKey} />
 							</button>
 							<button title="回退（撤回这一轮，文本回到输入框）" onClick={onRollback} style={rowBtn}>
 								<Undo2 size={12} />
@@ -372,6 +388,21 @@ export default function JianyiWindow({ initialSessionId, initX, initY, onClose, 
 	const [pending, setPending] = useState<JyImage[]>([]);
 	const [pendingFiles, setPendingFiles] = useState<JyFile[]>([]);
 	const [uploading, setUploading] = useState(false);
+	const pendingId = useMemo(() => createGalleryIdentity<JyImage>(), [sessionId]);
+	const openPendingImages = useScopedLightboxGallery(`pending/${sessionId}`, {
+		getItems: () => useJianyiStore.getState().getSession(sessionId) ? pending.map((im, index) => ({
+			id: pendingId(im), uri: im.previewUrl || im.url, name: im.name, media: "image" as const, label: String(index + 1),
+		})) : null,
+		subscribe: listener => useJianyiStore.subscribe(listener),
+		canReorder: () => !uploading && !useJianyiStore.getState().streamingIds.includes(sessionId) && !!useJianyiStore.getState().getSession(sessionId),
+		reorder: (from, to) => {
+			const next = moveGalleryItem(pending, from, to, pendingId);
+			if (!next) return;
+			const mapping = Object.fromEntries(pending.map((image, index) => [`@Image${index + 1}`, `@Image${next.indexOf(image) + 1}`]));
+			setPending(prev => moveGalleryItem(prev, from, to, pendingId) ?? prev);
+			setInput(value => remapBodyTags(value, mapping));
+		},
+	});
 	const [copiedId, setCopiedId] = useState<string | null>(null);
 	// 上下文总结进行中（summary=总结本次对话 / handoff=总结至新窗口继续）
 	const [summarizing, setSummarizing] = useState<null | "summary" | "handoff">(null);
@@ -739,17 +770,14 @@ export default function JianyiWindow({ initialSessionId, initX, initY, onClose, 
 				<span title={session?.title} style={{ flex: 1, fontSize: 12, color: "rgba(255,255,255,0.6)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
 					{session?.title || "新对话"}
 				</span>
-				<select
+				<RouteSelect
 					value={modelValue}
-					onChange={(e) => session && useJianyiStore.getState().setSessionModel(session.id, e.target.value)}
+					onChange={(model) => session && useJianyiStore.getState().setSessionModel(session.id, model)}
 					title="选择文本模型"
-					style={{ fontSize: 11.5, background: "#1b1f29", color: "rgba(255,255,255,0.8)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, padding: "3px 6px", maxWidth: 150 }}
-				>
-					<option value="">{textModels.length ? "请选择模型…" : "无可用模型"}</option>
-					{textModels.map((m) => (
-						<option key={m.id} value={m.id}>{m.label}</option>
-					))}
-				</select>
+					style={{ fontSize: 11.5, background: "#1b1f29", color: "rgba(255,255,255,0.8)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, padding: "3px 6px", maxWidth: 210 }}
+					placeholder={textModels.length ? "请选择模型…" : "无可用模型"}
+					options={textModels.map(model => ({ value: model.id, modelKey: model.id, label: model.label }))}
+				/>
 			</div>
 
 			{/* 会话列表（下拉） */}
@@ -800,6 +828,8 @@ export default function JianyiWindow({ initialSessionId, initX, initY, onClose, 
 					messages.map((m) => (
 						<MessageRow
 							key={m.id}
+							sessionId={sessionId}
+							modelKey={wantModel}
 							msg={m}
 							streaming={streaming}
 							isLastAssistant={m.id === lastAssistantId}
@@ -822,7 +852,7 @@ export default function JianyiWindow({ initialSessionId, initX, initY, onClose, 
 				<div style={{ display: "flex", gap: 6, flexWrap: "wrap", padding: "8px 14px 0", alignItems: "center" }}>
 					{pending.map((im, i) => (
 						<div key={i} style={{ position: "relative", width: 48, height: 48 }}>
-							<img src={im.previewUrl || im.url} alt={im.name} style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 6, border: "1px solid rgba(255,255,255,0.14)" }} />
+							<img src={im.previewUrl || im.url} alt={im.name} title="双击放大" onDoubleClick={() => openPendingImages(pendingId(im))} style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 6, border: "1px solid rgba(255,255,255,0.14)", cursor: "zoom-in" }} />
 							<button title="移除" onClick={() => setPending((prev) => prev.filter((_, j) => j !== i))} style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", border: "none", background: "#ef4444", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
 								<X size={11} />
 							</button>
@@ -871,14 +901,14 @@ export default function JianyiWindow({ initialSessionId, initX, initY, onClose, 
 						</span>
 					</div>
 					{ctxBlocked && (
-						<div style={{ display: "flex", gap: 8 }}>
+						<div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
 							<button
 								onClick={() => void runSummary()}
 								disabled={streaming || !!summarizing}
 								style={ctxActBtn(streaming || !!summarizing)}
 							>
 								{summarizing === "summary" ? <Loader2 size={12} className="animate-spin" /> : null}
-								总结本次对话
+								总结本次对话<GenerationCost modelKey={wantModel} />
 							</button>
 							<button
 								onClick={() => void runHandoff()}
@@ -886,7 +916,7 @@ export default function JianyiWindow({ initialSessionId, initX, initY, onClose, 
 								style={ctxActBtn(streaming || !!summarizing)}
 							>
 								{summarizing === "handoff" ? <Loader2 size={12} className="animate-spin" /> : null}
-								总结至新窗口继续
+								总结至新窗口继续<GenerationCost modelKey={wantModel} />
 							</button>
 						</div>
 					)}
@@ -912,7 +942,7 @@ export default function JianyiWindow({ initialSessionId, initX, initY, onClose, 
 						disabled={ctxBlocked}
 						placeholder={ctxBlocked ? "上下文已达上限，请使用上方按钮总结本次对话，或总结后到新窗口继续" : "给简一助手发消息…（Enter 发送，Shift+Enter 换行，可粘贴图片/文件）"}
 						rows={1}
-						style={{ flex: 1, resize: "none", background: "transparent", border: "none", outline: "none", color: "#fff", fontSize: 12.5, maxHeight: MAX_INPUT_H, lineHeight: 1.5, overflowY: "auto", opacity: ctxBlocked ? 0.5 : 1 }}
+						style={{ flex: 1, minWidth: 0, resize: "none", background: "transparent", border: "none", outline: "none", color: "#fff", fontSize: 12.5, maxHeight: MAX_INPUT_H, lineHeight: 1.5, overflowY: "auto", opacity: ctxBlocked ? 0.5 : 1 }}
 					/>
 					{(() => {
 						const hasPayload = !!input.trim() || pending.length > 0 || pendingFiles.length > 0;
@@ -921,9 +951,11 @@ export default function JianyiWindow({ initialSessionId, initX, initY, onClose, 
 							<button
 								onClick={() => void send()}
 								disabled={!hasPayload || streaming || uploading || ctxBlocked}
-								style={{ flexShrink: 0, width: 30, height: 30, borderRadius: 8, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", background: active ? accent : "rgba(255,255,255,0.08)", color: active ? "#06280f" : "rgba(255,255,255,0.3)" }}
+								aria-label="发送消息"
+								style={{ flexShrink: 0, minWidth: 30, padding: "0 8px", height: 30, fontSize: 10, borderRadius: 8, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", background: active ? accent : "rgba(255,255,255,0.08)", color: active ? "#06280f" : "rgba(255,255,255,0.3)" }}
 							>
 								<Send size={15} />
+								<GenerationCost modelKey={wantModel} />
 							</button>
 						);
 					})()}

@@ -8,10 +8,18 @@
  * ⚠ 红线：素材写入唯一路径=useRtcFreeGenStore.patch(segId,{refs})；本地文件走懒上传
  * （第194轮 uploadMediaToCanvasAsset，提交时 ensurePublicUrl 补传 OSS）。
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Music, Video, X } from "lucide-react";
-import { openLightbox } from "@/store/lightboxStore";
+import { useScopedLightboxGallery } from "@/hooks/useScopedLightboxGallery";
+import { createGalleryIdentity } from "@/lib/materialGallery";
+import { freeRefGallery } from "./rtcFreeRefGallery";
+import { useFreeGenPreparing } from "./freeGenActions";
 import { useRtcFreeGenStore, type FreeGenRef } from "./rtcFreeGenStore";
+import { promptMediaDropHandlers, type PromptMediaDropHandler } from "@/lib/promptMediaDrop";
+import { addLocalFreeGenRefs, freePromptMediaDrop } from "./rtcPromptDrop";
+import { useProjectStore } from "@/store/projectStore";
+import { RtcAdjacentFrameButtons } from "./RtcAdjacentFrameButtons";
+import { setRtcFreeFrameMaterial } from "./rtcFrameMaterialOps";
 
 export const KIND_LABEL: Record<"video" | "image" | "audio", string> = { video: "视频", image: "图片", audio: "音频" };
 
@@ -33,6 +41,7 @@ export function DraftArea({
 	minHeight,
 	fill = false,
 	onCommit,
+	onMediaDrop,
 }: {
 	value: string;
 	placeholder?: string;
@@ -42,6 +51,7 @@ export function DraftArea({
 	/** 填充模式（补充5）：吃满父列剩余高且有界（超长内容框内滚动收起）；true 时忽略 minHeight */
 	fill?: boolean;
 	onCommit: (v: string) => void;
+	onMediaDrop?: PromptMediaDropHandler;
 }) {
 	const [draft, setDraft] = useState(value);
 	const [editing, setEditing] = useState(false);
@@ -51,6 +61,7 @@ export function DraftArea({
 	}, [value, editing]);
 	return (
 		<textarea
+			{...promptMediaDropHandlers(onMediaDrop)}
 			value={draft}
 			rows={rows}
 			placeholder={placeholder}
@@ -79,48 +90,21 @@ export function DraftArea({
 
 /** 垫素材条：接收资产面板拖拽（application/x-qiji-asset）与本地文件拖入；点 ✕ 移除 */
 export function RefStrip({ segId, refs }: { segId: string; refs: FreeGenRef[] }) {
+	const owner = useProjectStore(s => s.projectInstanceId);
+	useFreeGenPreparing(segId); // 准备锁变化也刷新灯箱的只读状态。
+	const refId = useMemo(() => createGalleryIdentity<FreeGenRef>(), [owner, segId]);
+	const gallery = useMemo(() => freeRefGallery(segId, refId), [owner, segId, refId]);
+	const openRefs = useScopedLightboxGallery(`${owner}/${segId}`, gallery);
 	const fileRef = useRef<HTMLInputElement>(null);
 	const setRefs = (next: FreeGenRef[]) => useRtcFreeGenStore.getState().patch(segId, { refs: next });
 
-	const addLocal = async (files: File[]) => {
-		if (!files.length) return;
-		// 懒上传（第194轮）：只落本地 + 注册三元映射，提交时再由 ensurePublicUrl 补传 OSS
-		const { uploadMediaToCanvasAsset } = await import("@/canvas/nodeUpload");
-		const added: FreeGenRef[] = [];
-		for (const f of files) {
-			try {
-				const up = await uploadMediaToCanvasAsset(f);
-				const media: FreeGenRef["media"] = f.type.startsWith("video/") ? "video" : f.type.startsWith("audio/") ? "audio" : "image";
-				added.push({ uri: up.displayUri, assetId: up.assetId, name: f.name, media });
-			} catch {
-				/* 单个文件失败不影响其它（用户可重拖） */
-			}
-		}
-		if (added.length) setRefs([...useRtcFreeGenStore.getState().draftOf(segId).refs, ...added]);
-	};
+	const addLocal = (files: File[]) => addLocalFreeGenRefs(segId, files);
+	const addDroppedMedia = freePromptMediaDrop(segId);
 
 	const onDrop = (e: React.DragEvent) => {
 		e.preventDefault();
 		e.stopPropagation();
-		const raw = e.dataTransfer.getData("application/x-qiji-asset") || e.dataTransfer.getData("text/plain");
-		if (raw) {
-			try {
-				const d = JSON.parse(raw) as Record<string, unknown>;
-				const u = (d.localUri || d.uri || d.url) as string | undefined; // 展示优先本地 uri（CSP）
-				if (u) {
-					const media: FreeGenRef["media"] = d.media === "video" || d.media === "audio" ? d.media : "image";
-					setRefs([
-						...refs,
-						{ uri: u, assetId: (d.assetId || d.id) as string | undefined, name: (d.name as string) || "素材", media },
-					]);
-					return;
-				}
-			} catch {
-				/* 落到文件分支 */
-			}
-		}
-		const files = Array.from(e.dataTransfer.files || []).filter((f) => /^(image|video|audio)\//.test(f.type));
-		void addLocal(files);
+		addDroppedMedia(e.dataTransfer);
 	};
 
 	return (
@@ -144,7 +128,7 @@ export function RefStrip({ segId, refs }: { segId: string; refs: FreeGenRef[] })
 					key={`${r.uri}-${i}`}
 					className="group"
 					title={`${r.name || "素材"}（${KIND_LABEL[r.media]}）——双击放大`}
-					onDoubleClick={() => r.media === "image" && openLightbox({ uri: r.uri, name: r.name || "素材" })}
+					onDoubleClick={() => openRefs(refId(r))}
 					style={{
 						position: "relative",
 						width: 44,
@@ -163,7 +147,7 @@ export function RefStrip({ segId, refs }: { segId: string; refs: FreeGenRef[] })
 						</div>
 					)}
 					<span style={{ position: "absolute", left: 0, bottom: 0, fontSize: 8, lineHeight: "11px", padding: "0 3px", background: "rgba(0,0,0,0.65)", color: "#fff" }}>
-						{i + 1}
+						{r.rtcFrameRole === "first" ? "首帧" : r.rtcFrameRole === "last" ? "尾帧" : i + 1}
 					</span>
 					<button
 						title="移除该素材"
@@ -205,6 +189,8 @@ export function RefStrip({ segId, refs }: { segId: string; refs: FreeGenRef[] })
 			>
 				＋
 			</button>
+			<div style={{ marginLeft: "auto" }}><RtcAdjacentFrameButtons segId={segId}
+				onInsert={(frame, edge) => { setRtcFreeFrameMaterial(segId, edge, frame, owner); }} /></div>
 			<input
 				ref={fileRef}
 				type="file"

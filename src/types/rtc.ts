@@ -163,6 +163,8 @@ export interface RtcSegment {
 	/** 时间轴位置（微秒）——映射草稿 target_timerange.start/duration */
 	targetStartUs: number;
 	targetDurationUs: number;
+	/** RTC 视频生成时长；Auto 跟随本段长度选择目录档位，不改项目/分镜默认值。 */
+	generationDuration?: number | "auto";
 	/** 源素材裁剪窗口（微秒）——映射草稿 source_timerange；placeholder/图片可缺省 */
 	sourceStartUs?: number;
 	sourceDurationUs?: number;
@@ -189,6 +191,10 @@ export interface RtcSegment {
 	progress?: number;
 	/** 关联的生成任务标识（taskId 等，供断连找回/进度回填） */
 	taskRef?: string;
+	/** 已交付的任务凭据，用于保存失败/重开后的幂等结果投递。 */
+	resultTaskRef?: string;
+	/** 已完成但尚待保存/落位的精确产物；自由占位重开时按 taskRef 幂等恢复。 */
+	rtcResult?: import("@/services/projectFile").RtcGenerationResult;
 	/** 版本堆叠：本占位是哪条片段的「重新生成」（指向被参照的原结果片段 id） */
 	originSegId?: string;
 	/** 占位要生成的产物类型（右键新建占位时选定：视频/图片/音频） */

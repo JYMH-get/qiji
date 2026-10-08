@@ -37,13 +37,33 @@ describe('route catalog prices', () => {
   it('shows a zero discount without a minimum charge', () => expect(price({ cost: 9 }, 0).summary).toBe('0'));
 });
 
-describe('video second prices', () => {
+describe('video catalog price units', () => {
   const params: NonNullable<RoutePriceAvailabilityRow['pricing']>['params'] = [
     { key: 'duration', label: '时长', type: 'enum', options: ['4','5','7','15'] },
     { key: 'resolution', label: '分辨率', type: 'enum', options: ['720p','1080p'] },
   ];
   const tiers = (rate: number, resolution: string) => ['4','5','7','15'].map(duration => ({ when: { duration, resolution }, cost: Number(duration) * rate }));
   const video = (pricing: Partial<NonNullable<RoutePriceAvailabilityRow['pricing']>>, discountPercent = 100) => routePrice({ capability: 'video', pricing: { cost: 600, params, ...pricing }, discountPercent })!;
+  it('keeps a fixed 300 credit request price despite selectable video durations', () => {
+    const result = video({ cost: 300, params: [params[0], { ...params[1], options: ['720p'] }] });
+    expect(result.summary).toBe('300'); expect(result.unit).toBe('积分 / 次');
+    expect(result.items).toEqual([{ label: '720p', value: '300' }]);
+    expect(result.notes.join()).not.toContain('折算');
+  });
+  it('preserves fixed resolution prices and excludes a fully covered fallback', () => {
+    const result = video({ costRules: [
+      { when: { resolution: '720p' }, cost: 300 }, { when: { resolution: '1080p' }, cost: 450 },
+    ] });
+    expect(result.summary).toBe('300–450'); expect(result.unit).toBe('积分 / 次');
+    expect(result.items).toEqual([{ label: '720p', value: '300' }, { label: '1080p', value: '450' }]);
+  });
+  it('uses first-match fixed prices, fallback coverage and whole-request discounts', () => {
+    const result = video({ costRules: [
+      { when: { resolution: '720p' }, cost: 301 }, { when: { resolution: '720p' }, cost: 999 },
+    ] }, 50);
+    expect(result.summary).toBe('151–300'); expect(result.unit).toBe('积分 / 次');
+    expect(result.items).toEqual([{ label: '720p', value: '151' }, { label: '1080p', value: '300' }]);
+  });
   it('folds duration tiers by resolution and excludes a fully covered fallback', () => {
     const result = video({ costRules: [...tiers(40,'720p'), ...tiers(80,'1080p')] });
     expect(result.unit).toBe('积分 / 秒'); expect(result.summary).toBe('40–80');
@@ -76,7 +96,7 @@ describe('video second prices', () => {
   });
   it('supports numeric duration fields and a genuine zero price', () => {
     const result = video({ cost: 0, params: [{ key: 'duration', label: '时长', type: 'number', min: 4, max: 15, step: 1 }] });
-    expect(result.summary).toBe('0'); expect(result.unit).toBe('积分 / 秒');
+    expect(result.summary).toBe('0'); expect(result.unit).toBe('积分 / 次');
   });
   it('does not invent seconds for a fixed price without duration data', () => {
     expect(video({ params: [] }).unit).toBe('积分 / 次');

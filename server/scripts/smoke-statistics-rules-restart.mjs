@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+if(!import.meta.url.includes('qiji-line-availability-'))throw Error('Sandbox only');
+globalThis.fetch=async()=>{throw Error('No external network');};
+const fixture=JSON.parse(fs.readFileSync('data/statistics-rules-restart.json','utf8'));
+await import('../src/store/logs.ts');
+const {db,closeSqlite}=await import('../src/store/sqlite.ts');
+const rules=await import('../src/store/modelStatisticsRules.ts');
+assert.deepEqual(rules.getStatisticsRules('fixture-b'),fixture.keep);
+assert.deepEqual(rules.getStatisticsRules('fixture-a'),fixture.replacement);
+assert.equal(db.prepare('SELECT COUNT(*) AS n FROM model_statistics_rule_audit').get().n,fixture.audit);
+assert.equal(rules.projectModelStatistics({modelId:'fixture-a',modelCreatedAt:fixture.oldIdentity,status:'failed'}).status,'failed');
+assert.equal(db.prepare("SELECT json_extract(data,'$.errorEvidence') AS evidence FROM channel_observations WHERE json_extract(data,'$.errorEvidence')='bulk original'").get().evidence,'bulk original');
+console.log('STATISTICS_RULE_RESTART 5 checks passed');
+(await import('../src/store/db.ts')).flushPendingSaves();closeSqlite();

@@ -1,9 +1,13 @@
 import { useDualModeFeature } from '@/store/connectionStore';
 import { supportsOfficialMaterials } from "@/services/materialPolicy";
 import { InferenceStrategyPicker, StoryGuidanceButton } from '@/components/InferenceStrategyPicker';
-import { inferenceDurationLimit, inferenceDurationRangeError, normalInferenceStrategy, resolveSplitTemplate, resolveStrategyTemplate, type InferenceStrategy } from '@/lib/inferenceStrategy';
+import { InferenceDurationPicker } from '@/components/InferenceDurationPicker';
+import { inferenceDurationLimit, projectInferenceDuration, normalInferenceStrategy, resolveSplitTemplate, resolveStrategyTemplate, type InferenceStrategy } from '@/lib/inferenceStrategy';
 import { useEffect, useMemo, useRef, useState } from "react";
 import EditorHeader from "@/components/EditorHeader";
+import ProjectGenerationSummary from "@/components/ProjectGenerationSummary";
+import { GenerationCost, useGenerationCosts } from "@/components/GenerationCost";
+import type { GenerationCostRequest } from "@/lib/generationCost";
 import EditorSidebar from "@/components/EditorSidebar";
 import { useProjectStore } from "@/store/projectStore";
 import { confirmDialog } from "@/lib/confirmDialog";
@@ -20,7 +24,6 @@ import ModelPicker, { effectiveModelKey, useEffectiveModelKey, useCapModelOption
 import { useCatalogStore } from "@/store/catalogStore";
 import { getAssetVideoFeature, useAssetVideoFeature, useModeFeatures } from "@/store/connectionStore";
 import { useScrollSnapshot } from "@/hooks/useScrollSnapshot";
-import type { Capability } from "@/contract";
 import type { ShotMaterial, StoryboardShot, MediaSettings, VideoDerivedRecord } from "@/services/projectFile";
 import { BADGE_BG, TAG_BADGE, materialTags, mediaFromMime, mediaOf, buildLegend, withLegend } from "@/lib/shotMaterials";
 import { buildAssetListVars } from "@/lib/assetVars";
@@ -48,11 +51,13 @@ import PromptMentionEditor from "@/components/PromptMentionEditor";
 import type { PromptMentionHandle } from "@/components/PromptMentionEditor";
 import HighlightEditable from "@/components/HighlightEditable";
 import { openLightbox } from "@/store/lightboxStore";
+import { openShotMaterialLightbox } from "@/lib/shotMaterialLightbox";
 import { captureFromUri, probeVideoDuration } from "@/canvas/videoCapture";
 import { aliasTerms, matchAssetsInText, stripLegendForMatch } from "@/lib/assetMatch";
 import { saveUriToLocal } from "@/lib/saveMedia";
 // 本地 CLI 模型（LibTV/即梦，非 catalog）在标题栏显示实名（清单与模型下拉注入同源）
-import { familyFirstSelection, modelForLine, LOCAL_MODEL_LABELS, sourceValueOf, modelFamilies, familyOf, modelForFamily, channelOf } from "@/services/adapters/localChannels";
+import { familyFirstSelection, modelForLine, sourceValueOf, modelFamilies, familyOf, modelForFamily, channelOf } from "@/services/adapters/localChannels";
+import { RouteSelect } from "@/components/RouteSelect";
 import "@/styles/Frame161195.css";
 
 function isTauri(): boolean {
@@ -102,6 +107,7 @@ function highlightSegment(text: string, terms: string[]): React.ReactNode {
 }
 
 const Frame161195 = () => {
+    const materialOwner = useProjectStore((s) => s.projectInstanceId);
     const episodes = useProjectStore((s) => s.episodes);
     const characters = useProjectStore((s) => s.characters);
     const scenes = useProjectStore((s) => s.scenes);
@@ -127,6 +133,7 @@ const Frame161195 = () => {
     const canvasSend = resolveCanvasSendSettings(ms.canvasSend);
     const setMS = (patch: Partial<MediaSettings>) => useProjectStore.getState().setMediaSettings(patch);
     const maxDuration = ms.maxDuration ?? 15;
+    const inferDuration = projectInferenceDuration(ms);
     const shotCount = ms.shotCount ?? 0;            // 0 = 自动
     const resolution = ms.resolution ?? "720p";
     const aspect = ms.aspect ?? "16:9";
@@ -135,6 +142,7 @@ const Frame161195 = () => {
     const imageAspect = ms.imageAspect ?? "16:9";
     // 分辨率档由服务端按当前生效图像模型下发（catalog params.resolution 枚举，管理端可改），
     // 已存选择不在开放集时归一到第一档（本文件历史用大写档名 "2K"，clampImageResolution 大小写不敏感）
+    const textModelKey = useEffectiveModelKey("text");
     const sbImgModelKey = useEffectiveModelKey("image");
     // ⚠ sbModels 订阅保留：modelOptions 内部读 getState()（非响应式），靠本订阅在 catalog 热更时重渲染取到新档位
     const sbModels = useCatalogStore((s) => s.catalog?.models);
@@ -161,7 +169,9 @@ const Frame161195 = () => {
         if (strategy.source === 'skill' ? !strategy.skillText?.trim() : !strategyTemplate) { alert(strategy.source === 'skill' ? '请先导入或填写外部 Skills 内容' : '请选择可用的推理方案'); return false; }
         return true;
     };
-    const inferenceInput = (guidance?: string, duration = maxDuration) => ({ source: strategy.source ?? 'template' as const, skillText: strategy.skillText, skillName: strategy.skillName, guidance: [strategy.guidance, guidance].filter(Boolean).join('\n\n'), durationLimit: inferenceDurationLimit(duration) });
+    const strategyInput = (guidance?: string) => ({ source: strategy.source ?? 'template' as const, skillText: strategy.skillText, skillName: strategy.skillName, guidance: [strategy.guidance, guidance].filter(Boolean).join('\n\n') });
+    // 单镜维持本镜显式时长语义；整集范围独立于视频生成的 maxDuration。
+    const singleInferenceInput = (guidance: string | undefined, duration: number) => ({ ...strategyInput(guidance), durationLimit: inferenceDurationLimit(duration) });
     const pickInferTpl = (patch: Partial<MediaSettings>, tplId: string) => {
         const a = aspectFromName(catTemplates?.find((t) => t.id === tplId)?.name);
         setMS(a ? { ...patch, imageAspect: a, aspect: a } : patch);
@@ -248,16 +258,6 @@ const Frame161195 = () => {
         window.addEventListener("mouseup", onUp);
     };
 
-    // 标题栏当前模型信息（仅显示）
-    const catalogModels = useCatalogStore((s) => s.catalog?.models);
-    useProjectStore((s) => s.projectModelConfig); // 订阅：模型切换后标题栏即时刷新
-    const modelLabel = (cap: Capability) => {
-        const id = effectiveModelKey(cap);
-        return catalogModels?.find((m) => m.id === id)?.label || LOCAL_MODEL_LABELS[id] || id || "未选";
-    };
-    // 顶部信息栏文案（#7）：画质中文 + 垫图形式
-    const QUALITY_LABEL: Record<string, string> = { low: "低画质", medium: "中画质", high: "高画质", auto: "自动画质" };
-    const matFormLabel = genWithAsset && genWithStory ? "资产+故事板" : genWithAsset ? "资产" : genWithStory ? "故事板" : "无";
     // 故事板/视频在途任务持久化在 projectStore.pendingGens（切页/重启不丢，凭 taskId 找回）。
     // 历史区占位符与失败均由它驱动（按 shot.shotId + field 过滤）。
     const pendingGens = useProjectStore((s) => s.pendingGens);
@@ -324,6 +324,30 @@ const Frame161195 = () => {
     }, [episodes, selectedId]);
 
     const activeEp = episodes.find((e) => e.id === selectedId) || null;
+    const storyboardCostRequest: GenerationCostRequest = {
+        modelKey: sbImgModelKey,
+        params: buildImageParams({ aspect: imageAspect, resolution: imageResolution, quality: imageQuality }),
+    };
+    const videoCostRequest = (shot: StoryboardShot): GenerationCostRequest => {
+        const ov = shot.overrides || {};
+        const modelKey = ov.videoModelKey || vidModelKey;
+        const req = videoReqOptionsForKey(modelKey);
+        const methods = modelMethodsForKey(modelKey);
+        return {
+            modelKey,
+            params: {
+                duration: clampDurationTo(ov.duration || shot.durationSec || maxDuration, req.durations),
+                resolution: clampToOptions(ov.resolution || resolution, req.resolutions),
+                aspect_ratio: clampToOptions(ov.aspect || aspect, req.aspects),
+                ...(methods.length > 1 ? { method: clampMethod(ov.method || ms.videoMethod, methods) } : {}),
+            },
+            refVideoUris: genWithAsset ? shot.materials.filter(m => mediaOf(m) === "video").map(m => m.uri) : [],
+        };
+    };
+    const storyboardBatchCost = useGenerationCosts([{ ...storyboardCostRequest, count: activeEp?.shots.length ?? 0 }]);
+    const videoBatchCost = useGenerationCosts((activeEp?.shots ?? []).map(videoCostRequest));
+    const oddVideoBatchCost = useGenerationCosts((activeEp?.shots ?? []).filter((_, i) => i % 2 === 0).map(videoCostRequest));
+
 
     // 选中分集变更 → 写入快照（跳过首帧初值回写）
     const firstEpRef = useRef(true);
@@ -585,15 +609,20 @@ const Frame161195 = () => {
         if (!splitTemplate) { alert("当前没有可用的拆分方案"); return; }
         const outputPurpose = sameSource ? 'storyboard.unified' : 'storyboard.toVideoPrompt';
         if (!available.some(t => t.id === `output.${outputPurpose}` && t.purpose === outputPurpose && t.category === '输出提示词')) { alert("当前输出格式不可用"); return; }
-        const durationRange = { min: 4, max: maxDuration };
-        const durationError = inferenceDurationRangeError(durationRange);
-        if (durationError) { alert(durationError); return; }
-        if (activeEp.shots.length > 0 && !(await confirmDialog("当前分集已有分镜，重新拆分将删除现有分镜并重新生成。继续？"))) return;
+        if (inferDuration.durationError || !inferDuration.durationRange) { alert(inferDuration.durationError || "请输入有效时长"); return; }
+        const { durationRange, durationLimit } = inferDuration;
+        const owner = useProjectStore.getState().projectInstanceId;
         const epId = activeEp.id;
-        const scriptText = activeEp.scriptText;
+        const inference = { source: 'template' as const, outputMode: sameSource ? 'unified' as const : 'storyboard' as const, durationRange: { ...durationRange }, durationLimit, guidance: strategy.guidance };
+        const variables = { 原文: activeEp.scriptText, 视觉风格: useProjectStore.getState().visualStyle || "", ...buildAssetListVars() };
+        const modelKey = effectiveModelKey("text") || undefined;
+        if (activeEp.shots.length > 0 && !(await confirmDialog("当前分集已有分镜，重新拆分将删除现有分镜并重新生成。继续？"))) return;
         const { startInfer } = await import("@/services/inferRun");
-        useProjectStore.getState().setEpisodeShots(epId, []); // 覆盖：清空整集（拆分中 → 视图自动切到分镜表格，边出边填）
-        startInfer({ episodeId: epId, mode: "split", sameSource, templateId: splitTemplate.id, inference: { source: 'template', outputMode: sameSource ? 'unified' : 'storyboard', durationRange, guidance: strategy.guidance }, variables: { 原文: scriptText, 视觉风格: useProjectStore.getState().visualStyle || "", ...buildAssetListVars() }, modelKey: effectiveModelKey("text") || undefined });
+        const current = useProjectStore.getState();
+        if (current.projectInstanceId !== owner || current.isProjectLoading || !current.episodes.some(ep => ep.id === epId)
+            || current.inferTasks.some(task => task.episodeId === epId && task.mode !== "single" && task.status === "running")) return;
+        current.setEpisodeShots(epId, []); // 所有校验与异步准备完成后才覆盖旧分镜。
+        startInfer({ episodeId: epId, mode: "split", sameSource, templateId: splitTemplate.id, inference, variables, modelKey });
     };
 
     // 智能推理（多镜）：本集原文 → 一次产出每卡的 原文 + 故事板提示词 + 视频提示词（流式增量——出一卡显示一卡）。
@@ -603,14 +632,22 @@ const Frame161195 = () => {
         if (!activeEp.scriptText.trim()) { alert("请先填写本集剧本内容（在「原文拆分」区粘贴本集剧本）"); return; }
         if (epLocked(activeEp.id)) return; // 智能推理/智能拆分任一在跑 → 锁定，禁止二次点击（防并发冲突）
         if (!validStrategy()) return;
-        if (activeEp.shots.length > 0 && !(await confirmDialog("当前分集已有分镜，智能推理将删除当前提示词并覆盖。继续？"))) return;
+        if (inferDuration.durationError || !inferDuration.durationRange) { alert(inferDuration.durationError || "请输入有效时长"); return; }
+        const { durationRange, durationLimit } = inferDuration;
+        const owner = useProjectStore.getState().projectInstanceId;
         const epId = activeEp.id;
-        const scriptText = activeEp.scriptText;
-        useProjectStore.getState().setEpisodeShots(epId, []); // 覆盖：清空整集（推理中 → 视图自动切到分镜表格，边出边填）
-        const { startInfer } = await import("@/services/inferRun");
-        // 创作方案独立于输出模式；本集入口固定多卡。
         const mtpl = strategy.source === 'skill' ? '' : strategyTemplate!.id;
-        startInfer({ episodeId: epId, mode: "multi", sameSource, templateId: mtpl, inference: inferenceInput(), variables: { 原文: scriptText, 视觉风格: useProjectStore.getState().visualStyle || "", ...buildAssetListVars() }, modelKey: effectiveModelKey("text") || undefined });
+        const inference = { ...strategyInput(), durationRange: { ...durationRange }, durationLimit };
+        const variables = { 原文: activeEp.scriptText, 视觉风格: useProjectStore.getState().visualStyle || "", ...buildAssetListVars() };
+        const modelKey = effectiveModelKey("text") || undefined;
+        if (activeEp.shots.length > 0 && !(await confirmDialog("当前分集已有分镜，智能推理将删除当前提示词并覆盖。继续？"))) return;
+        const { startInfer } = await import("@/services/inferRun");
+        const current = useProjectStore.getState();
+        if (current.projectInstanceId !== owner || current.isProjectLoading || !current.episodes.some(ep => ep.id === epId)
+            || current.inferTasks.some(task => task.episodeId === epId && task.mode !== "single" && task.status === "running")) return;
+        current.setEpisodeShots(epId, []); // 所有校验与异步准备完成后才覆盖旧分镜。
+        // 创作方案独立于输出模式；本集入口固定多卡。
+        startInfer({ episodeId: epId, mode: "multi", sameSource, templateId: mtpl, inference, variables, modelKey });
     };
 
     // ① 单卡智能推理：对单个分镜使用当前创作方案，按同源开关产出对应提示词。
@@ -627,7 +664,7 @@ const Frame161195 = () => {
         const freshShots = useProjectStore.getState().episodes.find((e) => e.id === activeEp.id)?.shots ?? [];
         // 逐镜入口固定单卡，复用相同的创作方案。
         const stpl = strategy.source === 'skill' ? '' : strategyTemplate!.id;
-        startInfer({ episodeId: activeEp.id, mode: "single", sameSource, shotId: shot.id, templateId: stpl, inference: inferenceInput(shot.plotGuidance, shot.overrides?.duration ?? shot.durationSec ?? maxDuration), variables: { 原文: text, 视觉风格: useProjectStore.getState().visualStyle || "", ...buildAssetListVars(), ...buildNeighborVars(freshShots, shot.id, sameSource) }, modelKey: effectiveModelKey("text") || undefined });
+        startInfer({ episodeId: activeEp.id, mode: "single", sameSource, shotId: shot.id, templateId: stpl, inference: singleInferenceInput(shot.plotGuidance, shot.overrides?.duration ?? shot.durationSec ?? maxDuration), variables: { 原文: text, 视觉风格: useProjectStore.getState().visualStyle || "", ...buildAssetListVars(), ...buildNeighborVars(freshShots, shot.id, sameSource) }, modelKey: effectiveModelKey("text") || undefined });
     };
 
     // ── 向上/下拆（按换行行在相邻大分镜间迁移）──
@@ -1314,7 +1351,7 @@ const Frame161195 = () => {
                 ".qj-ep-row:hover .qj-ep-actions{opacity:1}",
             ].join("")}</style>
             <div id="16_1195" className="Pixso-frame-16_1195">
-                <EditorHeader title="分镜配置" />
+                <EditorHeader title="分镜配置" centerContent={<ProjectGenerationSummary showVideo={assetVideoEnabled} />} />
                 <div style={{ display: "flex", width: "100%", height: "calc(100% - 56px)", overflow: "hidden" }}>
                     <EditorSidebar activeTab="视频" />
 
@@ -1373,25 +1410,28 @@ const Frame161195 = () => {
                         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
                             <button style={{ ...toolBtn, alignSelf: "center", ...lockedStyle(activeEp?.id) }} disabled={!activeEp || epLocked(activeEp?.id)} onClick={handleSmartInfer}>
                                 {epBusyLabel(activeEp?.id) ?? "智能推理"}
+                                {!epBusyLabel(activeEp?.id) && <GenerationCost modelKey={textModelKey} />}
                             </button>
                             {epInferError(activeEp?.id) && <span style={{ fontSize: 12, color: "#f8c8c8", alignSelf: "center" }} title={epInferError(activeEp?.id)}>推理失败，请重试</span>}
                             <button style={{ ...ghostBtn, alignSelf: "center", ...lockedStyle(activeEp?.id) }} disabled={!activeEp || epLocked(activeEp?.id)} onClick={handleSplit}>
                                 {epBusyLabel(activeEp?.id) ?? (activeEp?.shots.length ? "重新拆分" : "仅拆分")}
+                                {!epBusyLabel(activeEp?.id) && <GenerationCost modelKey={textModelKey} />}
                             </button>
                             {epSplitError(activeEp?.id) && <span style={{ fontSize: 12, color: "#f8c8c8", alignSelf: "center" }} title={epSplitError(activeEp?.id)}>拆分失败，请重试</span>}
                             <InferenceStrategyPicker value={strategy} onChange={setStrategy} />
+                            {activeEp && (activeEp.shots.length > 0 || epLocked(activeEp.id)) && <InferenceDurationPicker value={inferDuration} onChange={setMS} disabled={epLocked(activeEp.id)} />}
                             <button style={{ ...ghostBtn, alignSelf: "center" }} disabled={!activeEp} onClick={handleMatchAll}>一键提取资产</button>
-                            <button style={{ ...ghostBtn, alignSelf: "center" }} disabled={!activeEp} onClick={() => runAll(genStoryboard)}>一键故事板</button>
+                            <button style={{ ...ghostBtn, alignSelf: "center" }} disabled={!activeEp} onClick={() => runAll(genStoryboard)}>一键故事板<GenerationCost cost={storyboardBatchCost} /></button>
                             {assetVideoEnabled && <div style={{ position: "relative", alignSelf: "center" }}>
-                                <button style={{ ...ghostBtn, alignSelf: "center" }} disabled={!activeEp} onClick={() => setGenVideoMenu((v) => !v)}>一键视频 ▾</button>
+                                <button style={{ ...ghostBtn, alignSelf: "center" }} disabled={!activeEp} onClick={() => setGenVideoMenu((v) => !v)}>一键视频<GenerationCost cost={videoBatchCost} /> ▾</button>
                                 {genVideoMenu && (
                                     <>
                                         <div onClick={() => setGenVideoMenu(false)} style={{ position: "fixed", inset: 0, zIndex: 49 }} />
                                         <div style={{ position: "absolute", zIndex: 50, top: "100%", left: 0, marginTop: 6, minWidth: 160, padding: 6, borderRadius: 8, border: "1px solid rgba(255,255,255,0.12)", background: "#161b26", boxShadow: "0 8px 24px rgba(0,0,0,0.5)" }}>
                                             <div onClick={() => handleGenAllVideos("all")} style={{ padding: "8px 10px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}
-                                                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>全部生成</div>
+                                                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>全部生成<GenerationCost cost={videoBatchCost} /></div>
                                             <div onClick={() => handleGenAllVideos("odd")} style={{ padding: "8px 10px", borderRadius: 6, cursor: "pointer", fontSize: 12 }}
-                                                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>奇数生成（第1、3、5…镜）</div>
+                                                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.06)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>奇数生成（第1、3、5…镜）<GenerationCost cost={oddVideoBatchCost} /></div>
                                         </div>
                                     </>
                                 )}
@@ -1407,18 +1447,7 @@ const Frame161195 = () => {
                                 </button>
                             )}
 
-                            {/* 标题栏当前模型信息（仅显示）：模型 + 比例/画质/分辨率 + 垫图形式（去标题、精简） */}
-                            <div style={{ flex: 1, minWidth: 0, display: "flex", justifyContent: "center", alignItems: "center", gap: 12, fontSize: 12, color: "rgba(255,255,255,0.5)", overflow: "hidden", whiteSpace: "nowrap" }}>
-                                <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}><b style={{ color: "#c4b5fd", fontWeight: 600 }}>{modelLabel("text")}</b></span>
-                                <span style={{ color: "rgba(255,255,255,0.15)" }}>·</span>
-                                <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}><b style={{ color: "#c4b5fd", fontWeight: 600 }}>{modelLabel("image")}</b><span style={{ color: "rgba(255,255,255,0.4)" }}> {imageAspect} {QUALITY_LABEL[imageQuality] || imageQuality}</span></span>
-                                {assetVideoEnabled && <>
-                                <span style={{ color: "rgba(255,255,255,0.15)" }}>·</span>
-                                <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}><b style={{ color: "#c4b5fd", fontWeight: 600 }}>{modelLabel("video")}</b><span style={{ color: "rgba(255,255,255,0.4)" }}> {aspect} {resolution}</span></span>
-                                <span style={{ color: "rgba(255,255,255,0.15)" }}>·</span>
-                                <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}><b style={{ color: "#c4b5fd", fontWeight: 600 }}>{matFormLabel}</b></span>
-                                </>}
-                            </div>
+                            <div style={{ flex: 1 }} />
 
                             {videoTableTemplates.length > 0 && (
                                 <select
@@ -1594,14 +1623,17 @@ const Frame161195 = () => {
                                         <div style={{ minWidth: 200 }}>
                                             <InferenceStrategyPicker value={strategy} onChange={setStrategy} />
                                         </div>
+                                        <InferenceDurationPicker value={inferDuration} onChange={setMS} disabled={epLocked(activeEp.id)} />
                                         <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", color: "rgba(255,255,255,0.8)", fontSize: 12, alignSelf: "flex-end", paddingBottom: 8 }} title="图片与视频共用同一段提示词（同源）">
                                             <input type="checkbox" checked={sameSource} disabled={!dualModeEnabled} onChange={(e) => setMS({ imgVideoSameSource: e.target.checked })} />图视同源
                                         </label>
                                         <button style={{ ...toolBtn, alignSelf: "flex-end", ...lockedStyle(activeEp.id) }} disabled={epLocked(activeEp.id)} onClick={handleSmartInfer}>
                                             {epBusyLabel(activeEp.id) ?? "智能推理"}
+                                            {!epBusyLabel(activeEp.id) && <GenerationCost modelKey={textModelKey} />}
                                         </button>
                                         <button style={{ ...ghostBtn, alignSelf: "flex-end", ...lockedStyle(activeEp.id) }} disabled={epLocked(activeEp.id)} onClick={handleSplit}>
                                             {epBusyLabel(activeEp.id) ?? (activeEp.shots.length ? "重新拆分" : "仅拆分")}
+                                            {!epBusyLabel(activeEp.id) && <GenerationCost modelKey={textModelKey} />}
                                         </button>
                                     </div>
                                     {epInferError(activeEp.id) && <span style={{ fontSize: 12, color: "#f8c8c8" }}>上次推理失败：{epInferError(activeEp.id)}</span>}
@@ -1672,7 +1704,7 @@ const Frame161195 = () => {
                                                         <button style={colBtn} onClick={() => addShotAt(idx, "below")}>下增</button>
                                                     </div>
                                                     <button style={colBtn} onClick={() => handleMatchOne(shot)}>提取资产</button>
-                                                    <button style={colBtn} title="对本分镜单卡推理：一次产出本镜的 故事板提示词 + 视频提示词" disabled={shotInferring(shot.id)} onClick={() => inferShot(shot)}>{shotInferring(shot.id) ? "推理中…" : "智能推理"}</button>
+                                                    <button style={colBtn} title="对本分镜单卡推理：一次产出本镜的 故事板提示词 + 视频提示词" disabled={shotInferring(shot.id)} onClick={() => inferShot(shot)}>{shotInferring(shot.id) ? "推理中…" : <>智能推理<GenerationCost modelKey={textModelKey} /></>}</button>
                                                     <StoryGuidanceButton key={shot.id} value={shot.plotGuidance} onChange={plotGuidance => update(shot.id, { plotGuidance })} disabled={shotInferring(shot.id)} />
                                                     <button style={{ ...colBtn, color: "#f8c8c8", marginTop: "auto" }} onClick={() => { void (async () => { if (await confirmDialog(`删除${shot.title || "本分镜"}？`)) commitShots(activeEp.shots.filter((x) => x.id !== shot.id)); })(); }}>删除分镜</button>
                                                 </div>
@@ -1723,7 +1755,7 @@ const Frame161195 = () => {
                                                                     onDragEnd={() => { dragMat.current = null; }}
                                                                     onDragOver={(e) => { if (dragMat.current && dragMat.current.shotId === shot.id && dragMat.current.matId !== m.id) { e.preventDefault(); e.stopPropagation(); } }}
                                                                     onDrop={(e) => { if (dragMat.current && dragMat.current.shotId === shot.id) { e.preventDefault(); e.stopPropagation(); reorderMaterials(shot, dragMat.current.matId, m.id); dragMat.current = null; } }}
-                                                                    onDoubleClick={() => m.uri && openLightbox({ uri: m.uri, media: md, name: m.name })}
+                                                                    onDoubleClick={() => openShotMaterialLightbox(activeEp.id, shot.id, m.id, { owner: materialOwner })}
                                                                     onContextMenu={(e) => { e.preventDefault(); removeMaterial(shot, m.id); }}
                                                                     style={{ position: "relative", width: 40, height: 40, borderRadius: 6, overflow: "hidden", border: (matError[m.id] || bad) ? "1px solid #f87171" : "1px solid rgba(255,255,255,0.12)", background: matError[m.id] ? "rgba(248,113,113,0.18)" : "rgba(255,255,255,0.05)", cursor: m.uri ? "grab" : "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: "var(--muted-foreground)", textAlign: "center" }}>
                                                                     {matError[m.id] ? <span style={{ color: "#f87171", fontSize: 18, fontWeight: 700 }}>✕</span>
@@ -1818,10 +1850,8 @@ const Frame161195 = () => {
                                                         </select>
                                                         {/* 线路（当前家族） */}
                                                         {lineSelection.channels.length > 0 && (
-                                                            <select title="线路（仅本分镜）" value={lineSelection.current ? sourceValueOf(curVideoModel, lineSelection.channels) : ""} onChange={(e) => setShotVideoModel(shot, modelForLine(e.target.value, curVideoModel, videoFamilies))} style={miniSel}>
-                                                                {!lineSelection.current && <option value="" style={miniOpt}>选择线路</option>}
-                                                                {lineSelection.channels.map((ch) => <option key={ch.channel} value={`src:${ch.channel}`} style={miniOpt}>{ch.channel}</option>)}
-                                                            </select>
+                                                            <RouteSelect title="线路（仅本分镜）" value={lineSelection.current ? sourceValueOf(curVideoModel, lineSelection.channels) : ""} onChange={(line) => setShotVideoModel(shot, modelForLine(line, curVideoModel, videoFamilies))} style={{ ...miniSel, maxWidth: 170 }}
+                                                                options={lineSelection.channels.map(ch => ({ value: `src:${ch.channel}`, label: ch.channel, modelKey: modelForLine(`src:${ch.channel}`, curVideoModel, videoFamilies) }))} />
                                                         )}
                                                         {/* 模型（本线路内的款式） */}
                                                         {curSrcCh && !curSrcCh.modelAsLine && !curVideoModel.startsWith("route:") && (
@@ -1850,7 +1880,7 @@ const Frame161195 = () => {
                                                             title={sameSource ? "编辑同源提示词" : tab === "storyboard" ? "编辑故事板提示词" : "编辑视频提示词"}
                                                             getValue={() => promptVal}
                                                             onSave={(v) => update(shot.id, promptPatch(v))}
-                                                            getExtra={() => <ShotMaterialStrip episodeId={activeEp.id} shotId={shot.id} identityEnabled={supportsOfficialMaterials(curCatModel)} />}
+                                                            getExtra={(api) => <ShotMaterialStrip episodeId={activeEp.id} shotId={shot.id} identityEnabled={supportsOfficialMaterials(curCatModel)} promptApi={api} />}
                                                             getMentions={() => {
                                                                 const mats = useProjectStore.getState().episodes.find((e) => e.id === activeEp.id)?.shots.find((s) => s.id === shot.id)?.materials ?? [];
                                                                 const tg = materialTags(mats);
@@ -1981,7 +2011,7 @@ const Frame161195 = () => {
                                                                     {jobChips(`sb-${shot.id}`)}
                                                                 </>}
                                                         </div>
-                                                        <button style={{ ...colBtn, width: "auto", whiteSpace: "nowrap" }} onClick={() => genStoryboard(shot)}>生成</button>
+                                                        <button style={{ ...colBtn, width: "auto", whiteSpace: "nowrap" }} onClick={() => genStoryboard(shot)}>生成<GenerationCost {...storyboardCostRequest} /></button>
                                                     </div>
                                                 </div>
 
@@ -2040,7 +2070,7 @@ const Frame161195 = () => {
                                                                     {jobChips(`vid-${shot.id}`)}
                                                                 </>}
                                                         </div>
-                                                        <button style={{ ...colBtn, width: "auto", whiteSpace: "nowrap" }} onClick={() => genVideo(shot)}>生成</button>
+                                                        <button style={{ ...colBtn, width: "auto", whiteSpace: "nowrap" }} onClick={() => genVideo(shot)}>生成<GenerationCost {...videoCostRequest(shot)} /></button>
                                                     </div>
                                                 </div>}
 

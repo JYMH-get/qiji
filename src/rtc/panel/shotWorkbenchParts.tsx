@@ -14,10 +14,14 @@
  * 的 resolvePresets / 上游 @tag 注入）；放大弹窗「匹配资产」永远委托宿主（第108轮）。
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
+import { ChevronDown } from "lucide-react";
 import { useProjectStore } from "@/store/projectStore";
 import { recallPendingGeneration, subscribeJobProgress, jobProgressVersion, getJobProgress } from "@/services/generationQueue";
 import { PromptExpandButton } from "@/components/PromptExpandButton";
 import PromptMentionEditor, { type PromptMentionHandle } from "@/components/PromptMentionEditor";
+import { promptMediaDropHandlers } from "@/lib/promptMediaDrop";
+import { shotPromptMediaDrop } from "./rtcPromptDrop";
 import { AssetImportDropdown } from "@/components/AssetImportDropdown";
 import { openLightbox } from "@/store/lightboxStore";
 import { progressLabel } from "@/lib/queueLabel";
@@ -167,7 +171,7 @@ export function WorkbenchRefColumn({ top, bottom }: { top: React.ReactNode; bott
  *   parts.presetBtn / parts.expandBtn 是本栏位已接好线的 ▦预设按钮与放大按钮（下拉/弹窗仍由本组件承载），
  *   调用方只负责把它们摆进自己的行布局；presetLabel 定制预设按钮文案（缺省「▦ 预设」）。
  */
-export function ShotPromptField({ episodeId, shotId, fieldKey, label, shot, presetSchemes, inferring, editorMinHeight = 92, renderHeader, presetLabel = "▦ 预设", fill = false }: {
+export function ShotPromptField({ episodeId, shotId, fieldKey, label, shot, presetSchemes, inferring, editorMinHeight = 92, renderHeader, presetLabel = "▦ 预设", presetVariant = "compact", fill = false }: {
 	episodeId: string;
 	shotId: string;
 	fieldKey: ShotPromptFieldKey;
@@ -178,22 +182,56 @@ export function ShotPromptField({ episodeId, shotId, fieldKey, label, shot, pres
 	editorMinHeight?: number | string;
 	renderHeader?: (parts: { presetBtn: React.ReactNode; expandBtn: React.ReactNode }) => React.ReactNode;
 	presetLabel?: string;
+	presetVariant?: "compact" | "pill";
 	fill?: boolean;
 }) {
 	const editorRef = useRef<PromptMentionHandle | null>(null);
 	const [mention, setMention] = useState<{ x: number; y: number; viaAt: boolean } | null>(null);
 	const [importPos, setImportPos] = useState<{ x: number; y: number } | null>(null);
 	const [presetPos, setPresetPos] = useState<{ x: number; y: number } | null>(null);
+	const presetButtonRef = useRef<HTMLButtonElement>(null);
+	const presetMenuRef = useRef<HTMLDivElement>(null);
+	const presetKeyboardOpen = useRef(false);
+	useEffect(() => {
+		if (!presetPos) return;
+		if (presetKeyboardOpen.current) presetMenuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+		const outside = (event: PointerEvent | FocusEvent) => {
+			const node = event.target as Node;
+			if (!presetButtonRef.current?.contains(node) && !presetMenuRef.current?.contains(node)) setPresetPos(null);
+		};
+		const keydown = (event: KeyboardEvent) => {
+			if (event.key === "Escape") { event.preventDefault(); setPresetPos(null); presetButtonRef.current?.focus(); }
+		};
+		const reposition = (event: Event) => {
+			if (!(event.target instanceof Node) || !presetMenuRef.current?.contains(event.target)) setPresetPos(null);
+		};
+		document.addEventListener("pointerdown", outside);
+		document.addEventListener("focusin", outside);
+		document.addEventListener("keydown", keydown);
+		window.addEventListener("resize", reposition);
+		window.addEventListener("scroll", reposition, true);
+		return () => {
+			document.removeEventListener("pointerdown", outside);
+			document.removeEventListener("focusin", outside);
+			document.removeEventListener("keydown", keydown);
+			window.removeEventListener("resize", reposition);
+			window.removeEventListener("scroll", reposition, true);
+		};
+	}, [presetPos]);
 	const update = (patch: Partial<StoryboardShot>) => useProjectStore.getState().updateShot(episodeId, shotId, patch);
 	const live = () => useProjectStore.getState().episodes.find((e) => e.id === episodeId)?.shots.find((x) => x.id === shotId);
 	const matTags = materialTags(shot.materials);
+	const onMediaDrop = shotPromptMediaDrop(episodeId, shotId, fieldKey);
 
 	const presetBtn = presetSchemes.length > 0 ? (
 		<button
+			type="button" ref={presetButtonRef} aria-expanded={!!presetPos} aria-haspopup="dialog"
 			title="插入出图预设方案（提交时替换为完整预设词；双击胶囊可展开为可编辑文本）"
-			onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setPresetPos(presetPos ? null : { x: r.left, y: r.bottom }); }}
-			style={{ padding: renderHeader ? "3px 8px" : "2px 7px", fontSize: renderHeader ? 11 : 10.5, cursor: "pointer", borderRadius: 6, border: "1px solid rgba(245,158,11,0.4)", background: presetPos ? "rgba(245,158,11,0.22)" : "rgba(245,158,11,0.12)", color: "#fcd34d" }}>
+			onMouseDown={(e) => e.preventDefault()}
+			onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); presetKeyboardOpen.current = e.detail === 0; setPresetPos(presetPos ? null : { x: r.left, y: r.bottom }); }}
+			style={{ padding: presetVariant === "pill" ? "6px 12px" : renderHeader ? "3px 8px" : "2px 7px", fontSize: presetVariant === "pill" ? 12 : renderHeader ? 11 : 10.5, cursor: "pointer", borderRadius: presetVariant === "pill" ? 999 : 6, border: "1px solid rgba(245,158,11,0.4)", background: presetPos ? "rgba(245,158,11,0.22)" : "rgba(245,158,11,0.12)", color: "#fcd34d", ...(presetVariant === "pill" ? { height: 32, display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 600, whiteSpace: "nowrap" } : {}) }}>
 			{presetLabel}
+			{presetVariant === "pill" && <ChevronDown size={12} aria-hidden="true" />}
 		</button>
 	) : null;
 	const expandBtn = (
@@ -202,7 +240,8 @@ export function ShotPromptField({ episodeId, shotId, fieldKey, label, shot, pres
 			getValue={() => live()?.[fieldKey] || ""}
 			onSave={(v) => update({ [fieldKey]: v })}
 			size={11}
-			getExtra={() => <RtcMaterialStrip episodeId={episodeId} shotId={shotId} />}
+			getExtra={(api) => <RtcMaterialStrip episodeId={episodeId} shotId={shotId} promptApi={api} />}
+			onMediaDrop={onMediaDrop}
 			getMentions={() => {
 				const mats = live()?.materials ?? [];
 				const tg = materialTags(mats);
@@ -226,6 +265,7 @@ export function ShotPromptField({ episodeId, shotId, fieldKey, label, shot, pres
 					</span>
 				</div>
 			)}
+			<div {...promptMediaDropHandlers(onMediaDrop)} style={{ display: "flex", flexDirection: "column", ...(fill ? { flex: 1, minHeight: 0 } : {}) }}>
 			<PromptMentionEditor
 				ref={(h) => { editorRef.current = h; }}
 				value={shot[fieldKey] || ""}
@@ -245,6 +285,7 @@ export function ShotPromptField({ episodeId, shotId, fieldKey, label, shot, pres
 					width: "100%", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, color: "#fff", fontSize: 12, padding: "6px 8px", lineHeight: 1.6,
 				}}
 			/>
+			</div>
 			{/* @ 素材引用待选框（与 Frame161195 同款：选中即光标处插胶囊） */}
 			{mention && (
 				<>
@@ -278,22 +319,20 @@ export function ShotPromptField({ episodeId, shotId, fieldKey, label, shot, pres
 				/>
 			)}
 			{/* 预设方案下拉：选中即光标处插入预设胶囊（客户端只插标记，展开在提交收口） */}
-			{presetPos && presetSchemes.length > 0 && (
-				<>
-					<div onClick={() => setPresetPos(null)} style={{ position: "fixed", inset: 0, zIndex: 100150 }} />
-					<div style={{ position: "fixed", zIndex: 100151, top: Math.min(presetPos.y + 4, window.innerHeight - 320), left: Math.max(8, Math.min(presetPos.x - 140, window.innerWidth - 300)), width: 288, border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, padding: 4, background: "#161b26", maxHeight: 300, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,0.5)" }}>
+			{presetPos && presetSchemes.length > 0 && createPortal(
+					<div ref={presetMenuRef} role="dialog" aria-label="预设方案" style={{ position: "fixed", zIndex: 100151, top: Math.max(8, Math.min(presetPos.y + 4, window.innerHeight - 320)), left: Math.max(8, Math.min(presetPos.x, window.innerWidth - 300)), width: 288, maxWidth: "calc(100vw - 16px)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12, padding: 4, background: "#161b26", maxHeight: "min(300px, calc(100vh - 16px))", overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,0.5)" }}>
 						{presetSchemes.map((p) => (
-							<div key={p.id} onMouseDown={(ev) => ev.preventDefault()}
+							<button type="button" key={p.id} onMouseDown={(ev) => ev.preventDefault()}
 								onClick={() => { editorRef.current?.insertPreset(p.id, p.name); setPresetPos(null); }}
-								style={{ padding: "6px 8px", borderRadius: 6, cursor: "pointer" }}
+								style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: 0, padding: "8px 10px", borderRadius: 6, cursor: "pointer" }}
 								onMouseEnter={(ev) => (ev.currentTarget.style.background = "rgba(255,255,255,0.06)")}
 								onMouseLeave={(ev) => (ev.currentTarget.style.background = "transparent")}>
 								<div style={{ fontSize: 12, color: "#fcd34d", fontWeight: 600 }}>▦ {p.name}</div>
 								<div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)", marginTop: 2, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{p.body}</div>
-							</div>
+							</button>
 						))}
 					</div>
-				</>
+				, document.body
 			)}
 		</div>
 	);

@@ -6,12 +6,13 @@
  *   参数组装逐字段对齐 AssetWorkbench.generateForm（同一资产行为的属性化视图，两处必须同尺）。
  *   变体出图（图生图/垫图）本轮不做——本文件只出**基础形象**（variantId 恒 null，无 input/refs）。
  *
- * 模块保持纯可测：顶层只静态引类型与 genParams 纯函数；store/队列等重依赖在
- * generateAssetBaseImage 内动态 import（与 shotGenActions 引 inferRun 同模式）。
+ * 基础形象没有异步素材准备：输入读取与队列受理同步完成，避免模块加载期间切项目串写。
  */
 import type { Purpose } from "@/contract";
-import type { GenSpec } from "@/services/generationQueue";
-import type { AssetCat } from "@/store/projectStore";
+import { startGeneration, type GenSpec } from "@/services/generationQueue";
+import { useProjectStore, type AssetCat } from "@/store/projectStore";
+import { effectiveModelKey } from "@/components/ModelPicker";
+import { useCatalogStore } from "@/store/catalogStore";
 import { buildImageParams, imageResolutionOptions } from "@/lib/genParams";
 import { assetImageAspectFrom } from "@/lib/templateAspect";
 
@@ -67,27 +68,21 @@ export function buildAssetBaseGenSpec(
 
 /**
  * 提交「生成基础形象 / 重新生成」：读最新资产 → 组装 spec → startGeneration（唯一路径）。
- * 已有同资产基础形象在途（running）时忽略（按钮已禁用，双保险）。返回是否已提交。
+ * 受理前没有异步间隙；startGeneration 同步登记 pending，同资产连点由现有在途状态去重。
+ * 保持 Promise 返回值以兼容调用方；不要在读输入与受理之间插入 await。
  */
 export async function generateAssetBaseImage(cat: AssetCat, assetId: string): Promise<boolean> {
-	const { useProjectStore } = await import("@/store/projectStore");
 	const st = useProjectStore.getState();
+	if (st.isProjectLoading) return false;
 	const asset = (st[cat] as AssetGenInput[]).find((a) => a.id === assetId);
 	if (!asset) return false;
 	if (st.pendingGens.some((p) => p.cat === cat && p.assetId === assetId && (p.variantId ?? null) === null && p.status === "running")) return false;
-	const { effectiveModelKey } = await import("@/components/ModelPicker");
-	const { useCatalogStore } = await import("@/store/catalogStore");
 	const modelKey = effectiveModelKey("image");
-	const model = useCatalogStore.getState().model(modelKey);
-	// 第243轮比例决定链（与 AssetWorkbench 初始值同一把尺）：资产拆分模板名内嵌比例 > 项目默认影片比例 > 16:9
-	const aspect = assetImageAspectFrom(
-		useCatalogStore.getState().catalog?.templates,
-		st.mediaSettings?.assetExtractTplId,
-		st.mediaSettings?.imageAspect,
-	);
-	const r = buildAssetBaseGenSpec(cat, asset, modelKey, imageResolutionOptions(model), { aspect });
+	const catalog = useCatalogStore.getState();
+	// 第243轮比例决定链：资产拆分模板名内嵌比例 > 项目默认影片比例 > 16:9。
+	const aspect = assetImageAspectFrom(catalog.catalog?.templates, st.mediaSettings?.assetExtractTplId, st.mediaSettings?.imageAspect);
+	const r = buildAssetBaseGenSpec(cat, asset, modelKey, imageResolutionOptions(catalog.model(modelKey)), { aspect });
 	if ("error" in r) { alert(r.error); return false; }
-	const { startGeneration } = await import("@/services/generationQueue");
 	startGeneration(r.spec);
 	return true;
 }

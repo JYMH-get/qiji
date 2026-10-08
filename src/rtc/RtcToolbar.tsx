@@ -8,10 +8,14 @@
 import { useEffect, useRef, useState } from "react";
 import {
 	ClipboardPaste,
+	Clapperboard,
+	ChevronUp,
 	Copy,
 	FileOutput,
 	Keyboard,
 	Magnet,
+	Pause,
+	Play,
 	Plus,
 	Proportions,
 	Redo2,
@@ -26,8 +30,15 @@ import {
 import { addTrack, formatTimecode } from "@/lib/rtcOps";
 import { useRtcStore } from "@/store/rtcStore";
 import { useRtcClipboard } from "./rtcClipboard";
+import { useRtcCenterTabStore } from "./panel/rtcCenterTabStore";
+import { useRtcAssetSelStore } from "./rtcAssetSelStore";
+import { playRtcFromToolbar, rtcPlaybackScope, useRtcPlaybackControl } from "./rtcPlaybackControl";
 import { RtcSettingsModal } from "./settings/RtcSettingsModal";
+import { RtcGenerationSettingsMenu } from "./settings/RtcGenerationSettingsMenu";
+import ProjectGenerationSummary from "@/components/ProjectGenerationSummary";
 import { useRtcSettingsModal } from "./settings/rtcSettingsModalStore";
+import { useRtcKeymapStore } from "./settings/rtcKeymapStore";
+import { comboTable, effectiveKeys, formatCombo } from "./timeline/rtcKeymap";
 import {
 	copySelection,
 	deleteSelection,
@@ -68,6 +79,23 @@ function Timecode() {
 			{formatTimecode(playheadUs, fps)}
 		</span>
 	);
+}
+
+/** 仅订阅播放状态/遮挡态，播放头每帧更新不会重渲工具栏。 */
+function PlaybackEntry() {
+	const scope = useRtcStore(rtcPlaybackScope);
+	const playing = useRtcPlaybackControl(s => s.scope === scope && s.playing);
+	const previewVisible = useRtcCenterTabStore(s => s.tab === "preview" && (!s.scriptEditorOpen || s.scriptEditorHidden));
+	const assetVisible = useRtcAssetSelStore(s => !!s.selected || !!s.mediaSel);
+	const pause = playing && previewVisible && !assetVisible;
+	return <button type="button" data-rtc-toolbar-play
+		aria-label={pause ? "暂停时间轴播放" : "从当前播放头播放"}
+		title={pause ? "暂停时间轴播放" : "从当前播放头播放"}
+		className="h-7 px-2.5 ml-2 flex items-center gap-1.5 rounded text-[11px] text-secondary-foreground bg-white/5 hover:bg-white/10 border border-white/10"
+		onClick={() => { playRtcFromToolbar(); }}>
+		{pause ? <Pause size={14} /> : <Play size={14} />}
+		{pause ? "暂停" : "播放"}
+	</button>;
 }
 
 /**
@@ -199,9 +227,13 @@ export function RtcToolbar() {
 	const canPaste = useRtcClipboard((s) => s.entries.length > 0);
 	const snapOn = useRtcStore((s) => s.snapOn);
 	const scriptVisible = useRtcStore((s) => s.scriptTrackVisible);
+	const scriptKeyHint = useRtcKeymapStore((s) => [...comboTable(effectiveKeys(s.overrides))]
+		.filter(([, action]) => action === "toggleScriptTrack").map(([key]) => formatCombo(key)).join(" / "));
 	const pxPerSec = useRtcStore((s) => s.pxPerSec);
 	const [exportBusy, setExportBusy] = useState(false);
 	const [exportMsg, setExportMsg] = useState<{ ok: boolean; text: string } | null>(null);
+	const generationSettingsOpen = useRtcSettingsModal(s => s.open && s.tab === "generation");
+	const generationSettingsRef = useRef<HTMLButtonElement>(null);
 
 	const onAddTrack = (type: RtcTrackType) => {
 		useRtcStore.getState().commitActive((d) => addTrack(d, type)); // 集成轮：编辑层感知（子层=加进子文档）
@@ -231,7 +263,7 @@ export function RtcToolbar() {
 
 	const st = useRtcStore.getState();
 	return (
-		<div className="h-10 shrink-0 flex items-center px-3 gap-0.5 bg-secondary/30 border-y border-white/5">
+		<div className="min-h-10 shrink-0 flex flex-wrap items-center px-3 py-1 gap-0.5 bg-secondary/30 border-y border-white/5">
 			<button type="button" title="撤销（Ctrl+Z）" className={BTN} disabled={!canUndo} onClick={() => st.undo()}>
 				<Undo2 size={15} />
 			</button>
@@ -333,7 +365,7 @@ export function RtcToolbar() {
 			</button>
 			<button
 				type="button"
-				title={`${scriptVisible ? "隐藏" : "显示"}预览窗的原文参考条（O）——原文实时提取自主轨各分镜，跟随片段挪动/分割/伸缩；恒不导出剪映`}
+				title={`${scriptVisible ? "隐藏" : "显示"}预览窗的原文参考条${scriptKeyHint ? `（${scriptKeyHint}）` : ""}——原文实时提取自主轨各分镜，跟随片段挪动/分割/伸缩；恒不导出剪映`}
 				className={`h-7 px-2 flex items-center gap-1 rounded text-[11px] ${scriptVisible ? "text-[var(--primary)] bg-[color-mix(in_srgb,var(--primary)_15%,transparent)]" : "text-muted-foreground hover:bg-white/10 hover:text-secondary-foreground"}`}
 				onClick={() => st.toggleScriptTrackVisible()}
 			>
@@ -342,7 +374,17 @@ export function RtcToolbar() {
 			</button>
 			<Divider />
 			<Timecode />
-			<div className="ml-auto flex items-center gap-2">
+			<PlaybackEntry />
+			<div data-rtc-generation-summary className="flex-1 min-w-[280px] px-3">
+				<ProjectGenerationSummary />
+			</div>
+			<div className="ml-auto flex shrink-0 items-center gap-2">
+				<button ref={generationSettingsRef} type="button" aria-label="视频生成设置" title="视频生成设置"
+					aria-expanded={generationSettingsOpen} aria-controls="rtc-generation-settings-menu"
+					className={`h-7 px-2 flex shrink-0 items-center gap-1 rounded text-[11px] border ${generationSettingsOpen ? "border-violet-400/50 bg-violet-500/15 text-violet-200" : "border-white/10 text-secondary-foreground hover:bg-white/10"}`}
+					onClick={() => { const settings = useRtcSettingsModal.getState(); if (generationSettingsOpen) settings.close(); else settings.openModal("generation"); }}>
+					<Clapperboard size={14} />视频设置<ChevronUp size={12} className={generationSettingsOpen ? "rotate-180" : ""} />
+				</button>
 				<ShortcutEntry />
 				{exportMsg && (
 					<span
@@ -365,6 +407,7 @@ export function RtcToolbar() {
 			</div>
 			{/* 设置弹窗常驻挂载点（工具条与播放器两处入口共用 rtcSettingsModalStore 开关） */}
 			<RtcSettingsModal />
+			<RtcGenerationSettingsMenu anchorRef={generationSettingsRef} />
 		</div>
 	);
 }

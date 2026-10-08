@@ -9,7 +9,7 @@
  *   轨道上的片段代表「结果」，任何生成动作都不得删除/覆盖已有结果。
  *   超分 / 去字幕 / 对已有成片的重新生成 ⇒ **源片段分毫不动**，在**上方轨道**同 target 窗口新建一个
  *   「结果占位」（带血缘 originSegId + genKind），生成完成后**那个占位**就地变成 media
- *   （只改 kind/media/assetId/uri/source 窗口，targetStartUs/targetDurationUs 分毫不动）。
+ *   （保留 targetStartUs；新视频按结果时长调整占位并联动后续，超分/去字幕保留原窗口）。
  *   片段本身还是未完成占位时，重新生成=原地重跑（它本就是这一版的坑位，不新增）。
  *   上方轨道的挑选见 [segActionsCore.pickResultTrack](./segActionsCore)。
  *
@@ -46,13 +46,15 @@ import { markFailed } from "@/rtc/panel/rtcGenSink";
 import { patchSegmentDoc } from "@/rtc/panel/rtcSegUtils";
 import { useProjectStore } from "@/store/projectStore";
 import { useAssetFormStore } from "@/store/assetFormStore";
-import { useRtcStore } from "@/store/rtcStore";
+import { activeRtcDoc, useRtcStore } from "@/store/rtcStore";
+import { closeTimelineGap, timelineGapAt } from "@/lib/rtcGenerationResize";
 import { addSegment, replaceSegmentMedia, trackTypeForMedia } from "@/lib/rtcOps";
 import { createRtcTrack, type RtcDoc, type RtcSegment, type RtcTrack } from "@/types/rtc";
 import { genId } from "@/lib/id";
 import type { VideoDerivedRecord } from "@/services/projectFile";
 import { useRtcAssetSelStore } from "../rtcAssetSelStore";
 import { ensureShotForPlaceholder } from "../panel/segShotBinding";
+import { claimShotPreparation, locateRtcTarget, currentRtcTarget, type RtcSubmissionTarget } from "../panel/rtcShotSubmission";
 import { collectProjectImageItems, type ProjectCatAsset } from "../asset/rtcAssetData";
 import { imageDefaultUsFromSettings } from "../settings/rtcEditorSettingsStore";
 import { probeMediaDurationSec } from "./timelineUtil";
@@ -118,6 +120,7 @@ function spawnResultPlaceholder(
 	if (!found) return null;
 	const newId = genId("seg");
 	const placeholder = buildResultPlaceholder(found.seg, { id: newId, action, ...opts });
+	if (found.seg.generationDuration !== undefined) placeholder.generationDuration = found.seg.generationDuration;
 	useRtcStore.getState().commit((doc) => {
 		const live = findSeg(doc, srcSegId);
 		if (!live) return doc; // 源片段已被删 → no-op（不进撤销栈不落盘）
@@ -156,41 +159,53 @@ export async function regenerateShotResult(segId: string, field: "video" | "stor
 		alert("该片段关联的分镜已被删除，无法重新生成。");
 		return false;
 	}
+	const preparation = claimShotPreparation(episodeId, shotId, field);
+	if (!preparation) return false;
 	// ⚠ 落笔统一走 panel 层的 rtcGenSink：占位变 media 时 status/progress/taskRef/error 一律清空
 	//   （不清的话替换后的成片会永远显示「生成中」）。
 	const targetSegId =
-		live.seg.kind === "placeholder" ? segId : spawnResultPlaceholder(segId, "shot", { status: "running" });
+		live.seg.kind === "placeholder" ? segId : spawnResultPlaceholder(segId, "shot", { status: "pending" });
 	if (!targetSegId) {
+		preparation.release();
 		alert("该片段已被删除，重新生成已取消。");
 		return false;
 	}
 	// 走库内唯一路径：内部 startShotGeneration + armPlaceholderSwap（成功即把该占位就地变成成片）
-	const ok =
-		field === "storyboard"
-			? await genShotStoryboard(episodeId, shotId, { swapSegId: targetSegId })
-			: await genShotVideo(episodeId, shotId, { swapSegId: targetSegId });
-	if (!ok && targetSegId !== segId) dropSegment(targetSegId);
-	return ok;
+	const rtcTarget = locateRtcTarget(targetSegId);
+	try {
+		const ok = field === "storyboard"
+			? await genShotStoryboard(episodeId, shotId, { swapSegId: targetSegId, preparation })
+			: await genShotVideo(episodeId, shotId, { swapSegId: targetSegId, preparation });
+		if (!ok && targetSegId !== segId) dropSegment(targetSegId, preparation.owner, rtcTarget);
+		return ok;
+	} finally { preparation.release(); }
 }
 
 /** 删掉一个刚建出来的片段（提交失败的空占位回收；片段已不在=no-op） */
-function dropSegment(segId: string): void {
-	useRtcStore.getState().commit((doc) => {
+function dropSegment(segId: string, owner?: string, target?: RtcSubmissionTarget): void {
+	const ps = useProjectStore.getState(), rtc = useRtcStore.getState();
+	if (owner && ps.projectInstanceId !== owner) return;
+	const remove = (doc: RtcDoc): RtcDoc => {
 		const hit = findSeg(doc, segId);
-		if (!hit) return doc;
+		if (!hit || hit.seg.kind !== "placeholder" || hit.seg.taskRef) return doc;
 		return {
 			...doc,
 			tracks: doc.tracks.map((t) =>
 				t.id === hit.track.id ? { ...t, segments: t.segments.filter((s) => s.id !== segId) } : t,
 			),
 		};
-	});
+	};
+	if (target && rtc.ownerEpisodeKey !== target.episodeId) {
+		const doc = ps.rtcDocs[target.episodeId];
+		if (doc) { const next = remove(doc); if (next !== doc) ps.setRtcEpisodeDoc(target.episodeId, next); }
+	} else rtc.commit(remove);
 }
 
 /* ────────────────────────── 超分 / 去字幕：提交 ────────────────────────── */
 
 /** 弹窗目标（超分/去字幕/图像超分） */
 interface ProcTarget {
+	owner: string;
 	segId: string;
 	uri: string;
 	mode: VideoProcessMode;
@@ -203,8 +218,19 @@ interface ProcTarget {
  * 弹窗确认 → ①上方轨道建结果占位 ②分镜追加派生记录（running）③源公网化 ④提交火山 MediaKit
  * ⑤登记结果落地监听。**参数组装逐字段对齐 Frame161195.doProcessVideo**。
  */
+const preparingProcesses = new Set<string>();
 async function submitProcess(target: ProcTarget, spec: VideoProcessSpec): Promise<void> {
+	const key = JSON.stringify([target.owner, target.episodeId, target.shotId, target.segId, target.mode]);
+	if (preparingProcesses.has(key)) return;
+	preparingProcesses.add(key);
+	try { await submitProcessOnce(target, spec); }
+	finally { preparingProcesses.delete(key); }
+}
+async function submitProcessOnce(target: ProcTarget, spec: VideoProcessSpec): Promise<void> {
 	const { segId, uri, mode, episodeId, shotId } = target;
+	const owner = target.owner;
+	if (useProjectStore.getState().projectInstanceId !== owner) return;
+	spec = structuredClone(spec);
 	const isImage = mode === "imageUpscale";
 	const action: "upscale" | "desub" = mode === "desub" ? "desub" : "upscale";
 	const found = liveSeg(segId);
@@ -213,11 +239,18 @@ async function submitProcess(target: ProcTarget, spec: VideoProcessSpec): Promis
 		return;
 	}
 	// ① 结果占位（源片段分毫不动）
-	const holderId = spawnResultPlaceholder(segId, action, { status: "running" });
+	const holderId = spawnResultPlaceholder(segId, action, { status: "pending" });
 	if (!holderId) {
 		alert("该片段已被删除，处理已取消。");
 		return;
 	}
+	const rtcTarget = locateRtcTarget(holderId);
+	const sourceTarget = locateRtcTarget(segId);
+	const current = () => useProjectStore.getState().projectInstanceId === owner
+		&& !useProjectStore.getState().isProjectLoading
+		&& !!rtcTarget && currentRtcTarget(rtcTarget)?.kind === "placeholder"
+		&& !!sourceTarget && !!currentRtcTarget(sourceTarget)
+		&& !!useProjectStore.getState().episodes.find(e => e.id === episodeId)?.shots.some(s => s.id === shotId);
 	const shot = useProjectStore
 		.getState()
 		.episodes.find((e) => e.id === episodeId)
@@ -244,15 +277,8 @@ async function submitProcess(target: ProcTarget, spec: VideoProcessSpec): Promis
 		modelKey: spec.modelKey,
 		status: "running",
 	};
-	const st = useProjectStore.getState();
-	if (isImage) {
-		// 同源唯一，后到覆盖（与 Frame161195 同尺）
-		st.updateShot(episodeId, shotId, { sbDerived: [...(shot.sbDerived || []).filter((d) => d.srcUri !== uri), rec] });
-	} else {
-		// 同标号唯一（标号取决于最后一次处理）
-		st.updateShot(episodeId, shotId, { videoDerived: [...(shot.videoDerived || []).filter((d) => d.label !== label), rec] });
-	}
 	const markFail = (msg: string) => {
+		if (!current()) return;
 		const cur = useProjectStore
 			.getState()
 			.episodes.find((e) => e.id === episodeId)
@@ -265,19 +291,32 @@ async function submitProcess(target: ProcTarget, spec: VideoProcessSpec): Promis
 				),
 			});
 		}
-		markFailed(holderId, msg);
+		markFailed(holderId, msg, owner, { target: rtcTarget, shouldContinue: current });
 	};
 	try {
 		// ③ 源公网化（火山 MediaKit 只吃公网直链）
-		const publicUrl = await ensurePublicUrl(uri, { name: `${shot.title || "分镜"}·${srcLabel}` });
+		const publicUrl = await ensurePublicUrl(uri, { name: `${shot.title || "分镜"}·${srcLabel}`, shouldContinue: current });
+		if (!current()) {
+			if (useProjectStore.getState().projectInstanceId === owner && rtcTarget) {
+				markFailed(holderId, "素材准备已取消，尚未提交生成", owner, { target: rtcTarget });
+			}
+			return;
+		}
 		if (!publicUrl) {
 			markFail(`源${isImage ? "图" : "视频"}公网化失败（上传 OSS 未成功），请重试`);
 			return;
 		}
 		const blob = useProjectStore.getState().blobByUri(uri);
 		const refName = `${shot.title || "分镜"}·${srcLabel}`;
+		// Create the derived running record only when preparation has succeeded and submission is imminent.
+		const st = useProjectStore.getState();
+		const currentShot = st.episodes.find(e => e.id === episodeId)?.shots.find(s => s.id === shotId);
+		if (!currentShot) return;
+		if (isImage) st.updateShot(episodeId, shotId, { sbDerived: [...(currentShot.sbDerived || []).filter(d => d.srcUri !== uri), rec] });
+		else st.updateShot(episodeId, shotId, { videoDerived: [...(currentShot.videoDerived || []).filter(d => d.label !== label), rec] });
 		// ④ 提交（持久化在途，切页/重启可找回）
 		const pendingId = startDerivedGeneration({
+			rtcTarget,
 			episodeId,
 			shotId,
 			recId,
@@ -541,6 +580,7 @@ export function useSegActions(): {
 		}
 		const isImage = (live.seg.media ?? "video") === "image";
 		setProc({
+			owner: useProjectStore.getState().projectInstanceId,
 			segId: seg.id,
 			uri: live.seg.uri,
 			mode: isImage ? "imageUpscale" : PROC_MODE[mode],
@@ -635,6 +675,10 @@ interface BlankMenuState {
 	trackId: string;
 	atUs: number;
 	kinds: ("video" | "image" | "audio")[];
+	gap?: { startUs: number; endUs: number };
+	owner: string;
+	episodeKey: string | null;
+	subDocId: string | null;
 }
 
 const BLANK_LABEL: Record<"video" | "image" | "audio", string> = {
@@ -670,11 +714,28 @@ function RtcBlankContextMenu({ state, onClose }: { state: BlankMenuState; onClos
 	const clampY = Math.min(state.y, window.innerHeight - 160);
 	const btn =
 		"flex w-full items-center gap-2 rounded-md px-2 py-1.5 hover:bg-white/10 cursor-pointer transition-colors text-[12px] text-secondary-foreground";
+	const current = () => {
+		const rtc = useRtcStore.getState();
+		return useProjectStore.getState().projectInstanceId === state.owner && rtc.ownerProjectId === state.owner
+			&& rtc.ownerEpisodeKey === state.episodeKey && rtc.editingSubDocId === state.subDocId;
+	};
+	const closeGap = () => {
+		if (!current() || !state.gap) { onClose(); return; }
+		let reason: string | undefined;
+		useRtcStore.getState().commitActive(doc => {
+			const result = closeTimelineGap(doc, state.trackId, state.gap!.startUs, state.gap!.endUs);
+			reason = result.reason;
+			return result.doc;
+		});
+		onClose();
+		if (reason) alert(reason);
+	};
 	const add = (media: "video" | "image" | "audio") => {
+		if (!current()) { onClose(); return; }
 		const id = genId("seg");
 		// 图片占位时长走设置「图片默认时长」（默认 3s，行为不变）；视频/音频仍用档位表
 		const durUs = media === "image" ? imageDefaultUsFromSettings() : undefined;
-		useRtcStore.getState().commit((doc) => addSegment(doc, state.trackId, buildBlankPlaceholder(media, state.atUs, id, durUs)));
+		useRtcStore.getState().commitActive((doc) => addSegment(doc, state.trackId, buildBlankPlaceholder(media, state.atUs, id, durUs)));
 		// 补充6（用户定稿「普通占位与分镜占位完全一致，不要两种实现」）：视频/图片占位创建即挂真实分镜
 		// （scriptSegment 空=没有原文就空着），工作台/属性/生成全走分镜唯一路径；音频占位无生成能力不挂
 		if (media !== "audio") ensureShotForPlaceholder(id);
@@ -695,7 +756,9 @@ function RtcBlankContextMenu({ state, onClose }: { state: BlankMenuState; onClos
 				ref={ref}
 				className="fixed z-[10401] rounded-lg border border-white/10 bg-[#181a22] p-1 shadow-2xl"
 				style={{ left: clampX, top: clampY, width: MENU_W }}
+				role="menu" aria-label="时间轴空隙操作"
 			>
+				{state.gap && <button type="button" role="menuitem" className={btn} onClick={closeGap}>闭合空隙</button>}
 				{state.kinds.map((k) => (
 					<button key={k} type="button" className={btn} onClick={() => add(k)}>
 						<span
@@ -722,11 +785,14 @@ export function useBlankActions(): {
 } {
 	const [state, setState] = useState<BlankMenuState | null>(null);
 	const open = useCallback((x: number, y: number, trackId: string, atUs: number) => {
-		const track = useRtcStore.getState().doc?.tracks.find((t) => t.id === trackId);
+		const rtc = useRtcStore.getState(), doc = activeRtcDoc(rtc);
+		const track = doc?.tracks.find((t) => t.id === trackId);
 		if (!track || track.locked) return false; // 锁轨不接受新片段
 		const kinds = blankPlaceholderKinds(track.type);
-		if (kinds.length === 0) return false;
-		setState({ x, y, trackId, atUs: Math.max(0, atUs), kinds });
+		const gap = doc ? timelineGapAt(doc, trackId, atUs) ?? undefined : undefined;
+		if (kinds.length === 0 && !gap) return false;
+		setState({ x, y, trackId, atUs: Math.max(0, atUs), kinds, gap,
+			owner: useProjectStore.getState().projectInstanceId, episodeKey: rtc.ownerEpisodeKey, subDocId: rtc.editingSubDocId });
 		return true;
 	}, []);
 	const menu = state ? <RtcBlankContextMenu state={state} onClose={() => setState(null)} /> : null;

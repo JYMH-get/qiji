@@ -4,6 +4,16 @@ import { DRAFT_MAX, DRAFT_TTL_MS, sanitizeDraft, sanitizeDrafts, upsertDraft, ty
 const NOW = 1_800_000_000_000;
 
 describe("rtcFreeGenStore · 草稿清洗", () => {
+	it("首尾帧角色随图片草稿持久化，非法角色与非图片角色不保留", () => {
+		const draft = sanitizeDraft({ refs: [{ uri: "first", rtcFrameRole: "first" }, { uri: "last", rtcFrameRole: "last" }, { uri: "video", media: "video", rtcFrameRole: "first" }, { uri: "bad", rtcFrameRole: "other" }] }, NOW);
+		expect(draft?.refs.map(ref => ref.rtcFrameRole)).toEqual(["first", "last", undefined, undefined]);
+		expect(sanitizeDraft(JSON.parse(JSON.stringify(draft)), NOW)).toEqual(draft);
+	});
+	it("重开保留全部参考及末尾新加的首尾帧，不按客户端数量截断", () => {
+		const refs = [...Array.from({ length: 30 }, (_, index) => ({ uri: `image-${index}`, media: "image" })), { uri: "first", rtcFrameRole: "first" }, { uri: "last", rtcFrameRole: "last" }];
+		const draft = sanitizeDraft({ refs }, NOW);
+		expect(draft?.refs).toHaveLength(32); expect(draft?.refs[31].rtcFrameRole).toBe("last");
+	});
 	it("正常草稿原样收下（refs 归一 media，assetId/name 可选）", () => {
 		const d = sanitizeDraft({ prompt: "一只猫", refs: [{ uri: "u1", assetId: "C1", name: "甲", media: "video" }], updatedAt: NOW }, NOW);
 		expect(d).toEqual({ prompt: "一只猫", refs: [{ uri: "u1", media: "video", assetId: "C1", name: "甲" }], updatedAt: NOW });

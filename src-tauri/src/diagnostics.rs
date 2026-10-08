@@ -163,6 +163,8 @@ pub(super) struct Inner {
     root: PathBuf,
     session: String,
     version: String,
+    startup_accessibility_policy: Value,
+    accessibility_policy: Mutex<Value>,
     io: Mutex<()>,
     pub(super) webviews: Mutex<Vec<WebviewInfo>>,
     stopped: AtomicBool,
@@ -174,6 +176,9 @@ pub(super) struct WebviewInfo {
     pub runtime: String,
     pub dump_folder: Option<PathBuf>,
     pub hook_ready: bool,
+    pub browser_process_id: Option<u32>,
+    pub browser_arguments: Value,
+    pub browser_arguments_sampled_at_ms: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -225,7 +230,12 @@ fn prune_logs(root: &Path, now: u64, budget: u64) {
 }
 
 impl Diagnostics {
+    #[cfg(test)]
     fn new(root: PathBuf, version: String) -> std::io::Result<Self> {
+        Self::new_with_policy(root, version, json!({"stateAvailable":false}))
+    }
+
+    fn new_with_policy(root: PathBuf, version: String, policy: Value) -> std::io::Result<Self> {
         fs::create_dir_all(&root)?;
         let session = format!("{}-{}", now_ms(), std::process::id());
         let previous_unclean = root.join("session-open").exists();
@@ -233,12 +243,14 @@ impl Diagnostics {
             root,
             session,
             version,
+            startup_accessibility_policy: policy.clone(),
+            accessibility_policy: Mutex::new(policy.clone()),
             io: Mutex::new(()),
             webviews: Mutex::new(Vec::new()),
             stopped: AtomicBool::new(false),
             exporting: AtomicBool::new(false),
         }));
-        state.record(json!({"kind":"native_start", "previousUncleanExit":previous_unclean, "clientVersion":state.0.version, "pid":std::process::id()}))?;
+        state.record(json!({"kind":"native_start", "previousUncleanExit":previous_unclean, "clientVersion":state.0.version, "pid":std::process::id(),"accessibilityPolicy":policy}))?;
         fs::write(
             state.0.root.join("session-open"),
             state.0.session.as_bytes(),
@@ -443,7 +455,13 @@ impl Diagnostics {
             entries.push(json!({"entry":name,"bytes":copied,"modifiedAtMs":candidate.modified}));
             dump_count += 1;
         }
-        let webviews: Vec<Value> = self.0.webviews.lock().map(|v| v.iter().map(|w| json!({"label":w.label,"runtime":w.runtime,"processFailedHookReady":w.hook_ready,"dumpFolderAvailable":w.dump_folder.is_some()})).collect()).unwrap_or_default();
+        let webviews: Vec<Value> = self.0.webviews.lock().map(|v| v.iter().map(|w| json!({"label":w.label,"runtime":w.runtime,"processFailedHookReady":w.hook_ready,"dumpFolderAvailable":w.dump_folder.is_some(),"browserProcessId":w.browser_process_id,"browserArguments":w.browser_arguments,"browserArgumentsSampledAtMs":w.browser_arguments_sampled_at_ms})).collect()).unwrap_or_default();
+        let accessibility_policy = self
+            .0
+            .accessibility_policy
+            .lock()
+            .map(|value| value.clone())
+            .unwrap_or_else(|_| json!({"stateAvailable":false}));
         #[cfg(windows)]
         let os_version = platform::os_version();
         #[cfg(not(windows))]
@@ -451,9 +469,12 @@ impl Diagnostics {
         let manifest = json!({
             "schemaVersion":1,"exportedAtMs":now,"clientVersion":self.0.version,"platform":std::env::consts::OS,"arch":std::env::consts::ARCH,
             "osVersion":os_version,
+            "startupAccessibilityPolicy":self.0.startup_accessibility_policy,
+            "accessibilityPolicy":accessibility_policy,
             "session":self.0.session,"webviews":webviews,"files":entries,"dumpCount":dump_count,"unreadableFiles":missing,
             "limits":{"retentionDays":7,"logBytes":LOG_LIMIT,"exportDumpBytes":DUMP_LIMIT,"exportDumpCount":DUMP_COUNT},
             "memoryScope":"Windows host and descendant msedgewebview2 processes; working set/private bytes; shared pages may be counted more than once; no GPU dedicated-memory measurement",
+            "browserArgumentScope":"Only the browser PID returned by this WebView2 instance is queried. Flags are a fixed allowlist of command-line observations, not proof of internal feature state. No AX/CDP/automation activation; no command lines, paths, environment, or arbitrary features are recorded.",
             "dumpStatus":if dump_count == 0 { "No eligible dump was available; logs remain useful. WebView2 creates dumps independently; absence does not prove absence of a crash." } else { "Included recent WebView2 dumps; they can contain process memory. Review before sharing." },
             "privacy":"Structured logs contain no project contents, project paths, prompts, keys or URLs. Dumps may contain process memory. No automatic upload.",
             "retentionScope":"Retention bounds Qiji diagnostic JSONL only. Runtime-owned crash dumps are read with export limits and never deleted by Qiji.",
@@ -495,6 +516,7 @@ pub async fn record_client_diagnostic(
 
 #[tauri::command]
 pub async fn export_client_diagnostics(
+    app: tauri::AppHandle,
     state: tauri::State<'_, Diagnostics>,
     path: String,
 ) -> Result<String, String> {
@@ -511,10 +533,20 @@ pub async fn export_client_diagnostics(
     let guard = ExportGuard(diagnostics.clone());
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = guard;
+        if let Ok(mut policy) = diagnostics.0.accessibility_policy.lock() {
+            *policy = safe_accessibility_policy(&app);
+        }
         diagnostics.export(Path::new(&path))
     })
     .await
     .map_err(|_| "诊断导出任务失败")?
+}
+
+fn safe_accessibility_policy<R: Runtime>(app: &tauri::AppHandle<R>) -> Value {
+    // The accessor exposes only owned policy names and booleans, never paths or
+    // preference error text. Keep the startup snapshot separate from saved state.
+    serde_json::to_value(crate::accessibility::diagnostic_policy(app))
+        .unwrap_or_else(|_| json!({"stateAvailable":false}))
 }
 
 pub fn init<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
@@ -532,8 +564,14 @@ fn init_at<R: Runtime>(root_override: Option<PathBuf>) -> tauri::plugin::TauriPl
                         .ok()
                         .map(|p| p.join("diagnostics"))
                 })
-                .and_then(|p| Diagnostics::new(p, app.package_info().version.to_string()).ok())
-            {
+                .and_then(|p| {
+                    Diagnostics::new_with_policy(
+                        p,
+                        app.package_info().version.to_string(),
+                        safe_accessibility_policy(app),
+                    )
+                    .ok()
+                }) {
                 Some(diagnostics) => diagnostics,
                 None => {
                     eprintln!("Qiji diagnostics unavailable");
@@ -681,6 +719,48 @@ mod tests {
         assert!(!root.join("session-open").exists());
     }
     #[test]
+    fn export_separates_startup_policy_from_saved_policy_and_keeps_safe_browser_evidence() {
+        let dir = TestDir::new();
+        let root = dir.0.join("logs");
+        let startup = json!({"stateAvailable":true,"supported":true,"enabled":false,"activeEnabled":false,"restartRequired":false,"preferenceReadable":true,"policyRevision":"test-revision","rendererAccessibilityDisabled":true,"compatibilityDisabledFeatures":["AccessibilityBlockFlowIterator"]});
+        let diagnostics =
+            Diagnostics::new_with_policy(root.clone(), "test".into(), startup.clone()).unwrap();
+        let saved = json!({"stateAvailable":true,"supported":true,"enabled":true,"activeEnabled":false,"restartRequired":true,"preferenceReadable":true,"policyRevision":"test-revision","rendererAccessibilityDisabled":true,"compatibilityDisabledFeatures":["AccessibilityBlockFlowIterator"]});
+        *diagnostics.0.accessibility_policy.lock().unwrap() = saved.clone();
+        diagnostics.0.webviews.lock().unwrap().push(WebviewInfo {
+            label: "main".into(), runtime: "154.0.test".into(), dump_folder: None, hook_ready: true,
+            browser_process_id: Some(1234),
+            browser_arguments: json!({"status":"ok","flags":{"disableRendererAccessibility":true,"forceRendererAccessibility":false,"blockFlowIteratorDisabled":true}}),
+            browser_arguments_sampled_at_ms: Some(12345),
+        });
+        let target = dir.0.join("result.zip");
+        diagnostics.export(&target).unwrap();
+        let mut archive = zip::ZipArchive::new(File::open(target).unwrap()).unwrap();
+        let mut manifest = String::new();
+        archive
+            .by_name("manifest.json")
+            .unwrap()
+            .read_to_string(&mut manifest)
+            .unwrap();
+        let manifest: Value = serde_json::from_str(&manifest).unwrap();
+        assert_eq!(manifest["startupAccessibilityPolicy"], startup);
+        assert_eq!(manifest["accessibilityPolicy"], saved);
+        assert_eq!(manifest["webviews"][0]["browserProcessId"], 1234);
+        assert_eq!(manifest["webviews"][0]["runtime"], "154.0.test");
+        assert_eq!(
+            manifest["webviews"][0]["browserArguments"]["flags"]["blockFlowIteratorDisabled"],
+            true
+        );
+        let mut logs = String::new();
+        archive
+            .by_name("logs/events-00.jsonl")
+            .unwrap()
+            .read_to_string(&mut logs)
+            .unwrap();
+        let first: Value = serde_json::from_str(logs.lines().next().unwrap()).unwrap();
+        assert_eq!(first["accessibilityPolicy"], startup);
+    }
+    #[test]
     fn detects_unclean_session_and_prunes_by_capacity_and_age() {
         let dir = TestDir::new();
         let root = dir.0.join("logs");
@@ -711,6 +791,9 @@ mod tests {
             runtime: "1.2".into(),
             dump_folder: Some(dumps),
             hook_ready: true,
+            browser_process_id: None,
+            browser_arguments: json!({"status":"unavailable","failureCode":"test"}),
+            browser_arguments_sampled_at_ms: None,
         });
         // Multiple windows share the same WebView2 profile; never export a dump twice.
         let mut second = diagnostics.0.webviews.lock().unwrap()[0].clone();

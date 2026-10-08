@@ -25,6 +25,7 @@ import { createEmptyRtcDoc, type RtcDoc } from "@/types/rtc";
 import { docDurationUs, pruneScriptTracks } from "@/lib/rtcOps";
 import { activeViewDoc, sanitizeRtcCompound } from "@/lib/rtcCompound";
 import { useProjectStore, resolveEpisodeKey } from "./projectStore";
+import { focusAfterPlayhead, type WorkbenchSelectionFocus } from "@/rtc/panel/rtcWorkbenchTargetCore";
 
 const MAX_HISTORY = 100;
 
@@ -33,6 +34,10 @@ export interface RtcState {
   doc: RtcDoc | null;
   /** 选中的片段 id 集合 */
   selection: string[];
+  /** 新选中临时接管工作台；纯 UI 态，不落盘、不进入撤销。 */
+  workbenchFocus: WorkbenchSelectionFocus | null;
+  /** 防过期的同步选择收尾影响后续选择（换文档时也不重置计数）。 */
+  workbenchFocusRevision: number;
   /** 播放头位置（微秒） */
   playheadUs: number;
   /** 时间轴缩放：每秒像素数 */
@@ -86,11 +91,11 @@ export interface RtcState {
    * （创建/解散复合、占位符替换等）仍走 commit。
    */
   commitActive: (mutator: (doc: RtcDoc) => RtcDoc) => void;
-  setSelection: (ids: string[]) => void;
+  setSelection: (ids: string[], focusedId?: string) => void;
   setPlayhead: (us: number) => void;
   setZoom: (pxPerSec: number) => void;
   toggleSnap: () => void;
-  /** 原文轨道显隐开关（工具条按钮 / 快捷键 O） */
+  /** 原文参考显隐开关（工具条按钮 / 可自定义快捷键，默认 Tab 上方的 · 键） */
   toggleScriptTrackVisible: () => void;
 }
 
@@ -170,6 +175,8 @@ function guardOwner(op: string): boolean {
 export const useRtcStore = create<RtcState>((set, get) => ({
   doc: null,
   selection: [],
+  workbenchFocus: null,
+  workbenchFocusRevision: 0,
   playheadUs: 0,
   pxPerSec: 100,
   snapOn: true,
@@ -188,6 +195,8 @@ export const useRtcStore = create<RtcState>((set, get) => ({
       ownerProjectId: useProjectStore.getState().projectInstanceId,
       ownerEpisodeKey: activeEpisodeKey() || null,
       selection: [],
+      workbenchFocus: null,
+      workbenchFocusRevision: (get().workbenchFocusRevision ?? 0) + 1,
       playheadUs: 0,
       past: [],
       future: [],
@@ -243,11 +252,11 @@ export const useRtcStore = create<RtcState>((set, get) => ({
     const s = get();
     if (!s.doc?.subDocs?.[subDocId]) return; // 子文档不存在（已解散等）→ no-op
     // 选中/播放头进出各自重置（子层与主层是两个时间坐标系）
-    set({ editingSubDocId: subDocId, selection: [], playheadUs: 0 });
+    set({ editingSubDocId: subDocId, selection: [], playheadUs: 0, workbenchFocus: null });
   },
   exitCompound: () => {
     if (!get().editingSubDocId) return;
-    set({ editingSubDocId: null, selection: [], playheadUs: 0 });
+    set({ editingSubDocId: null, selection: [], playheadUs: 0, workbenchFocus: null });
   },
   commitActive: (mutator) => {
     const { editingSubDocId, commit } = get();
@@ -263,8 +272,36 @@ export const useRtcStore = create<RtcState>((set, get) => ({
     });
   },
 
-  setSelection: (ids) => set({ selection: ids }),
-  setPlayhead: (us) => set({ playheadUs: Math.max(0, us) }),
+  setSelection: (ids, focusedId) => {
+    const s = get();
+    const revision = (s.workbenchFocusRevision ?? 0) + 1;
+    const segId = focusedId && ids.includes(focusedId) ? focusedId : ids[0];
+    set({ selection: ids, workbenchFocusRevision: revision, workbenchFocus: segId ? {
+      segId, playheadUs: s.playheadUs, revision, allowImmediateSeek: true,
+      ownerProjectId: s.ownerProjectId, ownerEpisodeKey: s.ownerEpisodeKey, editingSubDocId: s.editingSubDocId,
+    } : null });
+    if (!ids[0]) return;
+    // 同一个双击处理器的 setSelection → setPlayhead 是一次导航；下一次播放/寻址不再例外。
+    queueMicrotask(() => {
+      const focus = get().workbenchFocus;
+      if (focus?.revision === revision && focus.allowImmediateSeek) {
+        set({ workbenchFocus: { ...focus, allowImmediateSeek: false } });
+      }
+    });
+  },
+  setPlayhead: (us) => {
+    const s = get();
+    const nextUs = Math.max(0, us);
+    // 逐帧播放的通常路径不查轨道/分配数组；只在新选中后的同步定位窗口查一次。
+    let selected = null;
+    if (s.workbenchFocus?.allowImmediateSeek && nextUs !== s.playheadUs) {
+      for (const track of activeRtcDoc(s)?.tracks ?? []) {
+        const found = track.segments.find((seg) => seg.id === s.workbenchFocus?.segId);
+        if (found) { selected = found; break; }
+      }
+    }
+    set({ playheadUs: nextUs, workbenchFocus: focusAfterPlayhead(s.workbenchFocus, s, nextUs, selected) });
+  },
   setZoom: (pxPerSec) => set({ pxPerSec: Math.min(1000, Math.max(1, pxPerSec)) }),
   toggleSnap: () => set((s) => ({ snapOn: !s.snapOn })),
   toggleScriptTrackVisible: () => set((s) => ({ scriptTrackVisible: !s.scriptTrackVisible })),

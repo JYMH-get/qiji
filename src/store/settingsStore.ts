@@ -99,6 +99,8 @@ interface SettingsState {
 
   /** 视频表格列宽/行高（全局共享，跨分集/项目） */
   videoTableLayout: VideoTableLayout;
+  /** 实时剪辑总览五列的独立宽度；null 沿用自适应默认，跨分集/项目记忆。 */
+  rtcOverviewColWidths: number[] | null;
   /** 已保存的表格样式模板（命名快照，可一键切换） */
   videoTableTemplates: VideoTableTemplate[];
 
@@ -146,6 +148,7 @@ interface SettingsState {
    */
   setVideoTableLayout: (patch: Partial<VideoTableLayout>, persist?: boolean) => void;
   resetVideoTableLayout: () => void;
+  setRtcOverviewColWidths: (widths: number[]) => void;
   /** 把当前表格布局保存为命名模板，返回新模板 id */
   saveVideoTableTemplate: (name: string) => string;
   /** 套用某个表格模板（写入当前布局并落盘） */
@@ -192,6 +195,11 @@ function normalizeVideoTableLayout(v: unknown): VideoTableLayout {
     : { ...def, colWidths: [...def.colWidths] };
 }
 
+function normalizeRtcOverviewColWidths(value: unknown): number[] | null {
+  return Array.isArray(value) && value.length === 5 && value.every(n => typeof n === "number" && Number.isFinite(n) && n > 0)
+    ? value.map(n => Math.max(80, Math.round(n))) : null;
+}
+
 /** 兜底校验从磁盘读到的快捷键覆盖表：非对象/值非字符串 → 丢弃 */
 function normalizeKeymap(v: unknown): Record<string, string> {
   if (!v || typeof v !== "object" || Array.isArray(v)) return {};
@@ -226,6 +234,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   modelRequests: {},
   requestTemplates: [],
   videoTableLayout: { ...DEFAULT_VIDEO_TABLE_LAYOUT, colWidths: [...DEFAULT_VIDEO_TABLE_LAYOUT.colWidths] },
+  rtcOverviewColWidths: null,
   videoTableTemplates: [],
   customPresets: [],
   canvasKeymap: {},
@@ -298,6 +307,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   resetVideoTableLayout: () => {
     set({ videoTableLayout: { ...DEFAULT_VIDEO_TABLE_LAYOUT, colWidths: [...DEFAULT_VIDEO_TABLE_LAYOUT.colWidths] } });
     get().save();
+  },
+  setRtcOverviewColWidths: (widths) => {
+    const normalized = normalizeRtcOverviewColWidths(widths);
+    if (!normalized) return;
+    set({ rtcOverviewColWidths: normalized });
+    void get().save().catch(error => console.warn("Failed to save RTC column widths:", error));
   },
   saveVideoTableTemplate: (name) => {
     const id = `vtt-${Date.now()}-${++_idCounter}`;
@@ -384,6 +399,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
             requestTemplates: [],
             ...parsed,
             videoTableLayout: normalizeVideoTableLayout(parsed.videoTableLayout),
+            rtcOverviewColWidths: normalizeRtcOverviewColWidths(parsed.rtcOverviewColWidths),
             videoTableTemplates: Array.isArray(parsed.videoTableTemplates) ? parsed.videoTableTemplates : [],
             customPresets: Array.isArray(parsed.customPresets) ? parsed.customPresets : [],
             canvasKeymap: normalizeKeymap(parsed.canvasKeymap),
@@ -411,6 +427,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           requestTemplates: [],
           ...parsed,
           videoTableLayout: normalizeVideoTableLayout(parsed.videoTableLayout),
+          rtcOverviewColWidths: normalizeRtcOverviewColWidths(parsed.rtcOverviewColWidths),
           videoTableTemplates: Array.isArray(parsed.videoTableTemplates) ? parsed.videoTableTemplates : [],
           canvasKeymap: normalizeKeymap(parsed.canvasKeymap),
           tidyRowGap: normalizeTidyRowGap(parsed.tidyRowGap),
@@ -446,6 +463,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       modelRequests: state.modelRequests,
       requestTemplates: state.requestTemplates,
       videoTableLayout: state.videoTableLayout,
+      rtcOverviewColWidths: state.rtcOverviewColWidths,
       videoTableTemplates: state.videoTableTemplates,
       customPresets: state.customPresets,
       canvasKeymap: state.canvasKeymap,

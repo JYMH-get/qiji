@@ -40,16 +40,17 @@ describe("无障碍设置显示", () => {
     expect(input).not.toContain('checked=""');
     expect(input).not.toContain('disabled=""');
     expect(input).toContain('aria-describedby="accessibility-effect accessibility-risk accessibility-restart"');
-    expect(status).toBe("本次启动：已关闭");
+    expect(status).toBe("本次启动设置：已关闭");
     expect(html).toContain("默认关闭");
     expect(html).toContain("读屏软件、取词工具和控件自动化");
+    expect(html).toContain("关闭后限制系统无障碍接入，调试工具仍可能读取页面。");
     expect(html).toContain("页面卡顿或白屏（STATUS_BREAKPOINT）");
     expect(html).toContain("修改后需关闭全部 Qiji 窗口并重新启动。");
   });
 
   it.each([
-    { enabled: true, activeEnabled: false, expected: "已保存，重启后开启；本次启动仍为关闭。" },
-    { enabled: false, activeEnabled: true, expected: "已保存，重启后关闭；本次启动仍为开启。" },
+    { enabled: true, activeEnabled: false, expected: "已保存，重启后开启；本次启动设置仍为关闭。" },
+    { enabled: false, activeEnabled: true, expected: "已保存，重启后关闭；本次启动设置仍为开启。" },
   ])("待重启时分别显示保存偏好 $enabled 和当前进程状态 $activeEnabled", ({ enabled, activeEnabled, expected }) => {
     useAccessibilitySettings.setState({
       settings: { supported: true, enabled, activeEnabled, restartRequired: true },
@@ -85,7 +86,7 @@ describe("无障碍设置显示", () => {
 
     const { html, status } = render();
 
-    expect(status).toBe("本次启动：已关闭");
+    expect(status).toBe("本次启动设置：已关闭");
     expect(html).toContain("本机配置读取异常，本次启动状态不变。");
     expect(html).toContain("恢复默认");
     expect(status).not.toContain("已保存");

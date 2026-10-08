@@ -3,9 +3,9 @@ import type { RtcDoc, RtcSegment } from "@/types/rtc";
 import { CENTER_TABS, initialCenterTab, mainTrackSegAt, resultLayerVisible } from "./rtcCenterTabCore";
 
 describe("rtcCenterTabCore", () => {
-	it("CENTER_TABS：双页签固定顺序 AI 工作台 / 预览", () => {
-		expect(CENTER_TABS.map((t) => t.id)).toEqual(["workbench", "preview"]);
-		expect(CENTER_TABS.map((t) => t.label)).toEqual(["AI 工作台", "预览"]);
+	it("CENTER_TABS：固定顺序 总览 / AI 工作台 / 预览", () => {
+		expect(CENTER_TABS.map((t) => t.id)).toEqual(["overview", "workbench", "preview"]);
+		expect(CENTER_TABS.map((t) => t.label)).toEqual(["总览", "AI 工作台", "预览"]);
 	});
 
 	it("初始页签：优先按播放头处片段（占位=工作台/有结果=预览），空白按 doc 有无可播片段兜底", () => {
@@ -31,6 +31,7 @@ describe("rtcCenterTabCore", () => {
 		it("工作台页：面层恒不露出（任何播放头位置都盖不住工作台）", () => {
 			for (const k of ["media", "compound", "placeholder", null, undefined]) {
 				expect(resultLayerVisible("workbench", k)).toBe(false);
+				expect(resultLayerVisible("overview", k)).toBe(false);
 			}
 		});
 
@@ -39,10 +40,10 @@ describe("rtcCenterTabCore", () => {
 			expect(resultLayerVisible("preview", "compound")).toBe(true);
 		});
 
-		it("预览页：播放头处是占位符 / 空白区间 → 让开，露出底下的工作台", () => {
-			expect(resultLayerVisible("preview", "placeholder")).toBe(false);
-			expect(resultLayerVisible("preview", null)).toBe(false);
-			expect(resultLayerVisible("preview", undefined)).toBe(false);
+		it("预览页：占位符 / 空白区间仍保留播放器，不再盖上工作台", () => {
+			expect(resultLayerVisible("preview", "placeholder")).toBe(true);
+			expect(resultLayerVisible("preview", null)).toBe(true);
+			expect(resultLayerVisible("preview", undefined)).toBe(true);
 		});
 	});
 

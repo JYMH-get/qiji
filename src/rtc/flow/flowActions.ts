@@ -1,4 +1,3 @@
-import { getDualModeFeature } from '@/store/connectionStore';
 /**
  * flowActions —— 实时剪辑「AI 生成」分步工作台的动作层。
  *
@@ -28,7 +27,6 @@ import { EPISODE_SPLIT_MODES, splitEpisodes } from "@/lib/episodeSplit";
 import { parseAssetExtraction } from "@/lib/assetExtraction";
 import { mergeApply, mergeExtraction, analysisTimeLabel, type ExtractBuckets } from "@/lib/assetMerge";
 import { attachSplitPresets } from "@/lib/splitPresetAttach";
-import { buildAssetListVars } from "@/lib/assetVars";
 import { appendEpisodePlaceholders, type AppendPlaceholdersResult } from "../rtcShotPlaceholders";
 import { buildExtractVariables, episodesBrief, splitOverwriteMessage } from "./flowCore";
 
@@ -339,63 +337,7 @@ export async function continueExtractionFlow(templateId: string): Promise<FlowRe
 
 /* ════════════════ ④ 分镜：智能推理 / 智能拆分 / 占位入轨 ════════════════ */
 
-/** 整集级互斥锁：智能推理 / 智能拆分 任一在跑（inferTasks 数据源，与 Frame161195 epLocked 同义） */
-export function episodeInferLocked(epId: string): boolean {
-	return useProjectStore.getState().inferTasks.some(
-		(t) => t.episodeId === epId && (t.mode === "multi" || t.mode === "split") && t.status === "running",
-	);
-}
-
-/**
- * 智能推理（整集多镜）：本集原文 → 每卡 原文+提示词（流式边出边填）。
- * 模板/模型来源与 Frame161195 handleSmartInfer 完全一致（mediaSettings 所选，空=默认；同源走同源模板）。
- */
-export async function smartInferEpisode(epId: string): Promise<FlowResult> {
-	const st = useProjectStore.getState();
-	const ep = st.episodes.find((e) => e.id === epId);
-	if (!ep) return { ok: false, message: "分集不存在。" };
-	if (!ep.scriptText.trim()) return { ok: false, message: "该集没有剧本原文——先在第②步重新拆分，或到「视频」界面填写本集内容。" };
-	if (episodeInferLocked(epId)) return { ok: false, message: "" }; // 推理/拆分任一在跑 → 锁定
-	if (ep.shots.length > 0 && !(await confirmDialog("当前分集已有分镜，智能推理将删除当前提示词并覆盖。继续？"))) {
-		return { ok: false, message: "" };
-	}
-	const ms = st.mediaSettings;
-	const sameSource = (!getDualModeFeature() || (ms.imgVideoSameSource ?? false));
-	useProjectStore.getState().setEpisodeShots(epId, []); // 覆盖：清空整集（流式边出边填）
-	const { SMART_INFER_MULTI_TPL, SMART_INFER_UNIFIED_TPL } = await import("@/lib/smartInferPrompts");
-	const { startInfer } = await import("@/services/inferRun");
-	const mtpl = sameSource ? ((ms.unifiedTplId ?? "") || SMART_INFER_UNIFIED_TPL) : ((ms.inferTplId ?? "") || SMART_INFER_MULTI_TPL);
-	startInfer({
-		episodeId: epId, mode: "multi", sameSource, templateId: mtpl,
-		variables: { 原文: ep.scriptText, 视觉风格: useProjectStore.getState().visualStyle || "", ...buildAssetListVars() },
-		modelKey: effectiveModelKey("text") || undefined,
-	});
-	return { ok: true, message: "" };
-}
-
-/**
- * 智能拆分（整集，只拆原文分段不含提示词）。模板固定 storyboard.split.smart，
- * 与 Frame161195 handleSplit 完全一致。
- */
-export async function smartSplitEpisode(epId: string): Promise<FlowResult> {
-	const st = useProjectStore.getState();
-	const ep = st.episodes.find((e) => e.id === epId);
-	if (!ep) return { ok: false, message: "分集不存在。" };
-	if (!ep.scriptText.trim()) return { ok: false, message: "该集没有剧本原文——先在第②步重新拆分，或到「视频」界面填写本集内容。" };
-	if (episodeInferLocked(epId)) return { ok: false, message: "" };
-	if (ep.shots.length > 0 && !(await confirmDialog("当前分集已有分镜，智能拆分将删除并重新拆分。继续？"))) {
-		return { ok: false, message: "" };
-	}
-	useProjectStore.getState().setEpisodeShots(epId, []);
-	const { SMART_SPLIT_TPL } = await import("@/lib/smartInferPrompts");
-	const { startInfer } = await import("@/services/inferRun");
-	startInfer({
-		episodeId: epId, mode: "split", templateId: SMART_SPLIT_TPL,
-		variables: { 原文: ep.scriptText, 视觉风格: useProjectStore.getState().visualStyle || "", ...buildAssetListVars() },
-		modelKey: effectiveModelKey("text") || undefined,
-	});
-	return { ok: true, message: "" };
-}
+export { episodeInferLocked, smartInferEpisode, smartSplitEpisode } from "./rtcEpisodeInferenceActions";
 
 /**
  * 把某分集的分镜按顺序追加为时间轴占位符（幂等；一次 commit=一步撤销；

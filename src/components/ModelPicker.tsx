@@ -11,6 +11,7 @@
 import { useMemo } from "react";
 import { TextReasoningSettings } from './TextReasoningSettings';
 import { migratedRouteKey } from '@/lib/routeParams';
+import { RouteSelect } from "@/components/RouteSelect";
 import { type Capability } from "@/contract";
 import { useCatalogStore } from "@/store/catalogStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -190,18 +191,14 @@ export default function ModelPicker({ cap, label = "模型", style, noPlaceholde
 						))}
 					</select>
 					{selection.channels.length > 0 && (
-						<select
+						<RouteSelect
 							title="线路"
 							value={selection.current ? sourceValueOf(value, selection.channels) : ""}
-							onChange={(e) => commit(modelForLine(e.target.value, value, allFamilies))}
+							onChange={(line) => commit(modelForLine(line, value, allFamilies))}
 							className="qiji-field-select"
 							style={selSt}
-						>
-							{!selection.current && <option value="" style={optSt}>选择线路</option>}
-							{selection.channels.map((ch) => (
-								<option key={ch.channel} value={`src:${ch.channel}`} style={optSt}>{ch.channel}</option>
-							))}
-						</select>
+							options={selection.channels.map(ch => ({ value: `src:${ch.channel}`, label: ch.channel, modelKey: modelForLine(`src:${ch.channel}`, value, allFamilies) }))}
+						/>
 					)}
 					{curCh && !curCh.modelAsLine && !value.startsWith("route:") && (
 						<select
@@ -226,22 +223,15 @@ export default function ModelPicker({ cap, label = "模型", style, noPlaceholde
 		<label className="qiji-field-label" style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, ...style }}>
 			{label}
 			<div style={{ display: "flex", gap: 6, flex: 1, minWidth: 0 }}>
-				<select
+				<RouteSelect
 					title="模型源"
 					value={sourceValueOf(value, channels)}
-					onChange={(e) => commit(modelForSource(e.target.value, value, channels))}
+					onChange={(source) => commit(modelForSource(source, value, channels))}
 					className="qiji-field-select"
 					style={selSt}
-				>
-					{(!noPlaceholder || !value) && (
-						<option value="" style={optSt}>
-							{opts.length ? "请选择模型源…" : "无可用模型（先在设置连接管理端）"}
-						</option>
-					)}
-					{srcOpts.map((s) => (
-						<option key={s.value} value={s.value} style={optSt}>{s.label}</option>
-					))}
-				</select>
+					placeholder={opts.length ? "请选择模型源…" : "无可用模型（先在设置连接管理端）"}
+					options={srcOpts.map(source => ({ value: source.value, label: source.label, modelKey: modelForSource(source.value, value, channels) }))}
+				/>
 				{variants && (
 					<select
 						title="模型（本源款式）"

@@ -1,9 +1,8 @@
 import { useDualModeFeature } from '@/store/connectionStore';
 /**
- * RtcShotWorkbench —— 右栏「分镜占位符」属性视图（中栏双页签改版后收敛为 **AI 生成属性**）。
+ * RtcShotWorkbench —— 设置弹窗中的项目生成设置；可选附当前分镜的生效覆盖摘要。
  * 原文/提示词/垫图/动作/历史 区块已整体移入中栏「AI 工作台」（RtcShotAiWorkbench，共享件见
- * shotWorkbenchParts）；本视图只留 AI 生成的**可选项属性**（用户定稿「占位时的属性仅作为
- * AI 生成属性选择，比如生图时的渠道、模型、比例、画质等」）：
+ * shotWorkbenchParts）；本视图提供项目级生成选项：
  *   - 头部分镜身份 + 引导（提示词与垫图在中栏编辑）；
  *   - 生图要求：ModelPicker cap="image"（家族→线路→模型三级）+ 比例/分辨率/画质；
  *   - 生视频要求：ModelPicker cap="video" + 方法（模型声明多方法才显示）+ 时长/分辨率/比例 + 附带项；
@@ -16,18 +15,19 @@ import { useDualModeFeature } from '@/store/connectionStore';
  * 分辨率与视频三档/方法=**[modelOptions](@/lib/modelOptions) 按模型 key 取**——⚠ 第251轮改点：
  * 原来的 `catalog.models.find(...)` 只认 catalog，选中 ComfyUI 直连/LibTV/即梦 这类本地渠道模型时
  * 档位会掉回内置三档（480p/720p/1080p），显示与提交都错；modelOptions 会回退到适配器 paramsSchema。
- * 显示层 clamp 与提交层（shotGenActions）用的是同一组函数。
+ * 显示与提交均保留显式设置，目录只提供选项与缺省值。
  * 不做 Frame161195 那个「换模型后回写收敛」effect（它已在表格页承担，双处回写徒增竞态面）。
  */
 import { useMemo } from "react";
 import { useProjectStore } from "@/store/projectStore";
 import { useCatalogStore } from "@/store/catalogStore";
-import ModelPicker, { useEffectiveModelKey } from "@/components/ModelPicker";
-import { clampDuration, clampImageResolution, IMAGE_ASPECTS, IMAGE_QUALITIES } from "@/lib/genParams";
-import { METHOD_LABELS, ASPECT_LABELS, clampMethod, clampToOptions, clampDurationTo } from "@/lib/videoMethods";
+import ModelPicker, { useCapModelOptions, useEffectiveModelKey } from "@/components/ModelPicker";
+import { buildImageParams, IMAGE_ASPECTS, IMAGE_QUALITIES } from "@/lib/genParams";
+import { METHOD_LABELS, ASPECT_LABELS } from "@/lib/videoMethods";
 import { imageResolutionOptionsForKey, modelMethodsForKey, videoReqOptionsForKey } from "@/lib/modelOptions";
 import type { MediaSettings } from "@/services/projectFile";
 import { JobChips, secTitle, secBox } from "./shotWorkbenchParts";
+import { useShotPreparing, withCurrentOption } from "./rtcShotSubmission";
 
 /* 单行样式：标题左 + 控件右（与 Frame161195 视频设置面板同观感，收窄适配 360px 右栏） */
 const rowSt: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, fontSize: 11, color: "rgba(255,255,255,0.6)" };
@@ -40,51 +40,57 @@ const divider: React.CSSProperties = { height: 1, background: "rgba(255,255,255,
 
 const QUALITY_LABEL: Record<string, string> = { low: "低", medium: "中", high: "高", auto: "自动" };
 
-export function RtcShotWorkbench({ episodeId, shotId }: { episodeId: string; shotId: string }) {
+export function RtcShotWorkbench({ episodeId = "", shotId = "" }: { episodeId?: string; shotId?: string }) {
+	const owner = useProjectStore(s => s.projectInstanceId);
 	const shot = useProjectStore((s) => s.episodes.find((e) => e.id === episodeId)?.shots.find((x) => x.id === shotId));
 	const epTitle = useProjectStore((s) => s.episodes.find((e) => e.id === episodeId)?.title) || "";
 	const ms = useProjectStore((s) => s.mediaSettings);
-	const setMS = (patch: Partial<MediaSettings>) => useProjectStore.getState().setMediaSettings(patch);
+	const setMS = (patch: Partial<MediaSettings>) => {
+		const state = useProjectStore.getState();
+		if (state.projectInstanceId === owner && !state.isProjectLoading) state.setMediaSettings(patch);
+	};
 
-	// 生图档位：分辨率按当前生效图像模型收敛——走 modelOptions 一把尺
+	// 生图档位：目录提供选项与缺省值，保留当前显式选择
 	// （catalog 优先、ComfyUI/LibTV/即梦 等本地渠道回退适配器 paramsSchema），与提交层 shotGenActions 同尺
 	const catalogVer = useCatalogStore((s) => s.catalog?.version);
 	const sbImgModelKey = useEffectiveModelKey("image");
 	const sbResOptions = useMemo(() => imageResolutionOptionsForKey(sbImgModelKey), [sbImgModelKey, catalogVer]);
 	const imageAspect = ms.imageAspect ?? "16:9";
-	const imageResolution = clampImageResolution(ms.imageResolution, sbResOptions);
+	const imageResolution = ms.imageResolution ?? String(buildImageParams({}, sbResOptions).resolution);
 	const imageQuality = ms.imageQuality ?? "high";
 
 	// 生视频档位：方法/时长/分辨率/比例按当前生效视频模型 catalog 下发（本地 CLI 模型=内置回退档）
 	const vidModelKey = useEffectiveModelKey("video");
+	const videoOptions = useCapModelOptions("video");
 	const vidMethods = useMemo(() => modelMethodsForKey(vidModelKey), [vidModelKey, catalogVer]);
-	const vidMethod = clampMethod(ms.videoMethod, vidMethods);
+	const vidMethod = ms.videoMethod ?? vidMethods[0];
 	const vidReq = useMemo(() => videoReqOptionsForKey(vidModelKey), [vidModelKey, catalogVer]);
-	const maxDuration = ms.maxDuration ?? 15;
+	const maxDuration = ms.maxDuration ?? vidReq.durations[0] ?? 15;
+	const resolution = ms.resolution ?? vidReq.resolutions[0] ?? "720p";
+	const aspect = ms.aspect ?? vidReq.aspects[0] ?? "16:9";
+	const ov = shot?.overrides;
+	const hasVideoOverride = !!ov && [ov.videoModelKey, ov.duration, ov.resolution, ov.aspect, ov.method].some(v => v !== undefined);
+	const shotModelKey = ov?.videoModelKey || vidModelKey;
+	const shotReq = useMemo(() => videoReqOptionsForKey(shotModelKey), [shotModelKey, catalogVer]);
+	const shotModelLabel = videoOptions.find(o => o.id === shotModelKey)?.label || shotModelKey || "未选择模型";
+	const shotVideoSummary = [shotModelLabel, `${ov?.duration ?? shot?.durationSec ?? ms.maxDuration ?? shotReq.durations[0] ?? 15}s`, ov?.resolution ?? ms.resolution ?? shotReq.resolutions[0] ?? "720p", ov?.aspect ?? ms.aspect ?? shotReq.aspects[0] ?? "16:9", ov?.method ? METHOD_LABELS[ov.method as keyof typeof METHOD_LABELS] || ov.method : null].filter(Boolean).join(" · ");
+	const preparingImage = useShotPreparing(episodeId, shotId, "storyboard");
+	const preparingVideo = useShotPreparing(episodeId, shotId, "video");
 	const dualModeEnabled = useDualModeFeature();
 	const sameSource = !dualModeEnabled || (ms.imgVideoSameSource ?? false);
-
-	if (!shot) {
-		return (
-			<div style={{ padding: 16, fontSize: 12, color: "rgba(255,255,255,0.5)", lineHeight: 1.8 }}>
-				该占位符关联的分镜已被删除。
-				<br />可在时间轴上删除此占位符，或回到视频界面重建分镜。
-			</div>
-		);
-	}
 
 	return (
 		<div style={{ display: "flex", flexDirection: "column", gap: 14, padding: "12px 12px 24px" }}>
 			{/* 头部：分镜身份 + 中栏编辑引导 */}
-			<div style={secBox}>
+			{shot && <div style={secBox}>
 				<div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
 					<span style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>{shot.title || "分镜"}</span>
-					<span style={{ fontSize: 10, color: "rgba(255,255,255,0.4)" }}>{epTitle}{shot.durationSec ? ` · ${shot.durationSec}s` : ""} · 占位符</span>
+					<span style={{ fontSize: 10, color: "rgba(255,255,255,0.4)" }}>{epTitle}{shot.durationSec ? ` · ${shot.durationSec}s` : ""}</span>
 				</div>
 				<div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.38)", lineHeight: 1.6 }}>
-					提示词、垫图与生成操作在中栏「AI 工作台」页编辑；本页选择生成要求。
+					本分镜覆盖在「AI 工作台」调整，下面设置项目默认值。
 				</div>
-			</div>
+			</div>}
 
 			{/* 生图要求 */}
 			<div style={secBox}>
@@ -93,21 +99,21 @@ export function RtcShotWorkbench({ episodeId, shotId }: { episodeId: string; sho
 				<label style={rowSt}>
 					<span style={rowLb}>图像比例</span>
 					<select value={imageAspect} onChange={(e) => setMS({ imageAspect: e.target.value })} style={rowCtl}>
-						{IMAGE_ASPECTS.map((a) => (
-							<option key={a.v} value={a.v} style={optBg}>{ASPECT_LABELS[a.v] || a.label}</option>
+						{withCurrentOption(IMAGE_ASPECTS.map(a => a.v), imageAspect).map((value) => (
+							<option key={value} value={value} style={optBg}>{ASPECT_LABELS[value] || IMAGE_ASPECTS.find(a => a.v === value)?.label || value}</option>
 						))}
 					</select>
 				</label>
 				<label style={rowSt}>
 					<span style={rowLb}>分辨率</span>
 					<select value={imageResolution} onChange={(e) => setMS({ imageResolution: e.target.value })} style={rowCtl}>
-						{sbResOptions.map((r) => <option key={r.v} value={r.v} style={optBg}>{r.label}</option>)}
+						{withCurrentOption(sbResOptions.map(r => r.v), imageResolution).map((v) => <option key={v} value={v} style={optBg}>{sbResOptions.find(r => r.v === v)?.label || v}</option>)}
 					</select>
 				</label>
 				<label style={rowSt}>
 					<span style={rowLb}>画质 <span style={{ color: "rgba(255,255,255,0.35)" }}>（{imageAspect} · {imageResolution}）</span></span>
 					<select value={imageQuality} onChange={(e) => setMS({ imageQuality: e.target.value })} style={rowCtl}>
-						{IMAGE_QUALITIES.map((v) => <option key={v} value={v} style={optBg}>{QUALITY_LABEL[v] || v}</option>)}
+						{withCurrentOption(IMAGE_QUALITIES, imageQuality).map((v) => <option key={v} value={v} style={optBg}>{QUALITY_LABEL[v] || v}</option>)}
 					</select>
 				</label>
 			</div>
@@ -116,32 +122,33 @@ export function RtcShotWorkbench({ episodeId, shotId }: { episodeId: string; sho
 
 			{/* 生视频要求 */}
 			<div style={secBox}>
-				<div style={groupHead}>生视频要求</div>
+				<div style={groupHead}>生视频项目默认</div>
+				{hasVideoOverride && <div title={shotVideoSummary} style={{ fontSize: 10.5, lineHeight: 1.5, color: "#c4b5fd", overflowWrap: "anywhere" }}>本镜生效：{shotVideoSummary}</div>}
 				<ModelPicker cap="video" label="生视频模型" style={rowPicker} />
-				{vidMethods.length > 1 && (
+				{withCurrentOption<string>(vidMethods, vidMethod).length > 1 && (
 					<label style={rowSt}>
 						<span style={rowLb} title="首尾帧=首帧（故事板图或素材第1张图）+ 尾帧（素材下一张图）">方法</span>
 						<select value={vidMethod} onChange={(e) => setMS({ videoMethod: e.target.value })} style={rowCtl}>
-							{vidMethods.map((k) => <option key={k} value={k} style={optBg}>{METHOD_LABELS[k]}</option>)}
+							{withCurrentOption<string>(vidMethods, vidMethod).map((k) => <option key={k} value={k} style={optBg}>{METHOD_LABELS[k as keyof typeof METHOD_LABELS] || k}</option>)}
 						</select>
 					</label>
 				)}
 				<label style={rowSt}>
 					<span style={rowLb}>时长(秒)</span>
-					<select value={clampDurationTo(clampDuration(maxDuration), vidReq.durations)} onChange={(e) => setMS({ maxDuration: Number(e.target.value) })} style={rowCtl}>
-						{vidReq.durations.map((d) => <option key={d} value={d} style={optBg}>{d} 秒</option>)}
+					<select value={maxDuration} onChange={(e) => setMS({ maxDuration: Number(e.target.value) })} style={rowCtl}>
+						{withCurrentOption(vidReq.durations, maxDuration).map((d) => <option key={d} value={d} style={optBg}>{d} 秒</option>)}
 					</select>
 				</label>
 				<label style={rowSt}>
 					<span style={rowLb}>分辨率</span>
-					<select value={clampToOptions(ms.resolution ?? "720p", vidReq.resolutions)} onChange={(e) => setMS({ resolution: e.target.value })} style={rowCtl}>
-						{vidReq.resolutions.map((r) => <option key={r} value={r} style={optBg}>{r}</option>)}
+					<select value={resolution} onChange={(e) => setMS({ resolution: e.target.value })} style={rowCtl}>
+						{withCurrentOption(vidReq.resolutions, resolution).map((r) => <option key={r} value={r} style={optBg}>{r}</option>)}
 					</select>
 				</label>
 				<label style={rowSt}>
 					<span style={rowLb}>比例</span>
-					<select value={clampToOptions(ms.aspect ?? "16:9", vidReq.aspects)} onChange={(e) => setMS({ aspect: e.target.value })} style={rowCtl}>
-						{vidReq.aspects.map((a) => <option key={a} value={a} style={optBg}>{ASPECT_LABELS[a] || a}</option>)}
+					<select value={aspect} onChange={(e) => setMS({ aspect: e.target.value })} style={rowCtl}>
+						{withCurrentOption(vidReq.aspects, aspect).map((a) => <option key={a} value={a} style={optBg}>{ASPECT_LABELS[a] || a}</option>)}
 					</select>
 				</label>
 				<div style={rowSt}>
@@ -173,11 +180,13 @@ export function RtcShotWorkbench({ episodeId, shotId }: { episodeId: string; sho
 			</div>
 
 			{/* 在途任务 chips（生成操作在中栏；这里留状态一览） */}
-			<div style={secBox}>
+			{shot && <div style={secBox}>
 				<div style={{ ...secTitle, fontSize: 10 }}><span>在途任务</span></div>
+				{preparingImage && <span style={secTitle}>故事板素材准备中…</span>}
 				<JobChips shotId={shotId} field="storyboard" />
+				{preparingVideo && <span style={secTitle}>视频素材准备中…</span>}
 				<JobChips shotId={shotId} field="video" />
-			</div>
+			</div>}
 		</div>
 	);
 }

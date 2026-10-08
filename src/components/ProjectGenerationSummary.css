@@ -1,0 +1,21 @@
+.qj-generation-summary {
+    display: flex;
+    align-items: center;
+    justify-content: safe center;
+    flex: 1;
+    min-width: 0;
+    gap: 12px;
+    overflow-x: auto;
+    white-space: nowrap;
+    color: rgba(255, 255, 255, 0.45);
+    font-size: 12px;
+    scrollbar-width: thin;
+}
+.qj-generation-summary-item { flex-shrink: 0; }
+.qj-generation-summary-item + .qj-generation-summary-item::before {
+    content: "·";
+    margin-right: 12px;
+    color: rgba(255, 255, 255, 0.2);
+}
+.qj-generation-summary b { color: #c4b5fd; font-weight: 600; }
+.qj-generation-summary:focus-visible { outline: 1px solid #8b5cf6; outline-offset: 2px; }

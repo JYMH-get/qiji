@@ -459,5 +459,80 @@ try {
     eq(count('CreateAsset'), before, `${asset.officialAssetType} API does not duplicate shared material`);
   }
   eq((await app.inject({ method: 'POST', url: '/v1/materials/prepare', payload: { ...apiBody, asset: { ...apiRef, officialAssetType: 'Document' } }, headers })).statusCode, 400, 'prepare API rejects invalid material type');
-  console.log(JSON.stringify({ ok: true, checks, network: 'stub-only', realGenerations: 0 }));
+
+  // 2026-10-05: the provider returns HTTP 200 with error.code=404 for deleted assets.
+  // Exercise the actual authenticated inspect -> upload flow; keep all earlier call counts intact.
+  const beforeMissingRegression = checks;
+  const materialApi = (asset, action) => app.inject({ method: 'POST', url: '/v1/materials/prepare', payload: { model: apiBody.model, asset, action }, headers });
+  const bindingRows = assetId => db.prepare('SELECT * FROM official_asset_bindings WHERE asset_id=? ORDER BY user_id, source_key').all(assetId);
+  const regressionGenerationCount = count('generations');
+  for (const [name, body] of [
+    ['direct-string-code', { error: { code: '404', message: 'Asset not found' } }],
+    ['nested-numeric-code', { data: { error: { code: 404, message: 'Asset not found' } } }],
+  ]) {
+    const deletedRef = await makeRef(`deleted-asset-${name}`);
+    const firstUpload = await materialApi(deletedRef, 'upload');
+    eq(firstUpload.statusCode, 200, `${name}: initial upload creates a certified binding`);
+    const deletedId = firstUpload.json().assetId;
+    ok(deletedId && bindingRows(deletedId).length, `${name}: old binding exists before provider deletion`);
+    records.delete(deletedId);
+    const creates = count('CreateAsset'), groups = count('CreateAssetGroup');
+    queryError = response(body);
+    try {
+      const missing = await materialApi(deletedRef, 'inspect');
+      eq(missing.statusCode, 200, `${name}: HTTP 200 embedded Asset not found is recoverable inspection`);
+      eq(missing.json().uploadRequired, true, `${name}: missing provider asset requests upload`);
+      eq(missing.json().assetId, undefined, `${name}: deleted ID is never returned as certified`);
+      eq(bindingRows(deletedId), [], `${name}: only stale binding is removed`);
+      eq(count('CreateAsset'), creates, `${name}: inspection never creates a replacement`);
+    } finally { queryError = undefined; }
+    const replacement = await materialApi(deletedRef, 'upload');
+    eq(replacement.statusCode, 200, `${name}: next explicit upload succeeds`);
+    eq(replacement.json().status, 'Active', `${name}: replacement is checked before certification`);
+    const newId = replacement.json().assetId;
+    ok(newId && newId !== deletedId, `${name}: replacement gets a new provider ID`);
+    eq(count('CreateAsset'), creates + 1, `${name}: upload creates exactly one replacement`);
+    eq(count('CreateAssetGroup'), groups, `${name}: valid existing group is retained`);
+    const reused = await materialApi(deletedRef, 'inspect');
+    eq(reused.statusCode, 200, `${name}: subsequent inspection succeeds`);
+    eq(reused.json().assetId, newId, `${name}: subsequent inspection reuses replacement ID`);
+    eq(reused.json().uploadRequired, false, `${name}: replacement does not enter an upload loop`);
+    eq(count('CreateAsset'), creates + 1, `${name}: subsequent inspection does not duplicate upload`);
+  }
+
+  const protectedRef = await makeRef('non-missing-errors-keep-binding');
+  const protectedUpload = await materialApi(protectedRef, 'upload');
+  eq(protectedUpload.statusCode, 200, 'negative fixtures begin with a valid binding');
+  const protectedId = protectedUpload.json().assetId;
+  const protectedRows = bindingRows(protectedId);
+  ok(protectedRows.length, 'negative fixtures have a binding to protect');
+  for (const [name, httpStatus, body] of [
+    ['ordinary-gateway-404', 404, { message: 'gateway missing' }],
+    ['other-object-404', 200, { error: { code: '404', message: 'Asset group not found' } }],
+    ['unknown-message-404', 200, { error: { code: '404', message: 'Resource not found' } }],
+    ['empty-message-404', 200, { error: { code: '404' } }],
+    ['embedded-authentication-error', 200, { error: { code: '401', message: 'Asset not found' } }],
+    ['http-authentication-error', 401, { error: { code: '404', message: 'Asset not found' } }],
+    ['named-missing-authentication-error', 401, { error: { code: 'AssetNotFound', message: 'Asset not found' } }],
+    ['named-missing-rate-limit', 429, { error: { code: 'AssetNotFound', message: 'Asset not found' } }],
+    ['named-missing-server-error', 503, { error: { code: 'AssetNotFound', message: 'Asset not found' } }],
+    ['embedded-credit-refusal', 200, { error: { code: '404', message: 'insufficient balance' } }],
+    ['http-credit-refusal', 403, { error: { code: 'InsufficientBalance', message: 'insufficient balance' } }],
+  ]) {
+    queryError = response(body, httpStatus);
+    const creates = count('CreateAsset'), groups = count('CreateAssetGroup');
+    try {
+      for (const action of ['inspect', 'upload']) {
+        const rejected = await materialApi(protectedRef, action);
+        eq(rejected.statusCode, 400, `${name}: ${action} remains a failure instead of missing-asset recovery`);
+        ok(rejected.json().error?.message, `${name}: ${action} retains an error for the client`);
+        eq(rejected.json().uploadRequired, undefined, `${name}: ${action} cannot authorize automatic replacement`);
+        eq(bindingRows(protectedId), protectedRows, `${name}: ${action} preserves the entire binding`);
+        eq(count('CreateAsset'), creates, `${name}: ${action} does not create duplicate material`);
+        eq(count('CreateAssetGroup'), groups, `${name}: ${action} does not create duplicate groups`);
+      }
+    } finally { queryError = undefined; }
+  }
+  eq(count('generations'), regressionGenerationCount, 'missing-asset recovery and refusals never generate');
+  console.log(JSON.stringify({ ok: true, checks, missingAssetChecks: checks - beforeMissingRegression, network: 'stub-only', realGenerations: 0 }));
 } finally { await app?.close(); await flushPendingSaves(); closeSqlite(); }

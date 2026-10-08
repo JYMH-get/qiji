@@ -25,6 +25,7 @@ import {
 	Layers,
 } from "lucide-react";
 import type { RtcSegment, RtcTrack } from "@/types/rtc";
+import { RtcRegenerationCost } from "../panel/RtcGenerationCost";
 
 export interface RtcSegMenuProps {
 	x: number;
@@ -104,7 +105,8 @@ export function RtcSegContextMenu({
 	}, [onClose]);
 
 	// 边界钳制
-	const clampX = Math.min(x, window.innerWidth - MENU_W - 8);
+	const menuWidth = onRegenerate ? 288 : MENU_W;
+	const clampX = Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8));
 	const clampY = Math.min(y, window.innerHeight - 320);
 
 	const isVideo = track.type === "video" && seg.kind === "media" && seg.media === "video";
@@ -123,8 +125,9 @@ export function RtcSegContextMenu({
 			/>
 			<div
 				ref={ref}
+				data-rtc-tab-navigation
 				className="fixed z-[10401] rounded-lg border border-white/10 bg-[#181a22] shadow-2xl p-1"
-				style={{ left: clampX, top: clampY, width: MENU_W }}
+				style={{ left: clampX, top: clampY, width: menuWidth }}
 			>
 				{/* 视频/图片片段：超分 / 去字幕 / 音频分离 */}
 				{(isVideo || isImage) && onUpscale && (
@@ -245,7 +248,7 @@ export function RtcSegContextMenu({
 				{onRegenerate && (
 					<button type="button" className={btn} onClick={() => { onRegenerate(); onClose(); }}>
 						<RefreshCw size={13} className="text-purple-400" />
-						重新生成
+						重新生成<RtcRegenerationCost segment={seg} />
 					</button>
 				)}
 			</div>

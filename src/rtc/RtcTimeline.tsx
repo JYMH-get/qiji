@@ -22,9 +22,8 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { RtcDoc, RtcSegment, RtcTrackType } from "@/types/rtc";
-import { createEmptyRtcDoc, createRtcTrack } from "@/types/rtc";
+import { createEmptyRtcDoc } from "@/types/rtc";
 import {
-	MIN_SEGMENT_US,
 	addSegment,
 	docDurationUs,
 	expandSelectionWithGroups,
@@ -39,7 +38,6 @@ import {
 	pruneEmptyTracks,
 	removeSegments,
 	removeTrack,
-	replaceSegmentMedia,
 	setTrackProps,
 	snapCandidates,
 	snapSegmentStart,
@@ -51,7 +49,13 @@ import { genId } from "@/lib/id";
 import { activeRtcDoc, useRtcStore, type RtcState } from "@/store/rtcStore";
 import { subDocDurationUs } from "@/lib/rtcCompound";
 import { RtcCompoundBreadcrumb } from "./timeline/RtcCompoundBreadcrumb";
+import { isRtcShotNavScopeCurrent, useRtcShotNavigation } from "./flow/rtcShotNavigation";
+import { scrollToRtcShot } from "./flow/rtcShotReveal";
 import { useRtcAssetSelStore } from "./rtcAssetSelStore";
+import { useRtcCenterTabStore } from "./panel/rtcCenterTabStore";
+import { openRtcTimelineWorkbench } from "./flow/rtcEpisodeWorkbenchView";
+import { usePromptModalStore } from "@/store/promptModalStore";
+import { useLightboxStore } from "@/store/lightboxStore";
 import { useProjectStore, activeRtcProjectDoc, resolveEpisodeKey } from "@/store/projectStore";
 import { useVideoDurationStore } from "@/store/videoDurationStore";
 import { RtcRuler } from "./timeline/RtcRuler";
@@ -97,8 +101,8 @@ import { useRtcClipboard } from "./rtcClipboard";
 import { copiedSegTemplate } from "./timeline/rtcClipboardCore";
 import { deriveShotForCopy } from "./panel/segShotBinding";
 /* 外部文件拖入：懒上传登记素材库（与左栏「本地导入」同链）后入轨 */
-import { uploadKindFromFile, uploadMediaToCanvasAsset } from "@/canvas/nodeUpload";
-import { useLibraryStore } from "@/store/libraryStore";
+import { uploadKindFromFile } from "@/canvas/nodeUpload";
+import { importDroppedFiles, placeDroppedAsset, replaceSegmentWithAsset } from "./timeline/rtcDropActions";
 import { useRtcAttrClipboard } from "./rtcAttrClipboard";
 import { coveredSegmentIds } from "./rtcPlayback";
 /* 原文参考车道（补充10）：实时从主轨分镜派生的只读参考行——非轨道数据、不参与任何剪辑交互 */
@@ -110,7 +114,6 @@ import {
 	GAP_DWELL_MS,
 	GAP_HIT_PX,
 	HEADER_W,
-	MEDIA_FALLBACK_US,
 	ROW_H_TEXT,
 	RULER_H,
 	rowHeightOf,
@@ -119,10 +122,7 @@ import {
 	playheadOffsetPx,
 	SNAP_PX,
 	TRACK_LABELS,
-	imageDefaultUs,
 	parseAssetPayload,
-	probeMediaDurationSec,
-	type DroppedAsset,
 } from "./timeline/timelineUtil";
 
 const US_PER_SEC = 1_000_000;
@@ -246,6 +246,7 @@ export function RtcTimeline() {
 	 *  wheel/ResizeObserver 监听会留在死节点上（Ctrl/Alt+滚轮失效、重开页面才恢复，用户实报）。
 	 *  监听 effect 一律依赖 [scrollEl]，节点重建即自动重挂。 */
 	const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+	const shotReveal = useRtcShotNavigation((s) => s.reveal);
 	const setScrollNode = useCallback((el: HTMLDivElement | null) => {
 		scrollRef.current = el;
 		setScrollEl(el);
@@ -300,10 +301,25 @@ export function RtcTimeline() {
 			"freeze", "keyframe", "reverse", "crop", "compound", "uncompound",
 		]);
 		const onKey = (e: KeyboardEvent) => {
+			// 灯箱查看/排序期间，Delete、撤销及播放等不能作用于背后的时间轴。
+			if (useLightboxStore.getState().item) return;
 			const t = e.target as HTMLElement | null;
 			if (shouldIgnoreKeyTarget(t, e.key)) return;
 			const action = resolveRtcShortcut(e);
 			if (!action) return;
+			if (action === "toggleCenterTab" || action === "toggleScriptTrack") {
+				const center = useRtcCenterTabStore.getState();
+				// 编辑/弹窗保留自己的按键行为；视图开关长按只触发一次。
+				if (e.defaultPrevented || e.isComposing || (center.scriptEditorOpen && !center.scriptEditorHidden)
+					|| usePromptModalStore.getState().open || useLightboxStore.getState().item
+					|| document.querySelector('[data-rtc-tab-navigation], [role="dialog"], [role="menu"], [role="listbox"]')) return;
+				e.preventDefault();
+				if (!e.repeat) {
+					if (action === "toggleCenterTab") center.setTab(center.tab === "workbench" ? "preview" : "workbench");
+					else useRtcStore.getState().toggleScriptTrackVisible();
+				}
+				return;
+			}
 			const st = useRtcStore.getState();
 			if (!st.doc) return;
 			if (st.selection.length === 0 && NEEDS_SELECTION.has(action)) return;
@@ -358,7 +374,6 @@ export function RtcTimeline() {
 				case "crop": return cropSelection();
 				case "compound": { const r = createCompoundFromSelection(); if (!r.ok && r.reason) alert(r.reason); return; }
 				case "uncompound": { const r = dissolveSelectedCompound(); if (!r.ok && r.reason) alert(r.reason); return; }
-				case "toggleScriptTrack": useRtcStore.getState().toggleScriptTrackVisible(); return;
 				case "selectAll": return void selectAllSegments();
 			}
 		};
@@ -420,6 +435,13 @@ export function RtcTimeline() {
 	const laneH = scriptLane.length > 0 ? ROW_H_TEXT : 0;
 	const laneHRef = useRef(0);
 	laneHRef.current = laneH;
+	useLayoutEffect(() => {
+		if (!shotReveal || !scrollEl) return;
+		if (isRtcShotNavScopeCurrent(shotReveal)) {
+			scrollToRtcShot(scrollEl, shotReveal.segmentId, shotReveal.positionUs, pxPerSec, RULER_H + laneH);
+		}
+		if (useRtcShotNavigation.getState().reveal === shotReveal) useRtcShotNavigation.setState({ reveal: null });
+	}, [shotReveal, scrollEl, pxPerSec, laneH]);
 	/* 行几何（文本轨半高）：rowTops[i]=第 i 行顶部（含 标尺+原文车道 偏移）、rowTops[rows]=轨道区底部。
 	 * 指针换算/缝隙命中/幽灵落点/框选全部以它为唯一口径（行高不再恒等 ROW_H）。 */
 	const rowTops: number[] = [RULER_H + laneH];
@@ -521,14 +543,18 @@ export function RtcTimeline() {
 						cur.includes(segId)
 							? cur.filter((x) => !groupIds.includes(x))
 							: [...new Set([...cur, ...groupIds])],
+						segId,
 					);
+					if (useRtcStore.getState().selection.includes(segId)) openRtcTimelineWorkbench(segId);
 					return;
 				}
 				// 点击选中：带 groupId 的片段选中整组（删除/复制/剪切经 selection 天然作用于整组）
 				const activeSelection = st.selection.includes(segId)
 					? st.selection
 					: expandSelectionWithGroups(d, [segId]);
-				if (!st.selection.includes(segId)) st.setSelection(activeSelection);
+				// 重复点击也刷新单镜焦点；保留原多选/组选择供拖动使用。
+				st.setSelection(activeSelection, segId);
+				openRtcTimelineWorkbench(segId);
 
 				const thresholdUs = (SNAP_PX / st.pxPerSec) * US_PER_SEC;
 				const edgeEl = target.closest<HTMLElement>("[data-edge]");
@@ -578,7 +604,8 @@ export function RtcTimeline() {
 						copy: e.altKey, // Alt+拖动=复制（剪映/涂鸦编辑器同款；手势开始时定，中途按放 Alt 不变）
 					};
 				}
-				(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+				// 尚未拖动时保留片段为 click/dblclick 的目标；捕获到父容器会吞掉片段双击。
+				(edgeEl ?? segEl).setPointerCapture(e.pointerId);
 				e.preventDefault();
 				return;
 			}
@@ -633,6 +660,8 @@ export function RtcTimeline() {
 			if (!d) return;
 			if (drag.kind === "move") {
 				if (!drag.moved && Math.abs(e.clientX - drag.startX) < 3 && Math.abs(e.clientY - drag.startY) < 3) return;
+				// 拖动预览会卸载原片段，先把捕获移到稳定的时间轴容器，跨轨/移出视口仍能松手提交。
+				if (!drag.moved) (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 				drag.moved = true;
 				let desired = eventUs(e.clientX) - drag.grabOffsetUs;
 				if (st.snapOn) desired = snapSegmentStart(drag.candidates, desired, drag.durUs, drag.thresholdUs);
@@ -731,6 +760,7 @@ export function RtcTimeline() {
 			}
 			// trim
 			if (!drag.moved && Math.abs(e.clientX - drag.startX) < 3) return;
+			if (!drag.moved) (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 			drag.moved = true;
 			const rawDelta = Math.round(((e.clientX - drag.startX) / st.pxPerSec) * US_PER_SEC);
 			let edgePos = drag.origEdgeUs + rawDelta;
@@ -768,7 +798,8 @@ export function RtcTimeline() {
 		if (!drag.moved) {
 			// 原地点击：收敛为单选（带 groupId 的片段仍收敛为整组——组即选中单元）
 			if (drag.kind === "move" && st.selection.length > 1) {
-				st.setSelection(st.doc ? expandSelectionWithGroups(st.doc, [drag.segId]) : [drag.segId]);
+				const currentDoc = activeDocNow();
+				st.setSelection(currentDoc ? expandSelectionWithGroups(currentDoc, [drag.segId]) : [drag.segId], drag.segId);
 			}
 			return;
 		}
@@ -953,12 +984,18 @@ export function RtcTimeline() {
 		[renderDoc, segActions],
 	);
 
-	/* 第三批：text 轨空白**双击** → 在双击处添加字幕片段（默认 3 秒「双击编辑字幕」，自动选中）。
-	 * 片段/按钮/标尺上的双击不劫持；非 text 轨双击不响应（保持既有行为零变化）。 */
-	const onBlankDoubleClick = useCallback(
+	/* 片段双击打开 AI 工作台；复合片段由 SegmentView 截获，仍进入子时间轴。
+	 * text 轨空白双击继续添加字幕，按钮/轨道头/标尺不劫持。 */
+	const onTimelineDoubleClick = useCallback(
 		(e: React.MouseEvent) => {
 			const target = e.target as HTMLElement;
-			if (target.closest("[data-seg]") || target.closest("button") || target.closest("[data-hdr]") || target.closest("[data-ruler]")) return;
+			if (target.closest("button, [data-hdr], [data-ruler], [data-edge]")) return;
+			const segId = target.closest<HTMLElement>("[data-seg]")?.dataset.seg;
+			if (segId) {
+				const track = activeDocNow()?.tracks.find(t => t.segments.some(seg => seg.id === segId));
+				if (track && !track.locked) openRtcTimelineWorkbench(segId, "double");
+				return;
+			}
 			const tid = trackIdFromY(e.clientY);
 			const t = tid ? activeDocNow()?.tracks.find((x) => x.id === tid) : undefined;
 			if (!t || t.type !== "text" || t.locked) return;
@@ -971,6 +1008,7 @@ export function RtcTimeline() {
 	 * 所以到这里的一定是空白落点。轨道行外（标尺/底部空白）或该轨无可添加项时不弹，交回浏览器默认。 */
 	const onBlankContextMenu = useCallback(
 		(e: React.MouseEvent) => {
+			if ((e.target as HTMLElement).closest("[data-seg], button, [data-hdr], [data-ruler]")) return;
 			const tid = trackIdFromY(e.clientY);
 			const track = tid ? activeDocNow()?.tracks.find((x) => x.id === tid) : undefined;
 			if (!track) return;
@@ -1015,7 +1053,7 @@ export function RtcTimeline() {
 					onDragLeave={onDragLeave}
 					onDrop={onDrop}
 					onContextMenu={onBlankContextMenu}
-					onDoubleClick={onBlankDoubleClick}
+					onDoubleClick={onTimelineDoubleClick}
 				>
 					<div className="sticky top-0 z-30 flex" style={{ height: RULER_H }}>
 						{/* 角块：第三批起放「＋字幕」入口（工具栏加轨按钮归并行任务独占，字幕入口收在这里） */}
@@ -1171,112 +1209,4 @@ export function RtcTimeline() {
 			{blankActions.menu}
 		</div>
 	);
-}
-
-/**
- * 素材拖到已有片段上 → **原位替换**（剪映「替换」语义，见 rtcOps.replaceSegmentMedia）：
- * 位置不动、时长保持（新素材撑不满才收短）、不新增不删除片段；一次 commit = 一条 undo。
- */
-async function replaceSegmentWithAsset(segId: string, asset: DroppedAsset) {
-	let sourceTotalUs = 0;
-	if (asset.media !== "image" && asset.probeUri) {
-		const sec = await probeMediaDurationSec(asset.probeUri, asset.media);
-		if (sec > 0) sourceTotalUs = Math.round(sec * US_PER_SEC);
-	}
-	commitActiveNow((d) =>
-		replaceSegmentMedia(d, segId, {
-			media: asset.media,
-			...(asset.assetId ? { assetId: asset.assetId } : {}),
-			...(asset.displayUri ? { uri: asset.displayUri } : {}),
-			...(asset.name ? { name: asset.name } : {}),
-			sourceTotalUs,
-		}),
-	);
-	useRtcStore.getState().setSelection([segId]);
-}
-
-/** 拖放落轨：视频/音频先探测真实时长再入轨（source 窗口 = [0, 素材全长]）；图片 3 秒无源窗口。
- *  轨道匹配：落点轨道类型匹配且未锁 → 用它；否则首条匹配轨；再没有 → 同一 commit 里新建匹配轨。 */
-async function placeDroppedAsset(asset: DroppedAsset, dropUs: number, preferTrackId?: string) {
-	let durUs = imageDefaultUs(); // 图片默认时长走设置（rtcEditorSettingsStore，缺省 3s）
-	let source: { sourceStartUs: number; sourceDurationUs: number } | null = null;
-	if (asset.media !== "image") {
-		const sec = asset.probeUri ? await probeMediaDurationSec(asset.probeUri, asset.media) : 0;
-		if (sec > 0) {
-			durUs = Math.max(MIN_SEGMENT_US, Math.round(sec * US_PER_SEC));
-			source = { sourceStartUs: 0, sourceDurationUs: durUs };
-		} else {
-			durUs = MEDIA_FALLBACK_US; // 探测失败：回退时长且不建 source 窗口（trim 不受虚假源长约束）
-		}
-	}
-	const st = useRtcStore.getState();
-	const wanted = trackTypeForMedia(asset.media);
-	const segId = genId("seg");
-	commitActiveNow((d) => {
-		let next = d;
-		let track = preferTrackId ? next.tracks.find((t) => t.id === preferTrackId) : undefined;
-		if (!track || track.type !== wanted || track.locked) {
-			track = next.tracks.find((t) => t.type === wanted && !t.locked);
-		}
-		let trackId = track?.id;
-		if (!trackId) {
-			const created = createRtcTrack(wanted);
-			next = { ...next, tracks: [...next.tracks, created] };
-			trackId = created.id;
-		}
-		let startUs = dropUs;
-		if (st.snapOn) {
-			startUs = Math.max(
-				0,
-				snapSegmentStart(snapCandidates(next), dropUs, durUs, (SNAP_PX / st.pxPerSec) * US_PER_SEC),
-			);
-		}
-		const seg: RtcSegment = {
-			id: segId,
-			kind: "media",
-			media: asset.media,
-			...(asset.name ? { name: asset.name } : {}),
-			...(asset.assetId ? { assetId: asset.assetId } : {}),
-			...(asset.displayUri ? { uri: asset.displayUri } : {}),
-			targetStartUs: startUs,
-			targetDurationUs: durUs,
-			...(source ?? {}),
-		};
-		return addSegment(next, trackId, seg);
-	});
-	useRtcStore.getState().setSelection([segId]);
-}
-
-/**
- * 外部文件拖入时间轨（用户定稿）：**素材库与时间轨同时出现**——逐文件先走懒上传登记素材库
- * （uploadMediaToCanvasAsset：LC- 本地资产零网络 + libraryStore.addAsset，与左栏「本地导入」
- * 完全同链），再按落点走 placeDroppedAsset 入轨（时长探测/轨道匹配/夹隙与内部拖放同一条路）。
- * 多文件落同一位置时由 addSegment 逐条夹到最近空隙（顺序排开）；单个失败不阻断其余。
- */
-async function importDroppedFiles(files: File[], dropUs: number, preferTrackId?: string) {
-	for (const f of files) {
-		const kind = uploadKindFromFile(f);
-		if (kind === "script") continue;
-		const name = f.name.replace(/\.[^.]+$/, "");
-		try {
-			const up = await uploadMediaToCanvasAsset(f);
-			const ps = useProjectStore.getState();
-			useLibraryStore.getState().addAsset({
-				id: up.assetId, kind, name, uri: up.displayUri,
-				serverAssetId: up.assetId, thumbnailUri: kind === "image" ? up.displayUri : null,
-				createdAt: new Date().toISOString(), deletedByUser: false, localPath: up.localPath,
-				origin: "upload",
-				episodeId: resolveEpisodeKey(ps.rtcEpisodeId, ps.episodes) || null, // 分集化：导入归当前分集
-			});
-			// doc 里的 uri 不收 data:/blob:（与 parseAssetPayload 同规——blob 重载即死，不入落盘数据）
-			const displayUri = /^(data|blob):/i.test(up.displayUri) ? undefined : up.displayUri;
-			await placeDroppedAsset(
-				{ media: kind, name, assetId: up.assetId, displayUri, probeUri: up.displayUri },
-				dropUs,
-				preferTrackId,
-			);
-		} catch (err) {
-			console.warn("[rtc] 外部文件入轨失败", f.name, err);
-		}
-	}
 }

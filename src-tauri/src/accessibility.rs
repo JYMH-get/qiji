@@ -11,6 +11,24 @@ use tauri::{AppHandle, Manager, Runtime};
 const PREFERENCE_FILE: &str = "accessibility.json";
 const DEFAULT_BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --enable-features=WebGPU";
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const POLICY_REVISION: &str = "ax-compat-2";
+const COMPATIBILITY_DISABLED_FEATURE: &str = "AccessibilityBlockFlowIterator";
+
+/// Application policy only; it does not claim that the Runtime's AX tree is off.
+/// Raw paths, errors and command lines must never enter this snapshot.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessibilityDiagnosticPolicy {
+    state_available: bool,
+    supported: bool,
+    enabled: Option<bool>,
+    active_enabled: Option<bool>,
+    restart_required: Option<bool>,
+    preference_readable: bool,
+    policy_revision: &'static str,
+    renderer_accessibility_disabled: bool,
+    compatibility_disabled_features: Vec<String>,
+}
 
 #[derive(Deserialize, Serialize)]
 struct Preference {
@@ -48,25 +66,110 @@ fn read_preference(path: &Path) -> Result<bool, String> {
         .map_err(|error| format!("无障碍设置文件损坏，请重新保存此设置：{error}"))
 }
 
+// Preserve unrelated Windows argument tokens, including quoted paths/values.
+fn argument_tokens(command: &str) -> Vec<&str> {
+    let mut result = Vec::new();
+    let mut start = None;
+    let mut quoted = false;
+    let mut backslashes = 0;
+    for (index, character) in command.char_indices() {
+        if character.is_ascii_whitespace() && !quoted {
+            if let Some(begin) = start.take() {
+                result.push(&command[begin..index]);
+            }
+        } else {
+            start.get_or_insert(index);
+            if character == '"' && backslashes % 2 == 0 {
+                quoted = !quoted;
+            }
+        }
+        backslashes = if character == '\\' {
+            backslashes + 1
+        } else {
+            0
+        };
+    }
+    if let Some(begin) = start {
+        result.push(&command[begin..]);
+    }
+    result
+}
+
+fn unquote(value: &str) -> &str {
+    value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(value)
+}
+
+fn is_compatibility_feature(feature: &str) -> bool {
+    feature
+        .trim()
+        .trim_start_matches('*')
+        .split(['<', ':'])
+        .next()
+        == Some(COMPATIBILITY_DISABLED_FEATURE)
+}
+
+fn feature_argument(name: &str, features: &[&str]) -> String {
+    let value = features.join(",");
+    if value.chars().any(char::is_whitespace) {
+        format!("--{name}=\"{value}\"")
+    } else {
+        format!("--{name}={value}")
+    }
+}
+
 fn browser_args(base: &str, supported: bool, enabled: bool) -> String {
     if !supported {
         return base.to_owned();
     }
-    let mut arguments: Vec<&str> = base
-        .split_whitespace()
-        .filter(|argument| {
-            !matches!(
-                *argument,
-                "--disable-renderer-accessibility" | "--force-renderer-accessibility"
-            ) && !argument.starts_with("--force-renderer-accessibility=")
-                && !argument.starts_with("--disable-renderer-accessibility=")
-        })
-        .collect();
+    let mut arguments = Vec::new();
+    let mut disabled_features = Vec::new();
+    let mut enabled_features = Vec::new();
+    let tokens = argument_tokens(base);
+    let switch_end = tokens
+        .iter()
+        .position(|token| unquote(token) == "--")
+        .unwrap_or(tokens.len());
+    for token in &tokens[..switch_end] {
+        let argument = unquote(token);
+        let (name, value) = argument.split_once('=').unwrap_or((argument, ""));
+        match name {
+            "--disable-renderer-accessibility" | "--force-renderer-accessibility" => {}
+            "--disable-features" | "--enable-features" => {
+                let features = if name == "--disable-features" {
+                    &mut disabled_features
+                } else {
+                    &mut enabled_features
+                };
+                for feature in unquote(value).split(',').map(str::trim) {
+                    if !feature.is_empty()
+                        && !is_compatibility_feature(feature)
+                        && !features.contains(&feature)
+                    {
+                        features.push(feature);
+                    }
+                }
+            }
+            _ => arguments.push((*token).to_owned()),
+        }
+    }
+    // Both modes avoid the iterator branch observed in the crash dumps. The
+    // legacy path still exposes text to assistive clients; disabling renderer
+    // accessibility alone does not block active CDP AX requests. This base
+    // feature (not a Blink runtime feature) must be rechecked on Runtime updates.
+    disabled_features.push(COMPATIBILITY_DISABLED_FEATURE);
+    arguments.push(feature_argument("disable-features", &disabled_features));
+    if !enabled_features.is_empty() {
+        arguments.push(feature_argument("enable-features", &enabled_features));
+    }
     // Enabling restores WebView2's on-demand behavior. Forcing the full AX tree
     // would create work even when no assistive client has requested it.
     if !enabled {
-        arguments.push("--disable-renderer-accessibility");
+        arguments.push("--disable-renderer-accessibility".to_owned());
     }
+    arguments.extend(tokens[switch_end..].iter().map(|token| (*token).to_owned()));
     arguments.join(" ")
 }
 
@@ -133,6 +236,46 @@ impl AccessibilityState {
         // process must stay compatible with the already-running WebView2 host.
         Ok(self.status(enabled))
     }
+
+    fn diagnostic_policy(&self) -> AccessibilityDiagnosticPolicy {
+        let preference = self
+            .get()
+            .ok()
+            .filter(|settings| self.supported && settings.preference_read_error.is_none());
+        AccessibilityDiagnosticPolicy {
+            state_available: true,
+            supported: self.supported,
+            enabled: preference.as_ref().map(|settings| settings.enabled),
+            active_enabled: self.supported.then_some(self.active_enabled),
+            restart_required: preference
+                .as_ref()
+                .map(|settings| settings.restart_required),
+            preference_readable: preference.is_some(),
+            policy_revision: POLICY_REVISION,
+            renderer_accessibility_disabled: self.supported && !self.active_enabled,
+            compatibility_disabled_features: if self.supported {
+                vec![COMPATIBILITY_DISABLED_FEATURE.to_owned()]
+            } else {
+                Vec::new()
+            },
+        }
+    }
+}
+
+pub fn diagnostic_policy<R: Runtime>(app: &AppHandle<R>) -> AccessibilityDiagnosticPolicy {
+    app.try_state::<AccessibilityState>()
+        .map(|state| state.diagnostic_policy())
+        .unwrap_or(AccessibilityDiagnosticPolicy {
+            state_available: false,
+            supported: cfg!(windows),
+            enabled: None,
+            active_enabled: None,
+            restart_required: None,
+            preference_readable: false,
+            policy_revision: POLICY_REVISION,
+            renderer_accessibility_disabled: false,
+            compatibility_disabled_features: Vec::new(),
+        })
 }
 
 fn write_preference(path: &Path, enabled: bool) -> Result<(), String> {
@@ -199,7 +342,7 @@ pub fn init<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
     init_with_path(None)
 }
 
-fn init_with_path<R: Runtime>(test_path: Option<PathBuf>) -> tauri::plugin::TauriPlugin<R> {
+pub(super) fn init_with_path<R: Runtime>(test_path: Option<PathBuf>) -> tauri::plugin::TauriPlugin<R> {
     tauri::plugin::Builder::new("accessibility-settings")
         .setup(move |app, _| {
             let path = match test_path {
@@ -274,7 +417,7 @@ mod native_smoke {
         let output = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
-            .join("outputs/accessibility-toggle-20261004");
+            .join("outputs/accessibility-hardening-20261005");
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -326,7 +469,12 @@ mod native_smoke {
                         let actual = String::from_utf8_lossy(&command_line.stdout);
                         let actual_disabled = actual.contains("--disable-renderer-accessibility");
                         let actual_forced = actual.contains("--force-renderer-accessibility");
-                        if actual.trim().is_empty() || actual_disabled == enabled || actual_forced {
+                        let compatibility_disabled = argument_tokens(&actual).iter().any(|token| {
+                            unquote(token).strip_prefix("--disable-features=").is_some_and(|value| {
+                                unquote(value).split(',').any(is_compatibility_feature)
+                            })
+                        });
+                        if actual.trim().is_empty() || actual_disabled == enabled || actual_forced || !compatibility_disabled {
                             return Err("Actual isolated WebView2 flags did not match the frozen policy".into());
                         }
                         let result = serde_json::json!({
@@ -335,6 +483,7 @@ mod native_smoke {
                             "firstBrowserPid": first_pid, "secondBrowserPid": second_pid,
                             "actualDisableRendererAccessibility": actual_disabled,
                             "actualForceRendererAccessibility": actual_forced,
+                            "actualBlockFlowIteratorDisabled": compatibility_disabled,
                             "twoHiddenWindowsCreated": true,
                             "nextStartupEnabled": read_preference(&root.join(PREFERENCE_FILE))?,
                         });
@@ -523,7 +672,9 @@ mod tests {
         let original = format!("{DEFAULT_BROWSER_ARGS} --force-renderer-accessibility=complete --disable-renderer-accessibility");
         for enabled in [true, false] {
             let args = browser_args(&original, true, enabled);
-            assert!(args.starts_with(DEFAULT_BROWSER_ARGS));
+            assert!(args.contains("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,AccessibilityBlockFlowIterator"));
+            assert!(args.contains("--autoplay-policy=no-user-gesture-required"));
+            assert!(args.contains("--enable-features=WebGPU"));
             assert_eq!(
                 args.matches("renderer-accessibility").count(),
                 usize::from(!enabled)
@@ -540,5 +691,80 @@ mod tests {
         assert!(!status.supported && !status.enabled && !status.active_enabled);
         assert_eq!(state.browser_args, "--existing");
         assert!(state.set(true).is_err());
+    }
+
+    #[test]
+    fn compatibility_features_merge_without_changing_quoted_unrelated_arguments() {
+        let base = r#"--user-agent="Qiji test browser" --disable-features=First,AccessibilityBlockFlowIterator<OldTrial --enable-features="WebGPU,AccessibilityBlockFlowIterator:k/v" --disable-features=Second,First --enable-features=*AccessibilityBlockFlowIterator<Trial.Group:k/v,Third --force-renderer-accessibility=complete"#;
+        for enabled in [true, false] {
+            let args = browser_args(base, true, enabled);
+            assert!(args.contains(r#"--user-agent="Qiji test browser""#));
+            assert!(args.contains("--disable-features=First,Second,AccessibilityBlockFlowIterator"));
+            assert!(args.contains("--enable-features=WebGPU,Third"));
+            assert_eq!(args.matches(COMPATIBILITY_DISABLED_FEATURE).count(), 1);
+            assert_eq!(args.matches("--disable-features=").count(), 1);
+            assert_eq!(browser_args(&args, true, enabled), args);
+        }
+        assert_eq!(browser_args(base, false, false), base);
+    }
+
+    #[test]
+    fn quoted_tokens_and_escaped_quotes_are_preserved() {
+        let base = r#"--label="a \"quoted\" value" "--disable-features=First,Second" --enable-features="Third:param/with space,AccessibilityBlockFlowIterator""#;
+        let args = browser_args(base, true, true);
+        assert!(args.contains(r#"--label="a \"quoted\" value""#));
+        assert!(args.contains("--disable-features=First,Second,AccessibilityBlockFlowIterator"));
+        assert!(args.contains(r#"--enable-features="Third:param/with space""#));
+    }
+
+    #[test]
+    fn policies_precede_switch_terminator_and_leave_positional_values_untouched() {
+        let args = browser_args(
+            "--enable-features=WebGPU -- --force-renderer-accessibility",
+            true,
+            false,
+        );
+        let (switches, positional) = args.split_once(" -- ").unwrap();
+        assert!(switches.contains("--disable-features=AccessibilityBlockFlowIterator"));
+        assert!(switches.contains("--disable-renderer-accessibility"));
+        assert_eq!(positional, "--force-renderer-accessibility");
+        assert_eq!(browser_args(&args, true, false), args);
+    }
+
+    #[test]
+    fn diagnostics_distinguish_saved_preference_from_frozen_startup_policy() {
+        let directory = TestDirectory::new();
+        let state = directory.state();
+        let startup = state.diagnostic_policy();
+        state.set(true).unwrap();
+        let current = state.diagnostic_policy();
+        assert_eq!(startup.enabled, Some(false));
+        assert_eq!(current.enabled, Some(true));
+        assert_eq!(current.active_enabled, Some(false));
+        assert_eq!(current.restart_required, Some(true));
+        assert!(current.renderer_accessibility_disabled);
+        assert_eq!(
+            current.compatibility_disabled_features,
+            [COMPATIBILITY_DISABLED_FEATURE]
+        );
+        let restarted = directory.state().diagnostic_policy();
+        assert!(!restarted.renderer_accessibility_disabled);
+        assert_eq!(
+            restarted.compatibility_disabled_features,
+            [COMPATIBILITY_DISABLED_FEATURE]
+        );
+    }
+
+    #[test]
+    fn diagnostic_read_failure_is_unknown_without_leaking_paths_or_errors() {
+        let state = AccessibilityState::new(Err("private-path-secret".into()), true, "");
+        let policy = state.diagnostic_policy();
+        assert!(!policy.preference_readable);
+        assert_eq!(policy.enabled, None);
+        assert_eq!(policy.restart_required, None);
+        assert_eq!(policy.active_enabled, Some(false));
+        assert!(!serde_json::to_string(&policy)
+            .unwrap()
+            .contains("private-path-secret"));
     }
 }

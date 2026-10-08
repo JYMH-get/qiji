@@ -1,4 +1,5 @@
 import { ViewportVideo } from "@/components/ViewportVideo";
+import { NodeGenerationCost } from "@/components/NodeGenerationCost";
 
 import { useRef, useState, useEffect, useMemo, type ReactNode, type ComponentType } from "react";
 import { ImageOff, RefreshCw, ScrollText, AudioLines, Film, Globe, User, Image as ImageIco, Package, PawPrint, Users, Layers, LayoutGrid } from "lucide-react";
@@ -302,7 +303,7 @@ export function ResultView({
 					}}
 				>
 					<RefreshCw className="size-3" />
-					重试
+					重试<NodeGenerationCost nodeId={nodeId} />
 				</button>}
 			</div>
 		);

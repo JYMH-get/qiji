@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { useProjectStore } from "@/store/projectStore";
 import { useCanvasStore } from "@/store/canvasStore";
 import { useLibraryStore } from "@/store/libraryStore";
+import { canvasInferenceDuration } from "@/lib/inferenceStrategy";
 import { syncCanvasFromProject } from "./canvasProjection";
 
 /** 资产模式 → 画布单向投影的可行性验证：投影正确性 + 幂等 + 就地更新。 */
@@ -15,6 +16,73 @@ describe("canvasProjection（资产模式↔画布全映射）", () => {
 
 	const nodes = () => Object.values(useCanvasStore.getState().nodes);
 	const byRef = (r: string) => nodes().find((n) => n.data.sourceRef === r);
+
+	describe("整集推理时长范围投影", () => {
+		beforeEach(() => {
+			useProjectStore.setState({ episodes: [{
+				id: "ep1", index: 1, title: "第一集", scriptText: "本集原文",
+				shots: [{ id: "sh1", index: 1, title: "分镜1", prompt: "", materials: [], durationSec: 8 }],
+			}] });
+		});
+
+		it("整集保留自定义8.5–22秒，单镜旧时长和视频生成参数不变", () => {
+			useProjectStore.setState({ mediaSettings: {
+				maxDuration: 15, inferenceDurationPreset: "custom", inferenceCustomDuration: { min: 8.5, max: 22 },
+			} });
+			syncCanvasFromProject("ep1");
+			expect(canvasInferenceDuration(byRef("episode:ep1")!.data.params)).toMatchObject({
+				durationPreset: "custom", durationRange: { min: 8.5, max: 22 }, durationLimit: 30,
+			});
+			expect(canvasInferenceDuration(byRef("shot:sh1")!.data.params).durationRange).toEqual({ min: 4, max: 15 });
+			const video = byRef("shotVid:sh1")!;
+			useCanvasStore.getState().updateNodeParams(video.id, { duration: 9 });
+			syncCanvasFromProject("ep1");
+			expect(byRef("shotVid:sh1")!.data.params.duration).toBe(9);
+		});
+
+		it("旧项目8秒上限投影为4–8秒，不量化到15秒", () => {
+			useProjectStore.setState({ mediaSettings: { maxDuration: 8 } });
+			syncCanvasFromProject("ep1");
+			expect(canvasInferenceDuration(byRef("episode:ep1")!.data.params)).toMatchObject({
+				durationPreset: "custom", durationRange: { min: 4, max: 8 }, customDuration: { min: 4, max: 8 },
+			});
+			expect(canvasInferenceDuration(byRef("shot:sh1")!.data.params).durationRange).toEqual({ min: 4, max: 15 });
+		});
+
+		it("空自定义草稿投影和序列化后仍待修正，不静默回退预设", () => {
+			useProjectStore.setState({ mediaSettings: {
+				maxDuration: 15, inferenceDurationPreset: "custom", inferenceCustomDuration: { min: "", max: 22 },
+			} });
+			syncCanvasFromProject("ep1");
+			const params = JSON.parse(JSON.stringify(byRef("episode:ep1")!.data.params));
+			expect(params.inferenceCustomDuration).toEqual({ min: "", max: 22 });
+			expect(canvasInferenceDuration(params)).toMatchObject({ durationPreset: "custom", durationRange: undefined });
+			expect(canvasInferenceDuration(params).durationError).toBeTruthy();
+		});
+
+		it("重复同步幂等且范围不与项目或旧节点共享，切预设保留自定义草稿", () => {
+			const custom = { min: 8.5, max: 22 };
+			useProjectStore.setState({ mediaSettings: { inferenceDurationPreset: "custom", inferenceCustomDuration: custom } });
+			expect(syncCanvasFromProject("ep1")).toBe(true);
+			const oldParams = byRef("episode:ep1")!.data.params;
+			expect(oldParams.inferenceCustomDuration).toEqual(custom);
+			expect(oldParams.inferenceCustomDuration).not.toBe(custom);
+			expect(syncCanvasFromProject("ep1")).toBe(false);
+			const nextCustom = { min: 9, max: 21 };
+			useProjectStore.setState({ mediaSettings: { inferenceDurationPreset: "4-30", inferenceCustomDuration: nextCustom } });
+			expect(syncCanvasFromProject("ep1")).toBe(true);
+			const nextParams = byRef("episode:ep1")!.data.params;
+			expect(canvasInferenceDuration(nextParams)).toMatchObject({ durationRange: { min: 4, max: 30 }, customDuration: nextCustom });
+			expect(nextParams.inferenceCustomDuration).not.toBe(nextCustom);
+			expect(nextParams.inferenceCustomDuration).not.toBe(oldParams.inferenceCustomDuration);
+			(nextParams.inferenceCustomDuration as { min: number }).min = 12;
+			expect(nextCustom).toEqual({ min: 9, max: 21 });
+			expect(oldParams.inferenceCustomDuration).toEqual({ min: 8.5, max: 22 });
+			useProjectStore.setState({ mediaSettings: { inferenceDurationPreset: "custom", inferenceCustomDuration: nextCustom } });
+			syncCanvasFromProject("ep1");
+			expect(canvasInferenceDuration(byRef("episode:ep1")!.data.params).durationRange).toEqual({ min: 9, max: 21 });
+		});
+	});
 
 
     it("默认不发资产、全文或分集节点，清理历史投影时保留手建节点", () => {

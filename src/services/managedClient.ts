@@ -765,6 +765,16 @@ export const managedClient = {
 		await request("POST", Endpoints.sharedLeave(libId), {}, 15000);
 	},
 
+	/** 团长删除本团队的共享文件夹及其中的共享记录。 */
+	async sharedDeleteFolder(folderId: string): Promise<void> {
+		await request("DELETE", Endpoints.teamLibFolder(folderId), undefined, 15000);
+	},
+
+	/** 使用共享记录 id 删除，不删除资产台账或媒体文件。 */
+	async sharedDeleteAsset(recordId: string): Promise<void> {
+		await request("DELETE", Endpoints.teamLibAsset(recordId), undefined, 15000);
+	},
+
 	/** 二级「获取」：库内文件夹 + 各自素材数（惰性加载，绝不连带素材） */
 	async sharedFolders(libId: string): Promise<SharedFolderInfo[]> {
 		return (await request<{ items: SharedFolderInfo[] }>("GET", Endpoints.sharedFolders(libId), undefined, 20000)).items;

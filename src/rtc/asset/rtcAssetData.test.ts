@@ -249,6 +249,12 @@ describe("collectLibraryImageItems includeGenerated", () => {
 		expect(collectLibraryImageItems([up, gen]).map((i) => i.id)).toEqual(["TP1"]);
 		expect(collectLibraryImageItems([up, gen], { includeGenerated: true }).map((i) => i.id)).toEqual(["TP1", "TP2"]);
 	});
+	it("同一结果同时被原素材库和独立生成登记引用时，只显示一张图片卡", () => {
+		const originals = { ...gen, serverAssetId: "TP-server" };
+		const receiptEntry = { ...gen, id: "rtc-generated:task", serverAssetId: "TP-server", uri: "local://result.png" };
+		const duplicateUri = { ...gen, id: "copied-result" };
+		expect(collectLibraryImageItems([originals, receiptEntry, duplicateUri, up], { includeGenerated: true }).map(i => i.key)).toEqual(["TP-server", "TP1"]);
+	});
 });
 
 describe("filterByQuery", () => {

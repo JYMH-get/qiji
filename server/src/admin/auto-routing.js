@@ -511,7 +511,7 @@ function renderAvailability() {
     return `<article class="av-card" aria-label="${esc(r.channelName + ' · ' + r.modelName)}">
    <header class="av-card-head"><span class="av-symbol" aria-hidden="true">${esc(r.familyName.slice(0, 2))}</span><div class="av-name"><h3>${esc((window.__models || []).find(m => m.id === r.modelId)?.label || r.modelName)}</h3><div class="mut">${esc(r.channelName)} <span class="av-family">${esc(r.familyName)}</span></div></div><span class="badge ${tone}">${status}</span></header>
    <div class="av-metrics"><div><span>${statLabel}请求</span><strong>${r.requests}<small>次</small></strong></div><div><span>当前在途</span><strong>${r.active}<small>个</small></strong></div></div>
-   <div class="av-rate"><span>${statLabel}成功率<small>成功 ${r.success} · 失败 ${r.failed}</small></span><strong style="color:${color}">${percent}</strong></div>
+   <div class="av-rate"><span>${statLabel}成功率<small>成功 ${r.success} · 失败 ${r.failed}${typeof r.excluded === 'number' ? ' · 排除 ' + r.excluded : ''}</small></span><strong style="color:${color}">${percent}</strong></div>
    <div class="av-weight"><span>权重 <b>${avWeight(r.configuredWeights)}</b></span><span>当前权重 <b>${avWeight(r.effectiveWeights)}</b></span></div>
    <div class="av-history-title" title="${r.trackingSince ? '本次统计起点：' + esc(new Date(r.trackingSince).toLocaleString()) : '仅统计路由中启用的模型'}"><span>近10小时成功率快照</span><span>约10分钟/点 · ${r.history.length}/60</span></div><div class="av-bars" role="img" aria-label="近10小时成功率，已有${r.history.length}个快照，按时间从旧到新">${bars}</div><div class="av-history-axis"><span>较早</span><span>最近</span></div>
    ${r.history.some(h => h.source) ? '<div class="mut" style="font-size:10px;margin-top:5px">斜纹点含自测补录 / 人工修正</div>' : ''}
@@ -548,32 +548,259 @@ function renderAvailability() {
 setInterval(() => { if (CUR_TAB !== 'availability' || document.hidden || !AV) return; const seconds = Math.max(0, Math.ceil((AV_NEXT - Date.now()) / 1000)); const label = document.getElementById('av-countdown'); if (label) label.textContent = AV_BUSY ? '刷新中…' : seconds + '秒后刷新'; if (!seconds && !AV_BUSY) loadAvailability(); }, 1000);
 
 let AV_EDIT = null, AV_EDIT_LOAD = 0;
+let AV_ADJUST = null;
+const AV_STATISTICS_DRAFTS = new Map();
+const AV_RULE_FIELDS = { error: '错误文本', durationSec: '请求耗时（秒）', status: '原始结果' };
+const AV_RULE_OPERATORS = { error: { contains: '包含', notContains: '不包含', equals: '完全等于' }, durationSec: { lt: '小于', lte: '小于或等于', eq: '等于', gte: '大于或等于', gt: '大于' }, status: { equals: '等于' } };
+const AV_RULE_ACTIONS = { exclude: '排除统计', success: '记为成功', failed: '记为失败' };
+const AV_RULE_MATCH_STATUS = { all: '全部结果', failed: '仅失败', success: '仅成功' };
+const AV_RULE_EXAMPLES = [
+  { label: '排除内容审核报错', field: 'error', operator: 'contains', value: '内容不符合平台规范', action: 'exclude', matchStatus: 'failed' },
+  { label: '排除耗时小于10秒的失败', field: 'durationSec', operator: 'lt', value: 10, action: 'exclude', matchStatus: 'failed' },
+  { label: '排除指定英文报错', field: 'error', operator: 'contains', value: 'the request must be less than or equal to 15.2 for model doubao-seedance-2-0 in r2v.', action: 'exclude', matchStatus: 'failed' },
+];
+function avStatisticsDraft(id) {
+  if (!AV_STATISTICS_DRAFTS.has(id)) AV_STATISTICS_DRAFTS.set(id, { version: 0, rules: [], baseRules: [], updatedAt: null, loaded: false, loading: false, saving: false, revision: 0, conflict: false, latest: null, error: '', notice: '' });
+  return AV_STATISTICS_DRAFTS.get(id);
+}
+function avStatisticsDirty(draft) { return JSON.stringify(draft.rules) !== JSON.stringify(draft.baseRules); }
+function avStatisticsVisible(id) { return AV_ADJUST?.id === id && !!document.getElementById('av-statistics-content'); }
+
 async function openRateAdjustment(id, target) {
-  const load = ++AV_EDIT_LOAD;
-  document.getElementById('dlgTitle').textContent = '调节历史快照 · ' + ((window.__models || []).find(m => m.id === id)?.label || id);
-  document.getElementById('dlgBody').innerHTML = '<p id="av-edit-loading" class="mut">读取历史快照…</p>';
+  AV_ADJUST = { id, tab: target ? 'history' : 'rules' }; AV_EDIT = null;
+  document.getElementById('dlgTitle').textContent = '调节 · ' + ((window.__models || []).find(m => m.id === id)?.label || id);
+  document.getElementById('dlgBody').innerHTML = `
+ <style>
+ .av-adjust-tabs{display:flex;gap:8px;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--line)}.av-adjust-tabs button[aria-selected=true]{background:var(--acc-dim);border-color:var(--acc);color:var(--text)}
+ .av-rule-scope{padding:8px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;margin:0 0 8px;line-height:1.5;font-size:12px}.av-rule-scope strong{color:var(--text)}.av-rule-note,.av-rule-help{margin:6px 0;font-size:12px;line-height:1.6;color:var(--mut)}.av-rule-help summary{cursor:pointer;width:fit-content}.av-rule-help p{margin:6px 0}
+ .av-rule-presets{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:12px 0}.av-rule-list{display:grid;gap:10px;margin:12px 0;max-height:48vh;overflow:auto;padding:2px}.av-rule{border:1px solid var(--line);border-radius:9px;padding:12px;background:var(--panel2)}.av-rule.is-disabled{opacity:.65}
+ .av-rule-head{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}.av-rule-head>strong{font-size:12px}.av-rule-toggle{display:flex;align-items:center;gap:5px;font-size:12px}.av-rule-toggle input{width:auto}.av-rule-fields{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.av-rule label:not(.av-rule-toggle){display:grid;gap:5px;font-size:12px;color:var(--mut)}.av-rule select,.av-rule textarea,.av-rule input[type=number]{width:100%;min-width:0;box-sizing:border-box}.av-rule-value{margin-top:10px}.av-rule textarea{min-height:64px;resize:vertical;white-space:pre-wrap}.av-rule-footer{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:12px}.av-rule-footer [role=status]{flex:1;min-width:180px;font-size:12px;line-height:1.6}.av-rule-conflict{border:1px solid var(--warn);padding:12px;border-radius:8px;margin:12px 0;font-size:12px;line-height:1.7}.av-rule-conflict pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:160px;overflow:auto}.av-rule-empty{padding:22px;text-align:center;border:1px dashed var(--line);border-radius:8px;color:var(--mut);font-size:12px}
+ @media(max-width:650px){.av-rule-fields{grid-template-columns:1fr}.av-rule-head .sp{display:none}}
+ </style>
+ <nav class="av-adjust-tabs" role="tablist" aria-label="调节方式"><button id="av-adjust-rules-tab" role="tab" aria-controls="av-statistics-panel" onclick="avAdjustmentTab('rules')">统计规则</button><button id="av-adjust-history-tab" role="tab" aria-controls="av-history-panel" onclick="avAdjustmentTab('history')">历史快照</button></nav>
+ <section id="av-statistics-panel" role="tabpanel" aria-labelledby="av-adjust-rules-tab"><div id="av-statistics-content"></div></section>
+ <section id="av-history-panel" role="tabpanel" aria-labelledby="av-adjust-history-tab"><div id="av-history-content"><p class="mut">读取历史快照…</p></div></section>`;
   dlg.classList.add('wide'); if (!dlg.open) dlg.showModal();
+  avAdjustmentTab(AV_ADJUST.tab); renderStatisticsRules(id);
+  await Promise.all([loadRateAdjustmentHistory(id, target), loadStatisticsRules(id)]);
+}
+function avAdjustmentTab(tab) {
+  if (!AV_ADJUST || !['rules', 'history'].includes(tab)) return;
+  AV_ADJUST.tab = tab;
+  document.getElementById('av-statistics-panel').hidden = tab !== 'rules';
+  document.getElementById('av-history-panel').hidden = tab !== 'history';
+  document.getElementById('av-adjust-rules-tab').setAttribute('aria-selected', String(tab === 'rules'));
+  document.getElementById('av-adjust-history-tab').setAttribute('aria-selected', String(tab === 'history'));
+}
+async function loadRateAdjustmentHistory(id, target) {
+  const load = ++AV_EDIT_LOAD;
+  const host = document.getElementById('av-history-content'); if (!host || AV_ADJUST?.id !== id) return;
+  host.innerHTML = '<p id="av-edit-loading" class="mut">读取历史快照…</p>';
   try {
     const data = await api('/admin-api/models/' + encodeURIComponent(id) + '/rate-history' + (target ? '?target=' + encodeURIComponent(target) : ''));
-    if (load !== AV_EDIT_LOAD || !document.getElementById('av-edit-loading')) return;
+    if (load !== AV_EDIT_LOAD || AV_ADJUST?.id !== id || !document.getElementById('av-edit-loading')) return;
     AV_EDIT = { id, ...data }; renderRateAdjustment();
-  } catch (e) { if (load === AV_EDIT_LOAD && document.getElementById('av-edit-loading')) document.getElementById('av-edit-loading').textContent = e.message; }
+  } catch (e) { if (load === AV_EDIT_LOAD && AV_ADJUST?.id === id && document.getElementById('av-edit-loading')) document.getElementById('av-edit-loading').textContent = '读取历史快照失败：' + e.message; }
+}
+const avHistoryPercent = p => p?.insufficientSamples ? '样本不足' : p?.successRate == null ? '—' : (p.successRate * 100).toFixed(1) + '%';
+const avHistoryCurrentPoint = p => p.display || p.edit || p.original;
+function avHistoryPointSource(p) {
+  const current = avHistoryCurrentPoint(p);
+  return current?.source === 'self-test' ? '自测补录' : current?.source === 'correction' ? '人工修正' : current?.rulesApplied ? '统计规则调整' : current ? '生产实测' : '尚未形成快照';
+}
+async function refreshRateAdjustmentDisplay(id) {
+  const data = AV_EDIT, load = AV_EDIT_LOAD;
+  if (!data || data.id !== id || AV_ADJUST?.id !== id || !dlg.open) return;
+  const isCurrent = () => AV_EDIT === data && AV_EDIT_LOAD === load && AV_ADJUST?.id === id && dlg.open;
+  try {
+    const result = await api('/admin-api/models/' + encodeURIComponent(id) + '/rate-history?target=' + encodeURIComponent(data.key));
+    if (!isCurrent()) return;
+    const byTime = new Map(result.slots.map(point => [point.until, point]));
+    data.slots.forEach((point, index) => {
+      const latest = byTime.get(point.until); if (!latest) return;
+      // Update display cells only: keep manual inputs, selection and edit conflict tokens intact.
+      point.display = avHistoryCurrentPoint(latest);
+      const value = document.getElementById('av-edit-current-' + index), source = document.getElementById('av-edit-source-' + index);
+      if (value) value.textContent = avHistoryPercent(avHistoryCurrentPoint(point));
+      if (source) source.textContent = avHistoryPointSource(point);
+    });
+  } catch (e) {
+    const error = document.getElementById('av-edit-error');
+    if (isCurrent() && error) error.textContent = '规则已保存，历史统计刷新失败：' + e.message;
+  }
 }
 function renderRateAdjustment() {
-  const data = AV_EDIT; if (!data) return;
-  const pct = p => p?.successRate == null ? '—' : (p.successRate * 100).toFixed(1) + '%';
-  document.getElementById('dlgBody').innerHTML = `
+  const data = AV_EDIT, host = document.getElementById('av-history-content'); if (!data || !host || AV_ADJUST?.id !== data.id) return;
+  const pct = avHistoryPercent;
+  host.innerHTML = `
  <style>.av-edit-grid{max-height:280px;overflow:auto;margin:12px 0;border:1px solid var(--line);border-radius:8px}.av-edit-grid table{width:100%;font-size:12px}.av-edit-grid th{position:sticky;top:0;background:var(--panel);z-index:1}.av-edit-grid td,.av-edit-grid th{padding:8px;text-align:left}.av-edit-controls{display:flex;gap:10px;flex-wrap:wrap;align-items:end}.av-edit-controls label{display:grid;gap:5px;font-size:12px}.av-edit-grid input{width:16px;height:16px}.av-edit-audit{max-height:140px;overflow:auto;font-size:11px;line-height:1.7}.av-edit-audit p{padding:5px 0;border-bottom:1px solid var(--line)}</style>
- <label>调整对象 <select id="av-edit-target" onchange="openRateAdjustment(AV_EDIT.id,this.value)">${data.targets.map(t => `<option value="${esc(t.key)}" ${t.key === data.key ? 'selected' : ''}>${esc(t.label)}</option>`).join('')}</select></label>
+ <label>调整对象 <select id="av-edit-target" onchange="loadRateAdjustmentHistory(AV_EDIT.id,this.value)">${data.targets.map(t => `<option value="${esc(t.key)}" ${t.key === data.key ? 'selected' : ''}>${esc(t.label)}</option>`).join('')}</select></label>
  <p class="mut">客户端显示所选线路的一条历史波形；自测补录和人工修正会标注来源。近 1H 实测成功率保持独立，原始快照保留，可随时撤销。选择“仅此底层模型”只调整管理端图表。</p>
  ${!data.active ? '<p class="warn-t">当前对象未在路由中启用，请启用后重新读取。</p>' : ''}
  <div class="toolbar"><span>选择时间范围</span><select id="av-edit-hours" aria-label="选择最近几小时">${[1, 2, 3, 6, 10].map(h => `<option value="${h}">${h} 小时</option>`).join('')}</select><button onclick="selectRateAdjustment(true)">选中范围</button><button onclick="selectRateAdjustment(false)">取消全选</button><span class="mut">可单独勾选任意历史点</span></div>
- <div class="av-edit-grid"><table><thead><tr><th>选择</th><th>快照时间</th><th>生产实测原值</th><th>当前展示值</th><th>来源</th></tr></thead><tbody>${data.slots.map((p, i) => `<tr><td><input type="checkbox" data-rate-slot="${i}" aria-label="选择 ${esc(new Date(p.until).toLocaleTimeString())}" ${!data.active ? 'disabled' : ''}/></td><td>${esc(new Date(p.until).toLocaleString())}</td><td>${pct(p.original)}</td><td>${pct(p.edit || p.original)}</td><td>${p.edit ? (p.edit.source === 'self-test' ? '自测补录' : '人工修正') : p.original ? '生产实测' : '尚未形成快照'}</td></tr>`).join('')}</tbody></table></div>
+ <div class="av-edit-grid"><table><thead><tr><th>选择</th><th>快照时间</th><th>生产实测原值</th><th>当前展示值</th><th>来源</th></tr></thead><tbody>${data.slots.map((p, i) => `<tr><td><input type="checkbox" data-rate-slot="${i}" aria-label="选择 ${esc(new Date(p.until).toLocaleTimeString())}" ${!data.active ? 'disabled' : ''}/></td><td>${esc(new Date(p.until).toLocaleString())}</td><td>${pct(p.original)}</td><td id="av-edit-current-${i}">${pct(avHistoryCurrentPoint(p))}</td><td id="av-edit-source-${i}">${avHistoryPointSource(p)}</td></tr>`).join('')}</tbody></table></div>
  <div class="av-edit-controls"><label>成功率（%）<input id="av-edit-rate" type="number" min="0" max="100" step="0.1" placeholder="如 95"/></label><label>数据来源<select id="av-edit-source"><option value="self-test">自测补录</option><option value="correction">人工修正</option></select></label><label style="flex:1;min-width:220px">来源 / 修正依据（仅后台留档）<input id="av-edit-reason" type="text" maxlength="300" placeholder="如：9月14日自测记录；或排除用户参数错误的依据"/></label></div>
  <p id="av-edit-error" role="status" class="bad-t"></p>
  <div class="toolbar" style="margin-top:14px"><button onclick="saveRateAdjustment(true)" ${!data.active ? 'disabled' : ''}>撤销所选调整</button><span class="sp"></span><button onclick="dlg.close()">关闭</button><button class="pri" onclick="saveRateAdjustment(false)" ${!data.active ? 'disabled' : ''}>保存所选快照</button></div>
  <details><summary>最近修改记录（${data.audit.length}）</summary><div class="av-edit-audit">${data.audit.map(a => `<p>${esc(new Date(a.at).toLocaleString())} · ${a.action === 'reset' ? '重置快照' : a.action === 'restore' ? '撤销调整' : '修改'} · ${esc(new Date(a.until).toLocaleTimeString())} · ${pct(a.before || a.original)} → ${pct(a.after || a.original)}${a.after ? ' · ' + esc(a.after.reason) : ''}</p>`).join('') || '<p class="mut">暂无修改记录</p>'}</div></details>`;
 }
+function avValidateStatisticsRules(rules) {
+  if (!Array.isArray(rules) || rules.length > 50) throw Error('最多保存 50 条统计规则');
+  const ids = new Set();
+  return rules.map((rule, index) => {
+    const fail = message => { throw Error(`第 ${index + 1} 条：${message}`); };
+    if (!rule || typeof rule.id !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(rule.id) || ids.has(rule.id)) fail('规则编号无效或重复');
+    ids.add(rule.id);
+    if (typeof rule.enabled !== 'boolean') fail('启停状态无效');
+    if (!Object.hasOwn(AV_RULE_FIELDS, rule.field) || !Object.hasOwn(AV_RULE_OPERATORS[rule.field], rule.operator)) fail('条件与比较方式不匹配');
+    if (!Object.hasOwn(AV_RULE_ACTIONS, rule.action)) fail('请选择统计处理方式');
+    const matchStatus = rule.matchStatus ?? 'all';
+    if (!Object.hasOwn(AV_RULE_MATCH_STATUS, matchStatus)) fail('请选择有效的适用结果');
+    let value = rule.value;
+    if (rule.field === 'error') {
+      if (typeof value !== 'string' || !value.trim() || value.trim().length > 2000) fail('错误文本须为 1–2000 字符');
+      value = value.trim();
+    } else if (rule.field === 'durationSec') {
+      if (value === '' || value === null || typeof value === 'boolean' || !Number.isFinite(Number(value)) || Number(value) < 0 || Number(value) > 604800) fail('请求耗时须为 0–604800 秒');
+      value = Number(value);
+    } else {
+      if (!['success', 'failed'].includes(value)) fail('原始结果须为成功或失败');
+      if (matchStatus !== 'all' && matchStatus !== value) fail('适用结果与原始结果条件冲突');
+    }
+    return { id: rule.id, enabled: rule.enabled, field: rule.field, operator: rule.operator, value, action: rule.action, ...(rule.matchStatus === undefined ? {} : { matchStatus }) };
+  });
+}
+function avStatisticsSnapshot(data) {
+  if (!data || !Number.isInteger(data.version) || data.version < 0 || !Array.isArray(data.rules)) throw Error('统计规则响应格式异常');
+  return { version: data.version, rules: avValidateStatisticsRules(data.rules), updatedAt: data.updatedAt ?? null };
+}
+function avStatisticsAdopt(draft, snapshot, keepDraft = false) {
+  draft.version = snapshot.version; draft.baseRules = structuredClone(snapshot.rules); draft.updatedAt = snapshot.updatedAt;
+  if (!keepDraft) draft.rules = structuredClone(snapshot.rules);
+  draft.loaded = true; draft.conflict = false; draft.latest = null; draft.error = '';
+}
+async function loadStatisticsRules(id, force = false) {
+  const draft = avStatisticsDraft(id);
+  if (draft.loading || draft.saving || (!force && draft.loaded && avStatisticsDirty(draft))) return;
+  const revision = draft.revision; draft.loading = true; draft.error = ''; renderStatisticsRules(id);
+  try {
+    const snapshot = avStatisticsSnapshot(await api('/admin-api/models/' + encodeURIComponent(id) + '/statistics-rules'));
+    if (!draft.loaded || (!avStatisticsDirty(draft) && draft.revision === revision)) {
+      avStatisticsAdopt(draft, snapshot); draft.notice = '已读取服务器规则';
+    } else {
+      draft.latest = snapshot;
+      draft.conflict = snapshot.version !== draft.version;
+      draft.notice = draft.conflict ? '服务器已有新版本，当前草稿已保留' : '服务器版本未变化，当前草稿已保留';
+    }
+  } catch (e) { draft.error = '读取统计规则失败：' + e.message; }
+  finally { draft.loading = false; renderStatisticsRules(id); }
+}
+function avStatisticsDescription(rule, index) {
+  const value = rule.field === 'status' ? (rule.value === 'success' ? '成功' : '失败') : String(rule.value) + (rule.field === 'durationSec' ? ' 秒' : '');
+  return `${index + 1}. ${rule.enabled ? '启用' : '停用'} · ${AV_RULE_MATCH_STATUS[rule.matchStatus ?? 'all']} · ${AV_RULE_FIELDS[rule.field]} ${AV_RULE_OPERATORS[rule.field]?.[rule.operator] || rule.operator} ${value} → ${AV_RULE_ACTIONS[rule.action]}`;
+}
+function renderStatisticsRules(id) {
+  if (!avStatisticsVisible(id)) return;
+  const draft = avStatisticsDraft(id), arg = value => esc(JSON.stringify(value)), locked = draft.saving;
+  const options = (items, selected) => Object.entries(items).map(([value, label]) => `<option value="${esc(value)}" ${value === selected ? 'selected' : ''}>${esc(label)}</option>`).join('');
+  const model = (window.__models || []).find(m => m.id === id);
+  const ruleCards = draft.rules.map((rule, index) => {
+    const change = field => `avStatisticsRuleChange(${arg(id)},${arg(rule.id)},${arg(field)},this.${field === 'enabled' ? 'checked' : 'value'})`;
+    const value = rule.field === 'error' ? `<textarea aria-label="第${index + 1}条错误文本" maxlength="2000" rows="2" placeholder="输入要匹配的错误原文" oninput="${change('value')}" ${locked ? 'disabled' : ''}>${esc(rule.value)}</textarea>`
+      : rule.field === 'durationSec' ? `<input aria-label="第${index + 1}条请求耗时（秒）" type="number" min="0" max="604800" step="any" value="${esc(rule.value)}" oninput="${change('value')}" ${locked ? 'disabled' : ''}/>`
+      : `<select aria-label="第${index + 1}条原始结果" onchange="${change('value')}" ${locked ? 'disabled' : ''}>${options({ success: '成功', failed: '失败' }, rule.value)}</select>`;
+    return `<article class="av-rule${rule.enabled ? '' : ' is-disabled'}" data-statistics-rule="${esc(rule.id)}"><div class="av-rule-head"><strong>规则 ${index + 1}</strong><label class="av-rule-toggle"><input aria-label="启用规则${index + 1}" type="checkbox" ${rule.enabled ? 'checked' : ''} onchange="${change('enabled')}" ${locked ? 'disabled' : ''}/>启用</label><span class="sp"></span><button class="sm" aria-label="上移规则${index + 1}" onclick="avStatisticsRuleMove(${arg(id)},${arg(rule.id)},-1)" ${locked || index === 0 ? 'disabled' : ''}>上移</button><button class="sm" aria-label="下移规则${index + 1}" onclick="avStatisticsRuleMove(${arg(id)},${arg(rule.id)},1)" ${locked || index === draft.rules.length - 1 ? 'disabled' : ''}>下移</button><button class="sm" aria-label="删除规则${index + 1}" onclick="avStatisticsRuleDelete(${arg(id)},${arg(rule.id)})" ${locked ? 'disabled' : ''}>删除</button></div>
+ <div class="av-rule-fields"><label>适用结果<select aria-label="第${index + 1}条适用结果" title="${rule.field === 'status' ? '由原始结果条件指定，避免重复或冲突' : '先筛选原始请求结果，再判断本条条件'}" onchange="${change('matchStatus')}" ${locked || rule.field === 'status' ? 'disabled' : ''}>${options(AV_RULE_MATCH_STATUS, rule.matchStatus ?? 'all')}</select></label><label>判断字段<select aria-label="第${index + 1}条判断字段" onchange="${change('field')}" ${locked ? 'disabled' : ''}>${options(AV_RULE_FIELDS, rule.field)}</select></label><label>比较方式<select aria-label="第${index + 1}条比较方式" onchange="${change('operator')}" ${locked ? 'disabled' : ''}>${options(AV_RULE_OPERATORS[rule.field], rule.operator)}</select></label><label>命中后<select aria-label="第${index + 1}条统计处理" onchange="${change('action')}" ${locked ? 'disabled' : ''}>${options(AV_RULE_ACTIONS, rule.action)}</select></label></div>
+ <label class="av-rule-value">${rule.field === 'error' ? '错误文本（区分大小写）' : rule.field === 'durationSec' ? '从提交到报错或完成的耗时（秒）' : '请求原始结果'}${value}</label></article>`;
+  }).join('');
+  document.getElementById('av-statistics-content').innerHTML = `
+ <h3 style="margin:0 0 8px;font-size:15px">错误白名单与统计规则</h3>
+ <p class="av-rule-scope">作用模型：<strong>${esc(model?.label || id)}</strong> <span class="mut">${esc(id)}</span></p>
+ <p class="av-rule-note">从上到下首条启用且匹配的规则生效；仅调整统计，不改请求结果或积分结算。</p>
+ <details class="av-rule-help"><summary>统计说明</summary>
+ <p>仅调整此底层模型及经过它的线路统计；历史快照页的“调整对象”不改变这里的作用范围。未命中按原始结果统计，排除后不计入成功率和有效样本数。</p>
+ <p>错误条件只匹配已有报错信息的终态请求，空错误也不匹配“不包含”。</p>
+ <p>保存后，按现存请求证据重算当前统计和已有实测区间的显示；原始请求、原始快照及人工调节点保留。历史错误原文缺失时，仅应用有证据的匹配。</p>
+ </details>
+ <div class="av-rule-presets"><span class="mut">快速添加</span>${AV_RULE_EXAMPLES.map((example, index) => `<button class="sm" title="${esc((example.field === 'error' ? example.value : '请求耗时小于10秒') + ' · 仅失败，可修改适用结果')}" onclick="avStatisticsRuleAdd(${arg(id)},${index})" ${locked || !draft.loaded || draft.rules.length >= 50 ? 'disabled' : ''}>${example.label}</button>`).join('')}<span class="mut">添加后需保存</span></div>
+ ${draft.loaded ? `<div class="av-rule-list">${ruleCards || '<div class="av-rule-empty">暂无统计规则，按请求原始结果统计</div>'}</div>` : `<p class="mut">${draft.loading ? '正在读取统计规则…' : '尚未读取统计规则'}</p>`}
+ ${draft.conflict ? `<div class="av-rule-conflict" role="alert"><strong>服务器版本已变化，草稿未被覆盖。</strong>${draft.latest ? `<details open><summary>服务器最新规则（版本 ${draft.latest.version}）</summary><pre>${esc(draft.latest.rules.map(avStatisticsDescription).join('\n') || '暂无规则')}</pre></details><div class="toolbar"><button onclick="avStatisticsResolve(${arg(id)},false)" ${locked ? 'disabled' : ''}>放弃草稿，使用服务器版本</button><button onclick="avStatisticsResolve(${arg(id)},true)" title="保留当前整份草稿，下一次保存将替换这里展示的服务器版本" ${locked ? 'disabled' : ''}>保留草稿，准备覆盖最新版本</button></div>` : '<p>请刷新服务器版本，再选择处理方式。</p>'}</div>` : ''}
+ <div class="av-rule-footer"><button onclick="avStatisticsRuleAdd(${arg(id)})" ${locked || !draft.loaded || draft.rules.length >= 50 ? 'disabled' : ''}>新增规则</button><button onclick="loadStatisticsRules(${arg(id)},true)" ${locked || draft.loading ? 'disabled' : ''}>${draft.loading ? '读取中…' : '刷新服务器版本'}</button><span id="av-statistics-status" role="status"></span><button id="av-statistics-save" class="pri" onclick="saveStatisticsRules(${arg(id)})" ${locked || !draft.loaded || draft.conflict || !avStatisticsDirty(draft) ? 'disabled' : ''}>${locked ? '保存中…' : '保存统计规则'}</button><button onclick="dlg.close()">关闭</button></div>`;
+  avStatisticsUpdateStatus(id);
+}
+function avStatisticsUpdateStatus(id) {
+  if (!avStatisticsVisible(id)) return;
+  const draft = avStatisticsDraft(id), status = document.getElementById('av-statistics-status'), save = document.getElementById('av-statistics-save');
+  if (status) {
+    status.className = draft.error ? 'bad-t' : draft.conflict ? 'warn-t' : 'mut';
+    status.textContent = draft.error || (draft.saving ? '正在保存…' : draft.notice || (avStatisticsDirty(draft) ? '有未保存的修改' : `版本 ${draft.version}${draft.updatedAt ? ' · 保存于 ' + new Date(draft.updatedAt).toLocaleString() : ''}`));
+  }
+  if (save) save.disabled = draft.saving || !draft.loaded || draft.conflict || !avStatisticsDirty(draft);
+}
+function avStatisticsEdited(id, redraw = true) {
+  const draft = avStatisticsDraft(id); draft.revision++; draft.error = ''; draft.notice = '';
+  if (redraw) renderStatisticsRules(id); else avStatisticsUpdateStatus(id);
+}
+function avStatisticsRuleAdd(id, exampleIndex) {
+  const draft = avStatisticsDraft(id); if (!draft.loaded || draft.saving) return;
+  if (draft.rules.length >= 50) { draft.error = '最多保存 50 条统计规则'; avStatisticsUpdateStatus(id); return; }
+  const example = AV_RULE_EXAMPLES[exampleIndex] || { field: 'error', operator: 'contains', value: '', action: 'exclude' };
+  const uid = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `rule-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  draft.rules = [...draft.rules, { id: uid, enabled: true, field: example.field, operator: example.operator, value: example.value, action: example.action, matchStatus: example.matchStatus ?? 'all' }];
+  avStatisticsEdited(id);
+  const list = avStatisticsVisible(id) ? document.querySelector('#av-statistics-content .av-rule-list') : null; if (list) list.scrollTop = list.scrollHeight;
+}
+function avStatisticsRuleChange(id, ruleId, field, value) {
+  const draft = avStatisticsDraft(id), rule = draft.rules.find(rule => rule.id === ruleId); if (!rule || draft.saving) return;
+  if (field === 'field') {
+    if (!Object.hasOwn(AV_RULE_FIELDS, value)) return;
+    Object.assign(rule, { field: value, operator: value === 'error' ? 'contains' : value === 'durationSec' ? 'lt' : 'equals', value: value === 'durationSec' ? 10 : value === 'status' ? 'failed' : '', ...(value === 'status' ? { matchStatus: 'all' } : {}) });
+  } else if (field === 'enabled') rule.enabled = !!value;
+  else if (field === 'value') { rule.value = value; if (rule.field === 'status') rule.matchStatus = 'all'; }
+  else if (field === 'matchStatus' && rule.field !== 'status' && Object.hasOwn(AV_RULE_MATCH_STATUS, value)) rule.matchStatus = value;
+  else if (field === 'operator' && Object.hasOwn(AV_RULE_OPERATORS[rule.field], value)) rule.operator = value;
+  else if (field === 'action' && Object.hasOwn(AV_RULE_ACTIONS, value)) rule.action = value;
+  else return;
+  avStatisticsEdited(id, field === 'field' || field === 'enabled' || (field === 'value' && rule.field === 'status'));
+}
+function avStatisticsRuleMove(id, ruleId, offset) {
+  const draft = avStatisticsDraft(id), index = draft.rules.findIndex(rule => rule.id === ruleId), next = index + offset;
+  if (draft.saving || index < 0 || next < 0 || next >= draft.rules.length) return;
+  [draft.rules[index], draft.rules[next]] = [draft.rules[next], draft.rules[index]]; avStatisticsEdited(id);
+}
+function avStatisticsRuleDelete(id, ruleId) {
+  const draft = avStatisticsDraft(id); if (draft.saving) return;
+  draft.rules = draft.rules.filter(rule => rule.id !== ruleId); avStatisticsEdited(id);
+}
+function avStatisticsResolve(id, keepDraft) {
+  const draft = avStatisticsDraft(id); if (!draft.latest || draft.saving) return;
+  avStatisticsAdopt(draft, draft.latest, keepDraft); draft.revision++;
+  draft.notice = keepDraft ? '草稿已保留，请核对后再次保存；将以当前整份草稿替换服务器规则' : '已使用服务器最新规则';
+  renderStatisticsRules(id);
+}
+async function saveStatisticsRules(id) {
+  const draft = avStatisticsDraft(id); if (!draft.loaded || draft.saving || draft.conflict || !avStatisticsDirty(draft)) return;
+  let rules;
+  try { rules = avValidateStatisticsRules(draft.rules); }
+  catch (e) { draft.error = e.message; avStatisticsUpdateStatus(id); return; }
+  draft.saving = true; draft.error = ''; draft.notice = ''; renderStatisticsRules(id);
+  try {
+    const saved = avStatisticsSnapshot(await api('/admin-api/models/' + encodeURIComponent(id) + '/statistics-rules', { method: 'PUT', body: JSON.stringify({ version: draft.version, rules }) }));
+    avStatisticsAdopt(draft, saved); draft.notice = '统计规则已保存';
+    toast('统计规则已保存'); loadAvailability(true);
+    await refreshRateAdjustmentDisplay(id);
+  } catch (e) {
+    draft.error = '保存失败：' + e.message;
+    if (e.status === 409) {
+      draft.conflict = true; draft.error = '服务器规则已被修改，当前草稿已保留。请核对最新版本后处理冲突。';
+      try { draft.latest = avStatisticsSnapshot(await api('/admin-api/models/' + encodeURIComponent(id) + '/statistics-rules')); }
+      catch (readError) { draft.latest = null; draft.error += ' 读取最新版本失败：' + readError.message; }
+    }
+  } finally { draft.saving = false; renderStatisticsRules(id); }
+}
+window.addEventListener('beforeunload', event => {
+  if ([...AV_STATISTICS_DRAFTS.values()].some(draft => draft.saving || avStatisticsDirty(draft))) { event.preventDefault(); event.returnValue = ''; }
+});
 function selectRateAdjustment(selected) {
   const end = AV_EDIT.slots.at(-1)?.until || Date.now(), hours = Number(document.getElementById('av-edit-hours').value);
   document.querySelectorAll('[data-rate-slot]').forEach(el => el.checked = selected && !el.disabled && AV_EDIT.slots[Number(el.dataset.rateSlot)].until > end - hours * 3600000);
@@ -606,7 +833,7 @@ async function saveRateAdjustment(restore) {
   if (!selected.length) { error.textContent = '请先选择要调整的历史点'; return; }
   const raw = document.getElementById('av-edit-rate').value, rate = Number(raw), source = document.getElementById('av-edit-source').value, reason = document.getElementById('av-edit-reason').value.trim();
   if (!restore && (raw === '' || !Number.isFinite(rate) || rate < 0 || rate > 100 || reason.length < 3)) { error.textContent = '请填写 0–100 的成功率和至少 3 字的数据依据'; return; }
-  const buttons = [...document.querySelectorAll('#dlgBody button,#dlgBody input,#dlgBody select')]; buttons.forEach(b => b.disabled = true); error.textContent = '保存中…';
+  const buttons = [...document.querySelectorAll('#av-history-content button,#av-history-content input,#av-history-content select')]; buttons.forEach(b => b.disabled = true); error.textContent = '保存中…';
   try {
     const result = await api('/admin-api/models/' + encodeURIComponent(data.id) + '/rate-history', { method: 'PUT', body: JSON.stringify({ target: data.key, epoch: data.epoch, edits: selected.map(p => ({ until: p.until, expectedId: p.edit?.id ?? null, ...(restore ? { restore: true } : { successRate: rate / 100, source, reason }) })) }) });
     if (AV_EDIT === data && document.getElementById('av-edit-target')) { AV_EDIT = { id: data.id, ...result }; renderRateAdjustment(); }

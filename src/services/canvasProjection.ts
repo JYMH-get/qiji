@@ -7,7 +7,7 @@ import { useLibraryStore } from '@/store/libraryStore';
 import { syncNodeLegend } from '@/canvas/nodeMaterials';
 import { makeNode, NODE_W, NODE_H } from '@/canvas/nodeFactory';
 import { getNodeSpec } from '@/nodes/nodeSpecs';
-import { inferenceDurationLimit, projectInferenceStrategy } from '@/lib/inferenceStrategy';
+import { inferenceDurationLimit, projectInferenceDuration, projectInferenceStrategy } from '@/lib/inferenceStrategy';
 import { resolveCanvasSendSettings } from '@/lib/canvasSendSettings';
 import { assetGenParams } from '@/lib/canvasSpawn';
 import { episodeAssetForms } from '@/lib/episodeAssetForms';
@@ -186,13 +186,21 @@ export function syncCanvasFromProject(episodeIdArg?: string | null): boolean {
     }
     if (ep) {
         const strategy = projectInferenceStrategy(ps.mediaSettings);
+        const episodeDuration = projectInferenceDuration(ps.mediaSettings);
         const episodeMembers: CanvasNode[] = [];
         const inferenceData = (d: CanvasNode['data'], single: boolean, duration: number | undefined) => {
             d.params.inferenceStrategy = structuredClone(strategy);
             d.params.inferenceScope = single ? 'single' : 'multi';
             d.params.inferenceMode = sameSource ? 'unified' : 'storyboard';
-            d.params.inferenceDurationLimit = inferenceDurationLimit(duration);
-            d.params.inferenceDurationPreset = d.params.inferenceDurationLimit === 30 ? '4-30' : '4-15';
+            if (single) {
+                d.params.inferenceDurationLimit = inferenceDurationLimit(duration);
+                d.params.inferenceDurationPreset = d.params.inferenceDurationLimit === 30 ? '4-30' : '4-15';
+            } else {
+                d.params.inferenceDurationLimit = episodeDuration.durationLimit;
+                d.params.inferenceDurationPreset = episodeDuration.durationPreset;
+                // 连同未完成的自定义草稿一起复制，不能静默量化到15/30秒或与项目共享对象。
+                d.params.inferenceCustomDuration = structuredClone(episodeDuration.customDuration);
+            }
             d.params.inferenceOutput = sameSource ? (single ? 'storyboard.unifiedShot' : 'storyboard.unified') : (single ? 'storyboard.singleShot' : 'storyboard.toVideoPrompt');
         };
         const infer = options.inference ? ensure('episode:' + ep.id, 'smart.infer', 0, 0, d => {

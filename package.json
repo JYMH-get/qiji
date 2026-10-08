@@ -1,12 +1,14 @@
 {
 	"name": "Qiji",
 	"private": true,
-	"version": "2.0.20",
+	"version": "2.0.24",
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
 		"dev:desktop": "tauri dev",
 		"repair": "node scripts/repair-qiji.mjs",
+		"site:build": "node scripts/build-website.mjs",
+		"site:test": "node scripts/test-website-split.mjs",
 		"build": "tsc -b && vite build",
 		"preview": "vite preview",
 		"typecheck": "tsc --noEmit",

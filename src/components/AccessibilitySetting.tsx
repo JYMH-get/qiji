@@ -32,6 +32,7 @@ export function AccessibilitySetting() {
         </div>
         <p id="accessibility-effect" className="text-[10px] text-muted-foreground leading-relaxed">
           开启后允许读屏软件、取词工具和控件自动化通过无障碍接口读取、操作 Qiji 界面。
+          关闭后限制系统无障碍接入，调试工具仍可能读取页面。
         </p>
         <p id="accessibility-risk" className="text-[10px] text-amber-500 leading-relaxed">
           部分环境下可能触发页面卡顿或白屏（STATUS_BREAKPOINT），仅在需要时开启。
@@ -43,8 +44,8 @@ export function AccessibilitySetting() {
           {saving ? "正在保存…" : loading ? "正在读取…" : !settings ? "设置尚未读取" : !settings.supported
             ? "此开关仅适用于 Windows 桌面客户端。"
             : settings.restartRequired
-              ? `已保存，重启后${settings.enabled ? "开启" : "关闭"}；本次启动仍为${settings.activeEnabled ? "开启" : "关闭"}。`
-              : `本次启动：${settings.activeEnabled ? "已开启" : "已关闭"}`}
+              ? `已保存，重启后${settings.enabled ? "开启" : "关闭"}；本次启动设置仍为${settings.activeEnabled ? "开启" : "关闭"}。`
+              : `本次启动设置：${settings.activeEnabled ? "已开启" : "已关闭"}`}
         </p>
         {settings?.preferenceReadError && (
           <div className="flex items-center gap-2 text-[10px] text-destructive">

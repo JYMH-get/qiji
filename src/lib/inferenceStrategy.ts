@@ -89,6 +89,26 @@ export function canvasInferenceDuration(params: Record<string, unknown>): {
   const durationRange = durationError ? undefined : selectedRange as InferenceDurationRange;
   return { durationPreset, customDuration, durationRange, durationError, durationLimit: inferenceDurationLimit(durationRange?.max ?? legacyLimit) };
 }
+
+/** 项目沿用画布范围协议；旧 maxDuration 保留原上限，显式自定义缺值则要求修正。 */
+export function projectInferenceDuration(settings: {
+  maxDuration?: unknown;
+  inferenceDurationPreset?: unknown;
+  inferenceCustomDuration?: unknown;
+}): ReturnType<typeof canvasInferenceDuration> {
+  const legacy = typeof settings.maxDuration === 'number' && Number.isFinite(settings.maxDuration) && settings.maxDuration > 0
+    ? settings.maxDuration : 15;
+  const legacyPreset: InferenceDurationPreset = legacy === 15 ? '4-15' : legacy === 30 ? '4-30' : 'custom';
+  const preset = settings.inferenceDurationPreset === undefined ? legacyPreset : settings.inferenceDurationPreset;
+  const customDuration = settings.inferenceCustomDuration !== undefined ? settings.inferenceCustomDuration
+    : settings.inferenceDurationPreset === 'custom' ? { min: undefined, max: undefined }
+      : legacyPreset === 'custom' ? { min: 4, max: legacy } : undefined;
+  return canvasInferenceDuration({
+    inferenceDurationPreset: preset,
+    inferenceCustomDuration: customDuration,
+    inferenceDurationLimit: legacy,
+  });
+}
 export function projectInferenceStrategy(settings: {
   inferenceStrategy?: InferenceStrategy;
   inferTplId?: string;

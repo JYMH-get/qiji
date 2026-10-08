@@ -1,0 +1,25 @@
+import assert from 'node:assert/strict';
+import { statisticsProjection as project, validateStatisticsRules as validate } from '../src/statisticsRules.ts';
+let checks=0;const eq=(a,b,label)=>{assert.deepEqual(a,b,label);checks++;};
+const rule=(field,operator,value,action='exclude',id='r')=>({id,enabled:true,field,operator,value,action});
+const failed={status:'failed',errorEvidence:'policy: rejected',errorEvidenceComplete:true,durationMs:5000};
+eq(project(failed,[rule('error','contains','policy')]).status,'excluded','contains');
+eq(project(failed,[rule('error','notContains','busy')]).status,'excluded','not contains complete evidence');
+eq(project({...failed,errorEvidence:''},[rule('error','notContains','busy')]).status,'failed','empty error never proves negative');
+eq(project({...failed,errorEvidenceComplete:false},[rule('error','notContains','busy')]).status,'failed','partial error never proves negative');
+eq(project({...failed,errorEvidenceComplete:false},[rule('error','equals','policy: rejected')]).status,'failed','partial error never proves equality');
+eq(project(failed,[rule('error','equals','policy: rejected')]).status,'excluded','equal complete error');
+eq(project(failed,[rule('error','contains','POLICY')]).status,'failed','literal case sensitive comparison');
+for(const [op,value,match] of [['lt',5,false],['lte',5,true],['eq',5,true],['gte',5,true],['gt',5,false],['lt',6,true],['gt',4,true]])eq(project(failed,[rule('durationSec',op,value)]).status,match?'excluded':'failed','duration '+op);
+eq(project({status:'failed'},[rule('durationSec','lt',10)]).status,'failed','missing duration not zero');
+eq(project({status:'running',durationMs:5000},[rule('durationSec','lt',10)]).status,'running','inflight never projected');
+eq(project(failed,[rule('status','equals','failed','success'),rule('status','equals','failed','exclude','r2')]),{status:'success',ruleId:'r'},'first enabled match wins');
+eq(project(failed,[{...rule('status','equals','failed','success'),enabled:false},rule('status','equals','failed','exclude','r2')]).status,'excluded','disabled skipped');
+eq(project({...failed,status:'success'},[{...rule('durationSec','lt',10),matchStatus:'failed'}]).status,'success','failed-only short duration keeps fast success');
+eq(project(failed,[{...rule('durationSec','lt',10),matchStatus:'failed'}]).status,'excluded','failed-only short duration matches failure');
+eq(project({...failed,status:'success'},[{...rule('durationSec','lt',10),matchStatus:'all'}]).status,'excluded','all scope can explicitly include success');
+assert.throws(()=>validate([{...rule('status','equals','success'),matchStatus:'failed'}]));checks++;
+assert.throws(()=>validate([{...rule('durationSec','lt',10),matchStatus:'running'}]));checks++;
+for(const input of [null,{},Array(51).fill(rule('status','equals','failed')),[rule('error','regex','x')],[rule('status','equals','running')],[rule('durationSec','lt',-1)],[rule('durationSec','lt','10')],[rule('durationSec','lt',Infinity)],[rule('durationSec','lt',604801)],[rule('error','contains','')],[rule('error','contains','x'.repeat(2001))],[{...rule('error','contains','x'),extra:1}],[rule('status','equals','failed'),rule('status','equals','failed')]]){assert.throws(()=>validate(input));checks++;}
+eq(validate([rule('error','contains',' policy ')])[0].value,'policy','canonical trim');
+console.log(`STATISTICS_RULES ${checks} checks passed`);

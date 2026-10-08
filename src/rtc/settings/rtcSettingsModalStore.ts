@@ -1,11 +1,12 @@
 /**
- * rtcSettingsModalStore —— 「实时剪辑设置」弹窗的开关态（会话级，不持久化）。
+ * rtcSettingsModalStore —— 「实时剪辑设置」的开关态（会话级，不持久化）。
  * 两个入口共用：工具条「快捷键/设置」按钮（默认落「快捷键」页签）与播放器控制条「设置」按钮
- * （默认落「预览」页签）。弹窗本体见 RtcSettingsModal（由 RtcToolbar 常驻挂载）。
+ * （默认落「预览」页签）。generation 使用工具栏上拉菜单，其余页使用 RtcSettingsModal；
+ * 共用状态保证同一时间只打开一处设置。
  */
 import { create } from "zustand";
 
-export type RtcSettingsTab = "keys" | "edit" | "preview";
+export type RtcSettingsTab = "keys" | "edit" | "preview" | "generation";
 
 interface RtcSettingsModalState {
 	open: boolean;

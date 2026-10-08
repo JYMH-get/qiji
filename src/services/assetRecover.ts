@@ -117,6 +117,8 @@ export interface RecoverOptions {
 	deps?: RecoverDeps;
 	/** 重传失败后的退避（ms）——仅供测试注入，生产用默认值 */
 	retryDelayMs?: number;
+	/** 提交准备绑定原项目和目标；失效后不再登记映射或继续上传。 */
+	shouldContinue?: () => boolean;
 }
 
 /** reput 重试退避（ms）：第197轮实锤对象存储 PUT 会被对端重置，一次退避重试即可吃掉绝大多数抖动 */
@@ -125,7 +127,14 @@ const REPUT_RETRY_DELAY_MS = 1200;
 /** 恢复单个台账资产：探活 → 换链 / 本地副本重传。绝不抛错，一律以状态回报。 */
 export async function recoverAsset(id: string, opts: RecoverOptions = {}): Promise<RecoverResult> {
 	const deps = opts.deps ?? defaultRecoverDeps;
+	const owner = useProjectStore.getState().projectInstanceId;
+	const current = () => {
+		const state = useProjectStore.getState();
+		return state.projectInstanceId === owner && !state.isProjectLoading && opts.shouldContinue?.() !== false;
+	};
+	const cancelled = (): RecoverResult => ({ status: "failed", reason: "资产所属项目或目标已变化，恢复已取消" });
 	const useCache = (opts.cache ?? "session") === "session";
+	if (!current()) return cancelled();
 	if (!id || !LEDGER_ID_RE.test(id)) return { status: "missing" };
 
 	const known = deps.blobById(id);
@@ -133,6 +142,7 @@ export async function recoverAsset(id: string, opts: RecoverOptions = {}): Promi
 
 	// ② 探活
 	const a = await deps.alive(id);
+	if (!current()) return cancelled();
 	if (a.missing) return { status: "missing" };
 	if (a.alive) {
 		aliveThisSession.add(id);
@@ -146,10 +156,13 @@ export async function recoverAsset(id: string, opts: RecoverOptions = {}): Promi
 	// ④ 死链 → 本地副本（非 Tauri 无文件系统，直接判死）
 	if (!deps.isTauri()) return { status: "dead" };
 	let local: { localPath: string; ext?: string; mime?: string } | null = null;
-	if (known?.localPath && (await deps.fileExists(known.localPath))) {
+	const knownExists = known?.localPath ? await deps.fileExists(known.localPath) : false;
+	if (!current()) return cancelled();
+	if (known?.localPath && knownExists) {
 		local = { localPath: known.localPath, ext: known.ext, mime: known.mime };
 	} else {
 		const found = await deps.findLocalById(id);
+		if (!current()) return cancelled();
 		if (found) {
 			deps.registerLocal(id, found);
 			local = found;
@@ -161,6 +174,7 @@ export async function recoverAsset(id: string, opts: RecoverOptions = {}): Promi
 	let bytes: Uint8Array;
 	try {
 		bytes = await deps.readLocal(local.localPath);
+		if (!current()) return cancelled();
 	} catch (e) {
 		return { status: "failed", reason: `读取本地副本失败：${(e as Error)?.message || e}` };
 	}
@@ -168,7 +182,9 @@ export async function recoverAsset(id: string, opts: RecoverOptions = {}): Promi
 	const name = `${id}.${local.ext || "bin"}`;
 	let lastErr = "";
 	for (let attempt = 1; attempt <= 2; attempt++) {
+		if (!current()) return cancelled();
 		const res = await deps.reput(id, new Blob([bytes as unknown as BlobPart], { type: mime }), name);
+		if (!current()) return cancelled();
 		if (res.ok) {
 			aliveThisSession.add(id);
 			if (res.url) deps.adoptUrl(id, res.url);

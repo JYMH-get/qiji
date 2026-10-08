@@ -8,7 +8,7 @@ const SLOT_MS=600_000;
 db.exec(`CREATE TABLE IF NOT EXISTS availability_history_edits(scope TEXT NOT NULL,bucket INTEGER NOT NULL,epoch TEXT NOT NULL,id TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(scope,bucket));
 CREATE TABLE IF NOT EXISTS availability_history_edit_audit(id TEXT PRIMARY KEY,scope TEXT NOT NULL,created_at INTEGER NOT NULL,data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS availability_history_edit_audit_scope ON availability_history_edit_audit(scope,created_at);`);
-export interface HistoryScope {scope:string;epoch:string;history:SuccessRateSnapshot[];active:boolean;}
+export interface HistoryScope {scope:string;epoch:string;history:SuccessRateSnapshot[];displayHistory?:SuccessRateSnapshot[];active:boolean;}
 interface Edit extends SuccessRateSnapshot {id:string;reason:string;source:'self-test'|'correction';editedAt:number;}
 const bucket=(until:number)=>Math.floor(until/SLOT_MS)*SLOT_MS;
 function editsFor(scope:string,now:number,real:SuccessRateSnapshot[]=[]):Edit[]{
@@ -46,11 +46,12 @@ export function clearHistoryAdjustments(scope:string,history:SuccessRateSnapshot
 }
 export function adjustmentView(target:HistoryScope,now:number){
  const real=new Map(target.history.map(p=>[bucket(p.until),p]));
+ const displayed=new Map((target.displayHistory??target.history).map(p=>[bucket(p.until),p]));
  const edits=new Map(editsFor(target.scope,now,target.history).map(p=>[bucket(p.until),p]));
  const end=bucket(now);
  const slots=Array.from({length:60},(_,i)=>{
   const time=end-(59-i)*SLOT_MS,original=real.get(time),edit=edits.get(time);
-  return {until:original?.until??time,since:original?.since??time-SLOT_MS,original:original??null,edit:edit??null};
+  return {until:original?.until??time,since:original?.since??time-SLOT_MS,original:original??null,edit:edit??null,display:edit??displayed.get(time)??original??null};
  }).filter(p=>p.until>now-AV_HISTORY_MS&&p.until<=now);
  const audit=(db.prepare('SELECT data FROM availability_history_edit_audit WHERE scope=? ORDER BY created_at DESC,rowid DESC LIMIT 30').all(target.scope) as {data:string}[]).map(r=>JSON.parse(r.data));
  return {active:target.active,epoch:target.epoch,slots,audit};

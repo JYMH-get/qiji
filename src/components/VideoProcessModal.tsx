@@ -17,6 +17,7 @@ import { useCatalogStore } from "@/store/catalogStore";
 import { useProjectStore } from "@/store/projectStore";
 import ModelPicker from "@/components/ModelPicker";
 import { processModalParams } from "@/lib/processModalParams";
+import { GenerationCost } from "@/components/GenerationCost";
 
 export type VideoProcessMode = "upscale" | "desub" | "imageUpscale";
 
@@ -191,11 +192,11 @@ export default function VideoProcessModal({ uri, mode, sourceName, onCancel, onC
     }, [isImage, vDim, imgTarget, params.tool_version]);
 
     const canConfirm = !!model && (!needBoxes || boxes.length > 0) && (!isImage || !!imgPlan);
+    const requestParams = processModalParams(params, { eraseBoxes: needBoxes ? boxes : undefined, multiple: isImage && imgPlan ? imgPlan.multiple : undefined });
 
     const confirm = () => {
         if (!model) return;
-        const out = processModalParams(params, { eraseBoxes: needBoxes ? boxes : undefined, multiple: isImage && imgPlan ? imgPlan.multiple : undefined });
-        onConfirm({ modelKey: model.id, modelLabel: model.label, params: out });
+        onConfirm({ modelKey: model.id, modelLabel: model.label, params: requestParams });
     };
 
     return (
@@ -329,7 +330,6 @@ export default function VideoProcessModal({ uri, mode, sourceName, onCancel, onC
                     {isImage
                         ? "同步处理（火山引擎），完成自动回填：资产模式=故事板历史新增超分记录（右击可对比原图），画布=结果写入新节点。"
                         : `异步处理（火山引擎），完成自动回填：资产模式=本镜视频区新记录（标号 源记录号${isUp ? "+" : "-"}，右击可对比原视频），画布=结果写入新节点。`}
-                    {model ? ` 本次预计消耗 ${model.cost} 积分。` : ""}
                 </div>
                 <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
                     <button style={ghost} onClick={onCancel}>取消</button>
@@ -340,6 +340,7 @@ export default function VideoProcessModal({ uri, mode, sourceName, onCancel, onC
                         onClick={confirm}
                     >
                         {isDesub ? "开始去字幕" : "开始超分"}
+                        <GenerationCost modelKey={model?.id} params={requestParams} />
                     </button>
                 </div>
             </div>

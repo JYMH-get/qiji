@@ -1,5 +1,5 @@
 /**
- * RtcFreeGenProps —— 右栏「自由结果占位」属性视图（时间轴空白右键新建的占位，**无 shotRef**）。
+ * RtcFreeGenProps —— 设置弹窗中「自由结果占位」的生成选项（**无 shotRef**）。
  *
  * 区块（第240轮收敛为「AI 设置」，用户定稿）：占位身份（名/产物类型/时间码）→ 模型 →
  * 参数说明 → 生成/进度/失败重试；**提示词与垫素材在中栏「AI 工作台」页编辑**
@@ -16,31 +16,46 @@
  */
 import { useState } from "react";
 import { Image as ImageIcon, Video } from "lucide-react";
-import ModelPicker from "@/components/ModelPicker";
+import ModelPicker, { useEffectiveModelKey } from "@/components/ModelPicker";
+import { videoReqOptionsForKey } from "@/lib/modelOptions";
+import { useCatalogStore } from "@/store/catalogStore";
+import { useRtcStore } from "@/store/rtcStore";
 import { progressLabel } from "@/lib/queueLabel";
 import type { RtcSegment, RtcTrack } from "@/types/rtc";
-import { AUDIO_GEN_UNSUPPORTED, genCapabilityFor, segSeconds } from "./rtcGenCore";
-import { fmtUs, usToSecLabel } from "./rtcSegUtils";
+import { AUDIO_GEN_UNSUPPORTED, genCapabilityFor } from "./rtcGenCore";
+import { fmtUs, usToSecLabel, patchSegmentDoc } from "./rtcSegUtils";
+import { useRtcFreeGenStore } from "./rtcFreeGenStore";
+import { RtcGenerationDurationPicker } from "./RtcGenerationPicker";
+import { resolveRtcGenerationDuration } from "./rtcGenerationDuration";
 import { RtcTimeFields } from "./RtcTimeFields";
 import { KIND_LABEL, secBox } from "./freeGenParts";
-import { retryFreeGen, segGenKind, startFreeGen } from "./freeGenActions";
+import { retryFreeGen, segGenKind, startFreeGen, useFreeGenPreparing } from "./freeGenActions";
 import { useSegQueueInfo } from "./rtcQueueStore";
+import { RtcFreeGenerationCost } from "./RtcGenerationCost";
 
 export function RtcFreeGenProps({ seg, track, segIndex }: { seg: RtcSegment; track: RtcTrack; segIndex: number }) {
 	const kind = segGenKind(seg);
 	const cap = genCapabilityFor(kind);
+	const draftModel = useRtcFreeGenStore(s => s.drafts[seg.id]?.modelKey);
+	const defaultModel = useEffectiveModelKey("video");
+	useCatalogStore(s => s.catalog?.version);
+	const durations = videoReqOptionsForKey(draftModel || defaultModel || "").durations;
+	const generationDuration = seg.generationDuration ?? "auto";
+	const autoDuration = resolveRtcGenerationDuration("auto", seg.targetDurationUs, durations, 1);
 	const running = seg.status === "running";
 	const failed = seg.status === "failed";
 	// 在途排队信息（内存态）→ 「排队中 · 第 N 位」/「生成中 42%」
 	const queueInfo = useSegQueueInfo(seg.id);
 	const runLabel = progressLabel(seg.progress ?? null, queueInfo);
-	const [busy, setBusy] = useState(false);
+	const [localBusy, setBusy] = useState(false);
+	const preparing = useFreeGenPreparing(seg.id);
+	const busy = localBusy || preparing;
 
 	const submit = async (retry: boolean) => {
 		setBusy(true);
 		try {
 			const r = retry ? await retryFreeGen(seg.id) : await startFreeGen(seg.id);
-			if (!r.ok) alert(r.error); // 请求没发出：明确报错，绝不静默失败
+			if (!r.ok && r.error) alert(r.error); // 请求没发出：明确报错，绝不静默失败
 		} finally {
 			setBusy(false);
 		}
@@ -102,15 +117,13 @@ export function RtcFreeGenProps({ seg, track, segIndex }: { seg: RtcSegment; tra
 						<ModelPicker cap={cap} label={kind === "video" ? "视频模型" : "生图模型"} />
 					</div>
 
-					{/* 参数说明（视频时长默认取占位自身长度——占位多长就生成多长，再按模型开放档收敛） */}
+					{/* 参数说明（视频时长默认取占位自身长度——占位多长就生成多长） */}
 					{kind === "video" ? (
-						<div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.4)", lineHeight: 1.7 }}>
-							时长按本占位长度（约 {segSeconds(seg.targetDurationUs)}s）提交，分辨率/比例取「视频设置」，
-							三者都会按所选模型开放的档位收敛。
-						</div>
+						<RtcGenerationDurationPicker duration={generationDuration} autoDuration={autoDuration} durations={durations}
+							onChange={value => useRtcStore.getState().commitActive(doc => patchSegmentDoc(doc, seg.id, { generationDuration: value }))} />
 					) : (
 						<div style={{ fontSize: 10.5, color: "rgba(255,255,255,0.4)", lineHeight: 1.7 }}>
-							比例/分辨率/质量取「视频设置」里的故事板图像设置，按所选模型开放的档位收敛。
+							比例/分辨率/质量取「视频设置」里的故事板图像设置，显式设置保持不变。
 						</div>
 					)}
 
@@ -132,7 +145,8 @@ export function RtcFreeGenProps({ seg, track, segIndex }: { seg: RtcSegment; tra
 								whiteSpace: "nowrap",
 							}}
 						>
-							{running ? "生成中…" : failed ? "重新生成" : "开始生成"}
+							{busy ? "准备中…" : running ? "生成中…" : failed ? "重新生成" : "开始生成"}
+							{!busy && !running && <RtcFreeGenerationCost segment={seg} />}
 						</button>
 
 						{running ? (

@@ -62,6 +62,7 @@ export type RtcShortcut =
 	| "uncompound"
 	| "toggleScriptTrack"
 	// 播放器
+	| "toggleCenterTab"
 	| "playPause"
 	| "stepBack"
 	| "stepForward"
@@ -129,8 +130,9 @@ export const RTC_ACTION_DEFS: RtcKeyActionDef[] = [
 	{ id: "crop", label: "裁剪画面", group: "时间线", defaultKeys: ["C"] },
 	{ id: "compound", label: "新建复合片段", group: "时间线", defaultKeys: ["Alt+G"] },
 	{ id: "uncompound", label: "解除复合片段", group: "时间线", defaultKeys: ["Alt+Shift+G"] },
-	{ id: "toggleScriptTrack", label: "显示/隐藏原文（预览窗参考条）", group: "时间线", defaultKeys: ["O"] },
+	{ id: "toggleScriptTrack", label: "显示/隐藏原文（预览窗参考条）", group: "时间线", defaultKeys: ["`"] },
 	// ── 播放器 ──
+	{ id: "toggleCenterTab", label: "切换 AI 工作台 / 实时预览", group: "播放器", defaultKeys: ["Tab"] },
 	{ id: "playPause", label: "播放 / 暂停", group: "播放器", defaultKeys: ["Space"] },
 	{ id: "stepBack", label: "上一帧", group: "播放器", defaultKeys: ["ArrowLeft"] },
 	{ id: "stepForward", label: "下一帧", group: "播放器", defaultKeys: ["ArrowRight"] },
@@ -151,6 +153,7 @@ export function rtcActionDef(id: RtcShortcut): RtcKeyActionDef | undefined {
 /** 键事件里本解析层用得到的部分（便于单测直接喂字面量） */
 export interface RtcKeyLike {
 	key: string;
+	code?: string;
 	ctrlKey?: boolean;
 	metaKey?: boolean;
 	shiftKey?: boolean;
@@ -163,7 +166,8 @@ const MOD_KEYS = new Set(["Control", "Shift", "Alt", "Meta"]);
 
 /** 键事件 → 规范组合串（纯修饰键返回 null——录制时表示「还在等主键」） */
 export function comboFromEvent(e: RtcKeyLike): string | null {
-	const key = e.key;
+	// Tab 上方同一实体键在中文输入法下可报 · / Process，录制与执行统一按反引号识别。
+	const key = !e.shiftKey && e.code === "Backquote" ? "`" : e.key;
 	if (!key || MOD_KEYS.has(key)) return null;
 	let name: string;
 	let includeShift = true;
@@ -217,6 +221,7 @@ export function isValidCombo(combo: unknown): combo is string {
 }
 
 const COMBO_NAME_MAP: Record<string, string> = {
+	"`": "·",
 	Space: "空格",
 	ArrowLeft: "←",
 	ArrowRight: "→",
@@ -252,11 +257,12 @@ export function normalizeKeymapOverrides(raw: unknown): RtcKeymapOverrides {
 	return out;
 }
 
-/** 生效键位表：覆盖层存在的动作用覆盖值，其余用默认值 */
+/** 生效键位表：显式改绑优先；新增默认键不能抢占用户已绑定给其它动作的键。 */
 export function effectiveKeys(overrides: RtcKeymapOverrides): Map<RtcShortcut, string[]> {
 	const map = new Map<RtcShortcut, string[]>();
+	const claimed = new Set(Object.values(overrides).flat());
 	for (const def of RTC_ACTION_DEFS) {
-		map.set(def.id, overrides[def.id] ?? def.defaultKeys);
+		map.set(def.id, overrides[def.id] ?? def.defaultKeys.filter((key) => !claimed.has(key)));
 	}
 	return map;
 }

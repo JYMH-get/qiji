@@ -191,21 +191,22 @@ describe("rtcGenCore · 产物类型 → 能力/用途", () => {
 describe("rtcGenCore · 自由占位生成参数", () => {
 	const req = { durations: [5, 10, 15], resolutions: ["720p", "1080p"], aspects: ["16:9", "9:16"] };
 
-	it("视频时长默认取占位自身长度，再按模型开放档收敛", () => {
+	it("视频时长保留占位自身长度，不按旧客户端范围或模型档位改写", () => {
 		expect(segSeconds(5_000_000)).toBe(5);
 		expect(segSeconds(0)).toBe(1); // 至少 1 秒
 		const p = buildFreeVideoParams(9_000_000, undefined, req);
-		expect(p.duration).toBe(10); // 9s 不在开放档 → 就近取档（clampDurationTo 同尺）
-		expect(buildFreeVideoParams(3_000_000, undefined, req).duration).toBe(5); // 3s → 先夹到下限 4 → 最近档 5
+		expect(p.duration).toBe(9);
+		expect(buildFreeVideoParams(3_000_000, undefined, req).duration).toBe(3);
+		expect(buildFreeVideoParams(20_000_000, undefined, req).duration).toBe(20);
 		expect(p.resolution).toBe("720p");
 		expect(p.aspect_ratio).toBe("16:9");
 	});
 
-	it("视频分辨率/比例取视频设置；不在模型开放档时收敛到第一档", () => {
+	it("视频分辨率/比例显式设置不受目录刷新影响", () => {
 		const p = buildFreeVideoParams(10_000_000, { resolution: "480p", aspect: "1:1" }, req);
 		expect(p.duration).toBe(10);
-		expect(p.resolution).toBe("720p");
-		expect(p.aspect_ratio).toBe("16:9");
+		expect(p.resolution).toBe("480p");
+		expect(p.aspect_ratio).toBe("1:1");
 	});
 
 	it("图片参数保留 aspect 并补齐 aspect_ratio，显式分辨率不改档", () => {

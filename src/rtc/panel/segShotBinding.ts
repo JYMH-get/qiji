@@ -23,7 +23,7 @@ import { getDualModeFeature } from '@/store/connectionStore';
  */
 import { resolveEpisodeKey, useProjectStore } from "@/store/projectStore";
 import { useRtcStore } from "@/store/rtcStore";
-import { reindexShots } from "@/lib/shotReindex";
+import { nextSupplementIndex, reindexShots, resolveShotMainParents } from "@/lib/shotReindex";
 import type { StoryboardShot } from "@/services/projectFile";
 import { liveSegment } from "./rtcGenSink";
 import { useRtcFreeGenStore } from "./rtcFreeGenStore";
@@ -119,13 +119,22 @@ export function deriveShotForCopy(
 	const srcIdx = ep?.shots.findIndex((s) => s.id === src.shotId) ?? -1;
 	if (!ep || srcIdx < 0) return null;
 	const from = ep.shots[srcIdx];
+	// 新 RTC 补镜可远离其父镜排列；父已失效也保留孤儿关系，不能悄悄改挂数组前一主镜。
+	const boundParent = from.isSupplement ? from.supplementParentId : undefined;
+	const resolvedParent = boundParent ? resolveShotMainParents(ep.shots).get(from.id) : null;
+	const explicitParent = resolvedParent || boundParent;
+	const supplementIndex = explicitParent ? nextSupplementIndex(ep.shots, explicitParent) : undefined;
+	const orphanTitle = boundParent && !resolvedParent
+		? (/^分镜\d+-\d+$/.test(from.title) ? from.title.replace(/-\d+$/, `-${supplementIndex}`) : `${from.title}-${supplementIndex}`)
+		: "";
 
 	const copy: StoryboardShot = {
 		// 身份与编号（title 由 reindexShots 统一重排，这里先留空）
 		id: `shot-${Date.now()}-c-${Math.floor(Math.random() * 1e6)}`,
 		index: srcIdx + 2,
-		title: "",
+		title: orphanTitle,
 		isSupplement: true,
+		...(explicitParent ? { supplementParentId: explicitParent, supplementIndex } : {}),
 		// 用户填过的内容整份带走
 		scriptSegment: from.scriptSegment ?? "",
 		prompt: from.prompt ?? "",

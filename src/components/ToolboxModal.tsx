@@ -15,7 +15,8 @@ import { useToolboxStore } from "@/store/toolboxStore";
 import { useCatalogStore } from "@/store/catalogStore";
 import ModelPicker, { useCapModelOptions } from "@/components/ModelPicker";
 import TemplatePicker from "@/components/TemplatePicker";
-import { IMAGE_QUALITIES, IMAGE_ASPECTS, imageResolutionOptions, clampImageResolution, buildImageParams, estimateCost } from "@/lib/genParams";
+import { IMAGE_QUALITIES, IMAGE_ASPECTS, imageResolutionOptions, clampImageResolution, buildImageParams } from "@/lib/genParams";
+import { GenerationCost } from "@/components/GenerationCost";
 import { saveTextToLocal, saveUriToLocal } from "@/lib/saveMedia";
 
 /** 工具卡（首页网格） */
@@ -47,9 +48,6 @@ function NovelTool() {
 	const runNovel = useToolboxStore((s) => s.runNovel);
 	const opts = useCapModelOptions("text");
 	const effKey = novel.modelKey && opts.some((o) => o.id === novel.modelKey) ? novel.modelKey : opts[0]?.id ?? "";
-	const models = useCatalogStore((s) => s.catalog?.models);
-	const model = useMemo(() => models?.find((m) => m.id === effKey), [models, effKey]);
-	const cost = estimateCost(model, {});
 	const [copied, setCopied] = useState(false);
 
 	const outputText = novel.running ? novel.partial : novel.result;
@@ -70,13 +68,12 @@ function NovelTool() {
 				<ModelPicker cap="text" label="文本模型" value={novel.modelKey} onChange={(id) => patchNovel({ modelKey: id })} style={{ minWidth: 220 }} />
 				<TemplatePicker purpose="script.toScenes" value={novel.tplId} onChange={(id) => patchNovel({ tplId: id })} style={{ minWidth: 160 }} />
 				<div className="ml-auto flex items-center gap-3">
-					{cost != null && <span className="text-[10px] text-muted-foreground">{model?.tokenPricing?.enabled ? "预扣" : "预计消耗"} {cost} 积分</span>}
 					<button
 						onClick={() => void runNovel(effKey)}
 						disabled={novel.running || !novel.input.trim()}
 						className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-[12px] font-semibold hover:bg-primary/90 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
 					>
-						{novel.running ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> 转换中 {Math.round(novel.progress)}%</> : <><Wand2 className="h-3.5 w-3.5" /> 开始转换</>}
+						{novel.running ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> 转换中 {Math.round(novel.progress)}%</> : <><Wand2 className="h-3.5 w-3.5" /> 开始转换<GenerationCost modelKey={effKey} /></>}
 					</button>
 				</div>
 			</div>
@@ -143,7 +140,7 @@ function CoverTool() {
 	// 分辨率档随生效模型 catalog 收敛（与资产模式一把尺）
 	const resOpts = imageResolutionOptions(model);
 	const resolution = clampImageResolution(cover.resolution, resOpts);
-	const cost = estimateCost(model, buildImageParams({ aspect: cover.aspect, resolution, quality: cover.quality }, resOpts));
+	const costParams = buildImageParams({ aspect: cover.aspect, resolution, quality: cover.quality }, resOpts);
 	// 预览选中的历史项（-1=最新）
 	const [selIdx, setSelIdx] = useState(0);
 	const sel = cover.results[selIdx] ?? cover.results[0];
@@ -199,15 +196,12 @@ function CoverTool() {
 				</div>
 				<ModelPicker cap="image" label="图像模型" value={cover.modelKey} onChange={(id) => patchCover({ modelKey: id })} />
 				<TemplatePicker purpose="image.cover" value={cover.tplId} onChange={(id) => patchCover({ tplId: id })} />
-				<div className="flex items-center justify-between">
-					{cost != null ? <span className="text-[10px] text-muted-foreground">{model?.tokenPricing?.enabled ? "预扣" : "预计消耗"} {cost} 积分</span> : <span />}
-				</div>
 				<button
 					onClick={handleRun}
 					disabled={cover.running || !cover.desc.trim()}
 					className="flex items-center justify-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-[12px] font-semibold text-primary-foreground hover:bg-primary/90 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
 				>
-					{cover.running ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> 生成中 {Math.round(cover.progress)}%</> : <><ImagePlus className="h-3.5 w-3.5" /> 生成封面</>}
+					{cover.running ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> 生成中 {Math.round(cover.progress)}%</> : <><ImagePlus className="h-3.5 w-3.5" /> 生成封面<GenerationCost modelKey={effKey} params={costParams} /></>}
 				</button>
 				{cover.error && <div className="text-[11px] text-destructive">{cover.error}</div>}
 			</div>

@@ -14,10 +14,13 @@ import { getDualModeFeature } from '@/store/connectionStore';
  *    **仅补缺失字段**（已完成镜头不覆盖，防抹掉用户修改）。
  *
  * 覆盖语义：用户点击智能推理（单/多镜）即「删除当前提示词覆盖」——
- *  多镜清空整集分镜、单镜清空该镜两段提示词（由调用方 Frame161195 在 startInfer 前完成）；
+ *  表格多镜先清空整集、单镜先清空该镜提示词；RTC 整集保留原镜头 ID、成品与剪辑，仅按 index 更新推理字段。
  *  本模块运行期 fillOnly=false（覆盖），找回期 fillOnly=true（仅补缺失）。
  */
 import { useProjectStore } from "@/store/projectStore";
+import { useRtcStore } from "@/store/rtcStore";
+import { createEmptyRtcDoc } from "@/types/rtc";
+import { appendInferredEpisodePlaceholders } from "@/rtc/rtcShotPlaceholders";
 import type { StoryboardShot, InferTask } from "@/services/projectFile";
 import { runPurpose } from "./purposeRunner";
 import { trackTask } from "./taskCenter";
@@ -47,10 +50,62 @@ interface InferTarget {
 /** 新起一次推理需要的输入（templateId/variables/modelKey 仅运行用，找回不需要）。
  *  sameSource 继承自 InferTarget：图视同源模式产出同源提示词。 */
 export interface StartInferSpec extends InferTarget {
+  /** 仅 RTC 整集入口开启：流式新增分镜同步追加到原分集主时间轴。 */
+  rtcAutoPlaceholders?: boolean;
   inference?: import('@/contract').GenerateRequest['inference'];
 	templateId: string;
 	variables: Record<string, string>;
 	modelKey?: string;
+}
+
+/** 任务回包固定项目实例与任务身份；切分集不影响本任务，切项目/删集/重起则停止写入。 */
+function currentTask(owner: string, id: string): InferTask | undefined {
+	const st = useProjectStore.getState();
+	if (st.projectInstanceId !== owner || st.isProjectLoading) return;
+	const task = st.inferTasks.find((t) => t.id === id && t.status === "running");
+	return task && st.episodes.some((ep) => ep.id === task.episodeId) ? task : undefined;
+}
+
+/** 打开项目失败可能返回原实例。loading期间保留终态全文，结束后再复核归属；换实例立即解除订阅。 */
+function whenInferReady(owner: string, id: string, apply: () => void): void | Promise<void> {
+	const belongs = () => {
+		const state = useProjectStore.getState();
+		const task = state.inferTasks.find(t => t.id === id && t.status === "running");
+		return state.projectInstanceId === owner && !!task && state.episodes.some(ep => ep.id === task.episodeId);
+	};
+	if (!belongs()) return;
+	if (!useProjectStore.getState().isProjectLoading) { apply(); return; }
+	return new Promise<void>((resolve, reject) => {
+		const unsubscribe = useProjectStore.subscribe((state) => {
+			if (state.isProjectLoading && belongs()) return;
+			unsubscribe();
+			try {
+				if (currentTask(owner, id)) apply();
+				resolve();
+			} catch (error) { reject(error); }
+		});
+	});
+}
+
+function placeInferredShots(owner: string, id: string, shotIds: string[]): void {
+	const task = currentTask(owner, id);
+	if (!task?.rtcPlacement || task.mode === "single" || !shotIds.length) return;
+	const st = useProjectStore.getState();
+	const episode = st.episodes.find((ep) => ep.id === task.episodeId)!;
+	const rtc = useRtcStore.getState();
+	const active = rtc.ownerProjectId === owner && rtc.ownerEpisodeKey === episode.id && !!rtc.doc;
+	const doc = (active ? rtc.doc : st.rtcDocs[episode.id]) ?? createEmptyRtcDoc();
+	const candidates = { ...episode, shots: episode.shots.filter((shot) => shotIds.includes(shot.id)) };
+	const result = appendInferredEpisodePlaceholders(doc, candidates, task.rtcPlacement.handledShotIds, {
+		multiEp: st.episodes.length > 1, resolveBlob: st.blobByUri,
+	});
+	if (result.handledShotIds !== task.rtcPlacement.handledShotIds) {
+		st.updateInferTask(id, { rtcPlacement: { handledShotIds: result.handledShotIds } });
+	}
+	if (result.doc === doc) return;
+	// 活动分集沿既有写回通道保留选区/撤销历史；其它分集只更新自己的持久档位，绝不自动切集。
+	if (active) rtc.commit(() => result.doc);
+	else st.setRtcEpisodeDoc(episode.id, result.doc);
 }
 
 interface ShotPatch { index: number; scriptSegment?: string; durationSec?: number; storyboardPrompt?: string; videoPrompt?: string; unifiedPrompt?: string }
@@ -128,17 +183,17 @@ function mergeShots(epId: string, incoming: ShotPatch[], fillOnly: boolean): voi
  * - multi（智能推理·多镜）：每卡 原文 + 故事板 + 视频 三字段；
  * - single（智能推理·单镜）：仅回填该镜两段提示词（原文保留）。
  */
-function applyInferText(target: InferTarget, text: string, fillOnly: boolean, streaming: boolean): void {
+function applyInferText(target: InferTarget, text: string, fillOnly: boolean, streaming: boolean, rtcPlacement = false): string[] {
 	// 流式 partial 走 parseInferCardsStream（容错抽取，未闭合也能出部分卡，边出边填）；最终走严格优先的 parseInferCards
 	const cards = streaming ? parseInferCardsStream(text) : parseInferCards(text);
-	if (!cards.length) return;
+	if (!cards.length) return [];
 	if (target.mode === "single") {
 		// 单镜推理：仅回填该镜提示词（原文保留，不覆盖 scriptSegment）。
 		// 图视同源 → 只回填 unifiedPrompt；否则回填故事板/视频两段。
 		const c = cards[0];
 		const st = useProjectStore.getState();
 		const sh = st.episodes.find((e) => e.id === target.episodeId)?.shots.find((s) => s.id === target.shotId);
-		if (!sh) return; // 分镜已删
+		if (!sh) return []; // 分镜已删
 		const patch: Partial<StoryboardShot> = {};
 		if (target.sameSource) {
 			if (c.unifiedPrompt && !(fillOnly && (sh.unifiedPrompt ?? "") !== "")) patch.unifiedPrompt = c.unifiedPrompt;
@@ -149,10 +204,54 @@ function applyInferText(target: InferTarget, text: string, fillOnly: boolean, st
 		// 卡带指定时长 → 回填本镜时长设置（找回期已有时长不覆盖）
 		if (c.duration && c.duration !== sh.durationSec && !(fillOnly && sh.durationSec)) patch.durationSec = c.duration;
 		if (Object.keys(patch).length) st.updateShot(target.episodeId, target.shotId!, patch);
-		return;
+		return [];
 	}
 	// 每卡增量建行；仅拆分只填原文与时长，推理按同源开关填对应提示词。
-	mergeShots(target.episodeId, cardsToPatch(cards, !!target.sameSource, target.mode === "split"), fillOnly);
+	const ready = rtcPlacement && streaming ? streamPlacementIndexes(text, cards.length) : new Set(cards.map((_, i) => i + 1));
+	const patches = cardsToPatch(cards, !!target.sameSource, target.mode === "split");
+	if (rtcPlacement && streaming) for (const patch of patches) {
+		if (!ready.has(patch.index)) patch.durationSec = undefined;
+	}
+	mergeShots(target.episodeId, patches, fillOnly);
+	return useProjectStore.getState().episodes.find((ep) => ep.id === target.episodeId)?.shots
+		.filter((shot) => ready.has(shot.index)).map((shot) => shot.id) ?? [];
+}
+
+/**
+ * 文本字段可提前出卡；占位则等明确时长值闭合，或整卡结束后才使用缺省时长。
+ * 只考察引号外已到达的 JSON 分隔符，避免把 duration 的首个数字或正文里的 `}` 当作完成。
+ * 容错格式不能确定边界时等最终回包，不猜一个长度后再挤动用户剪辑。
+ */
+function streamPlacementIndexes(text: string, count: number): Set<number> {
+	let quoted = false, escaped = false, boundary = -1, closed = -1;
+	const objects: number[] = [];
+	for (let i = 0; i < text.length; i++) {
+		const char = text[i];
+		if (quoted) {
+			if (escaped) escaped = false;
+			else if (char === "\\") escaped = true;
+			else if (char === '"') quoted = false;
+		} else if (char === '"') quoted = true;
+		else if (char === "{") objects.push(i);
+		else if (char === "," || char === "}" || char === "]") {
+			boundary = i;
+			if (char === "}") {
+				const start = objects.pop();
+				if (start !== undefined) try {
+					const object = JSON.parse(text.slice(start, i + 1));
+					if (["card_number", "cardNumber", "original_script", "script", "scriptContent", "storyboard_prompts", "video_prompts", "unified_prompt"]
+						.some((key) => Object.prototype.hasOwnProperty.call(object, key))) closed = i;
+				} catch { /* 容错正文不能确认闭卡时等待最终结果。 */ }
+			}
+		}
+	}
+	const ready = new Set<number>();
+	// 后卡已开始时前卡不再等待字段；本解析器同样以新卡字段为上一卡边界。
+	for (let index = 1; index < count; index++) ready.add(index);
+	const stable = parseInferCardsStream(text.slice(0, boundary + 1));
+	if (stable.length === count && stable[count - 1]?.duration !== undefined) ready.add(count);
+	if (closed >= 0 && parseInferCardsStream(text.slice(0, closed + 1)).length === count) ready.add(count);
+	return ready;
 }
 
 /** 收尾：整集操作（多镜推理 / 智能拆分）重排编号(保留 id) + 落盘；单镜仅落盘 */
@@ -176,19 +275,27 @@ function producedSomething(target: InferTarget): boolean {
 	return ep.shots.length > 0;
 }
 
+function taskProducedSomething(owner: string, id: string, target: InferTarget): boolean {
+	const task = currentTask(owner, id);
+	return task?.rtcPlacement ? task.rtcPlacement.handledShotIds.length > 0 : producedSomething(target);
+}
+
 /**
  * 新起一次推理（异步，不阻塞）。锁定即由 inferTasks 记录承载；提交确认落 taskId 供找回。
- * 调用方需在调用前完成「覆盖」：多镜清空整集分镜、单镜清空该镜两段提示词。
+ * 是否预先清空由调用方决定；RTC 整集保留既有分镜以维持片段引用。
  */
 export function startInfer(spec: StartInferSpec): string {
  if (!getDualModeFeature()) spec = { ...spec, sameSource: true, inference: { ...spec.inference, source: spec.inference?.source ?? 'template', outputMode: 'unified' } };
 	const st = useProjectStore.getState();
+	const owner = st.projectInstanceId;
 	// 清掉同目标的旧记录（失败残留 / 重复点击），保证一个目标至多一条 running
 	st.inferTasks
-		.filter((t) => (spec.mode === "single" ? t.shotId === spec.shotId : t.episodeId === spec.episodeId && t.mode === spec.mode))
+		.filter((t) => t.episodeId === spec.episodeId && (spec.mode === "single" ? t.shotId === spec.shotId : t.mode === spec.mode))
 		.forEach((t) => st.removeInferTask(t.id));
 	const id = uid();
-	const task: InferTask = { id, episodeId: spec.episodeId, mode: spec.mode, sameSource: spec.sameSource, shotId: spec.shotId, status: "running", createdAt: Date.now() };
+	const task: InferTask = { id, episodeId: spec.episodeId, mode: spec.mode, sameSource: spec.sameSource, shotId: spec.shotId, status: "running", createdAt: Date.now(),
+		...(spec.rtcAutoPlaceholders && spec.mode !== "single" ? { rtcPlacement: { handledShotIds: [] } } : {}),
+	};
 	st.addInferTask(task);
 	void st.save(true);
 
@@ -203,21 +310,27 @@ export function startInfer(spec: StartInferSpec): string {
 		variables: spec.variables,
 		params: { temperature: 0.7, maxTokens: 65535 },
 		onTaskId: (taskId, adapterKey) => {
+			if (!currentTask(owner, id)) return;
 			useProjectStore.getState().updateInferTask(id, { taskId, adapterKey });
 			void useProjectStore.getState().save(true);
 		},
 		onProgress: (p, _s, partial, extra) => {
+			if (!currentTask(owner, id)) return;
 			setJobProgress(id, p, extra);
-			if (typeof partial === "string" && partial.length > 40) applyInferText(target, partial, false, true);
+			if (typeof partial === "string" && partial.length > 40) {
+				const shots = applyInferText(target, partial, false, true, !!task.rtcPlacement);
+				placeInferredShots(owner, id, shots);
+			}
 		},
 	})
-		.then((r) => {
+		.then((r) => whenInferReady(owner, id, () => {
+			if (!currentTask(owner, id)) return;
 			clearJobProgress(id);
-			if (!useProjectStore.getState().inferTasks.find((t) => t.id === id)) return; // 已被清除（切项目/重起新任务）→ 丢弃
 			if (r.status === "success") {
-				applyInferText(target, r.resultUri || "", false, false);
+				const shots = applyInferText(target, r.resultUri || "", false, false, !!task.rtcPlacement);
+				placeInferredShots(owner, id, shots);
 				finalizeInfer(target);
-				if (!producedSomething(target)) {
+				if (!taskProducedSomething(owner, id, target)) {
 					useProjectStore.getState().updateInferTask(id, { status: "failed", error: "未能从模型输出解析出结果，请重试或调整原文。" });
 					void useProjectStore.getState().save(true);
 					return;
@@ -231,12 +344,13 @@ export function startInfer(spec: StartInferSpec): string {
 				useProjectStore.getState().updateInferTask(id, { status: "failed", error: r.error || "推理失败", taskId: r.taskId, adapterKey: r.adapterKey });
 				void useProjectStore.getState().save(true);
 			}
-		})
-		.catch((err) => {
+		}))
+		.catch((err) => whenInferReady(owner, id, () => {
+			if (!currentTask(owner, id)) return;
 			clearJobProgress(id);
 			useProjectStore.getState().updateInferTask(id, { status: "failed", error: err instanceof Error ? err.message : "推理失败" });
 			void useProjectStore.getState().save(true);
-		});
+		}));
 	return id;
 }
 
@@ -247,28 +361,51 @@ export function startInfer(spec: StartInferSpec): string {
  */
 export function resumeInferTasks(): void {
 	const st = useProjectStore.getState();
+	const owner = st.projectInstanceId;
+	if (st.isProjectLoading) return;
 	for (const t of st.inferTasks) {
-		if (t.status !== "running") continue;
+		if (!currentTask(owner, t.id)) continue;
 		const target: InferTarget = { episodeId: t.episodeId, mode: t.mode, sameSource: t.sameSource, shotId: t.shotId };
 		if (t.taskId && t.adapterKey) {
 			trackTask({
 				taskId: t.taskId,
 				adapterKey: t.adapterKey,
 				onUpdate: (p, status, resultUri, error, _assetId, partial, _rawLink, extra) => {
-					// 重挂轮询同样喂进度/排队位次（重启后接回的推理可能仍在服务端队列里）
-					if (status === "queued" || status === "running") setJobProgress(t.id, p, extra);
-					if (typeof partial === "string" && partial.length > 40) applyInferText(target, partial, true, true);
-					if (status === "success") {
-						clearJobProgress(t.id);
-						applyInferText(target, resultUri || "", true, false);
-						finalizeInfer(target);
-						useProjectStore.getState().removeInferTask(t.id);
-						void useProjectStore.getState().save(true);
-					} else if (status === "failed" || status === "lost") {
-						clearJobProgress(t.id);
-						useProjectStore.getState().updateInferTask(t.id, { status: "failed", error: error || "推理失败：服务端未找到原任务，请重试。" });
-						void useProjectStore.getState().save(true);
-					}
+					const apply = () => {
+						if (!currentTask(owner, t.id)) return;
+						// 重挂轮询同样喂进度/排队位次（重启后接回的推理可能仍在服务端队列里）
+						if (status === "queued" || status === "running") setJobProgress(t.id, p, extra);
+						if (typeof partial === "string" && partial.length > 40) {
+							const shots = applyInferText(target, partial, true, true, !!t.rtcPlacement);
+							placeInferredShots(owner, t.id, shots);
+						}
+						if (status === "success") {
+							clearJobProgress(t.id);
+							const shots = applyInferText(target, resultUri || "", true, false, !!t.rtcPlacement);
+							placeInferredShots(owner, t.id, shots);
+							finalizeInfer(target);
+							if (t.rtcPlacement && !taskProducedSomething(owner, t.id, target)) {
+								useProjectStore.getState().updateInferTask(t.id, { status: "failed", error: "未能从模型输出解析出结果，请重试或调整原文。" });
+								void useProjectStore.getState().save(true);
+								return;
+							}
+							useProjectStore.getState().removeInferTask(t.id);
+							void useProjectStore.getState().save(true);
+						} else if (status === "failed" || status === "lost") {
+							clearJobProgress(t.id);
+							useProjectStore.getState().updateInferTask(t.id, { status: "failed", error: error || "推理失败：服务端未找到原任务，请重试。" });
+							void useProjectStore.getState().save(true);
+						}
+					};
+					if (status === "success" || status === "failed" || status === "lost") {
+						const pending = whenInferReady(owner, t.id, apply);
+						if (pending) void pending.catch(err => {
+							if (!currentTask(owner, t.id)) return;
+							clearJobProgress(t.id);
+							useProjectStore.getState().updateInferTask(t.id, { status: "failed", error: err instanceof Error ? err.message : "推理结果写入失败" });
+							void useProjectStore.getState().save(true);
+						});
+					} else apply();
 				},
 			});
 		} else {

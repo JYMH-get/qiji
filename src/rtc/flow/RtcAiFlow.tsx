@@ -19,12 +19,15 @@
  * 页签切换会卸载本区块，挂这里会丢重连时机。
  */
 import { useEffect, useMemo, useState } from "react";
-import { useProjectStore } from "@/store/projectStore";
+import { resolveEpisodeKey, useProjectStore } from "@/store/projectStore";
+import { RtcEpisodeShotList } from "./RtcEpisodeShotList";
+import { openRtcEpisodeWorkbench } from "./rtcEpisodeWorkbenchView";
 import { useCatalogStore } from "@/store/catalogStore";
 import { EPISODE_SPLIT_MODES } from "@/lib/episodeSplit";
 import type { VideoEpisode } from "@/services/projectFile";
 import { openRtcScriptEditor, useRtcCenterTabStore } from "../panel/rtcCenterTabStore";
 import { scriptBrief, episodesBrief } from "./flowCore";
+import { RtcTextGenerationCost } from "../panel/RtcGenerationCost";
 import {
 	splitEpisodesFlow, extractAssetsFlow, continueExtractionFlow,
 	smartInferEpisode, smartSplitEpisode, appendEpisodeToTimeline,
@@ -76,7 +79,7 @@ function ResultLine({ res, onClose }: { res: FlowResult | null; onClose: () => v
 
 function StepScript() {
 	const scriptText = useProjectStore((s) => s.scriptText);
-	const editing = useRtcCenterTabStore((s) => s.scriptEditorOpen);
+	const editing = useRtcCenterTabStore((s) => s.scriptEditorOpen && !s.scriptEditorHidden);
 	const brief = useMemo(() => scriptBrief(scriptText), [scriptText]);
 	return (
 		<StepCard n={1} title="剧本" chip={brief.empty ? "未填写" : `${brief.chars} 字`}>
@@ -152,6 +155,7 @@ function StepSplit({ hasScript }: { hasScript: boolean }) {
 						</select>
 						<button style={btnStyle("primary", disabled)} disabled={disabled} onClick={() => void run()}>
 							{busy ? "拆分中…" : brief.hasContent ? "重新拆分" : "拆分"}
+							{!busy && llmTpls.some(template => template.id === mode) && <RtcTextGenerationCost />}
 						</button>
 					</div>
 					{brief.hasContent && (
@@ -223,6 +227,7 @@ function StepExtract({ hasScript }: { hasScript: boolean }) {
 						</select>
 						<button style={btnStyle("primary", disabled)} disabled={disabled} onClick={() => void runExtract()}>
 							{busy ? "提取中…" : isAnalyzed ? "重新提取" : "开始拆分"}
+							{!busy && <RtcTextGenerationCost />}
 						</button>
 						<button
 							style={btnStyle("plain", disabled || !isAnalyzed)}
@@ -230,7 +235,7 @@ function StepExtract({ hasScript }: { hasScript: boolean }) {
 							title="把已提取资产作查重清单喂回模型，只补新增、不重复、不覆盖已有；可反复点击直到提示无新增"
 							onClick={() => void runContinue()}
 						>
-							继续提取
+							继续提取<RtcTextGenerationCost />
 						</button>
 					</div>
 					{busy && (
@@ -284,7 +289,8 @@ function EpisodeShotCard({ ep }: { ep: VideoEpisode }) {
 	return (
 		<div style={{ padding: 10, borderRadius: 8, border: "1px solid rgba(255,255,255,0.07)", background: "rgba(255,255,255,0.02)" }}>
 			<div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-				<span style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.9)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ep.title || `第${ep.index}集`}</span>
+				<button type="button" onClick={() => openRtcEpisodeWorkbench(ep.id)} title="打开本集总览"
+					style={{ flex: 1, minWidth: 0, textAlign: "left", border: 0, padding: "4px 0", background: "transparent", cursor: "pointer", fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.9)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ep.title || `第${ep.index}集`}</button>
 				<span style={{ marginLeft: "auto", flexShrink: 0, fontSize: 10, color: "rgba(255,255,255,0.45)" }}>
 					{locked ? `已出 ${ep.shots.length} 镜…` : ep.shots.length > 0 ? `${ep.shots.length} 镜` : "无分镜"}
 				</span>
@@ -292,9 +298,11 @@ function EpisodeShotCard({ ep }: { ep: VideoEpisode }) {
 			<div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
 				<button style={btnStyle("plain", locked)} disabled={locked} title="整集推理：原文 → 每镜 原文+提示词（流式边出边填）" onClick={() => void onInfer()}>
 					{inferring ? "推理中…" : "智能推理"}
+					{!inferring && <RtcTextGenerationCost />}
 				</button>
 				<button style={btnStyle("plain", locked)} disabled={locked} title="整集拆分：只拆原文分段，不产提示词" onClick={() => void onSplit()}>
 					{splitting ? "拆分中…" : "智能拆分"}
+					{!splitting && <RtcTextGenerationCost />}
 				</button>
 				<button
 					style={btnStyle("primary", locked || ep.shots.length === 0)}
@@ -315,14 +323,16 @@ function EpisodeShotCard({ ep }: { ep: VideoEpisode }) {
 
 function StepShots() {
 	const episodes = useProjectStore((s) => s.episodes);
-	const brief = useMemo(() => episodesBrief(episodes), [episodes]);
+	const activeId = useProjectStore((s) => s.rtcEpisodeId);
+	const episode = episodes.find((ep) => ep.id === resolveEpisodeKey(activeId, episodes));
 	return (
-		<StepCard n={4} title="分镜" chip={brief.hasContent ? `${brief.count} 集 · ${brief.shotCount} 镜` : "待拆分"} disabled={!brief.hasContent}>
-			{!brief.hasContent ? (
+		<StepCard n={4} title="分镜" chip={episode ? `${episode.shots.length} 镜` : "待拆分"} disabled={!episode}>
+			{!episode ? (
 				<div style={hintStyle}>先在第②步把剧本拆成分集，再逐集「智能推理/智能拆分」产出分镜；分镜可一键落到时间轴。</div>
 			) : (
 				<div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-					{episodes.map((ep) => <EpisodeShotCard key={ep.id} ep={ep} />)}
+					<EpisodeShotCard key={episode.id} ep={episode} />
+					<RtcEpisodeShotList episode={episode} />
 				</div>
 			)}
 		</StepCard>

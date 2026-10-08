@@ -3881,10 +3881,38 @@ async function loadStorageStats(){
     </div>`;
 }
 
-/* ════════════════ 网页管理（第244轮：官网主站内容——站点开关/下载与安装包/公告/更新记录/图片资产）════════════════ */
+/* ════════════════ 网页管理：内容保存、隔离预览与独立静态站部署包 ════════════════ */
 let SITE_DATA = null;      // {config, ossConfigured, imageSlots}
 let SITE_ANNS = [];        // 公告编辑态（保存时整表提交）
 let SITE_RELS = [];        // 更新记录编辑态
+let SITE_BUSY = false, SITE_LOADING = false, SITE_DIRTY = false;
+function updateSiteDraftStatus(){
+  const status = $("#siteDraftStatus");
+  if(status) status.textContent = SITE_DIRTY ? "有未保存修改；部署新包后官网生效" : "内容已保存；部署新包后官网生效";
+  const badge = $("#siteOnBadge"), enabled = $("#st_enabled");
+  if(badge && enabled){ badge.className="badge "+(enabled.checked?"ok":"plain"); badge.textContent=enabled.checked?"正常页面":"维护页面"; }
+}
+function markSiteDraft(){ SITE_DIRTY=true; updateSiteDraftStatus(); }
+function setSiteBusy(busy){
+  SITE_BUSY=busy;
+  document.querySelectorAll('#siteEditor button, #siteEditor input[type="file"]').forEach(control=>{
+    if(busy){
+      if(control.dataset.siteWasDisabled===undefined) control.dataset.siteWasDisabled=String(control.disabled);
+      control.disabled=true;
+    }else if(control.dataset.siteWasDisabled!==undefined){
+      control.disabled=control.dataset.siteWasDisabled==="true";
+      delete control.dataset.siteWasDisabled;
+    }
+  });
+  $("#siteEditor")?.setAttribute("aria-busy",String(busy));
+}
+async function runSiteAction(action){
+  if(SITE_BUSY || SITE_LOADING) return;
+  setSiteBusy(true);
+  try { await action(); }
+  catch(e){ toast(e.message,"bad"); }
+  finally { setSiteBusy(false); }
+}
 /* multipart 上传（不能走 api()——它会给 body 钉 application/json；FormData 须让浏览器自带 boundary） */
 async function siteUpload(path, formData){
   const r = await fetch(path, { method:"POST", headers:{ Authorization:"Bearer "+TOKEN }, body: formData });
@@ -3894,34 +3922,54 @@ async function siteUpload(path, formData){
 }
 async function loadSite(){
   const el = $("#tab-site");
-  el.innerHTML = `<div class="mut" style="font-size:12.5px">加载中…</div>`;
+  // 页签切换和顶部刷新保留正在编辑的表单；异步响应不能覆盖草稿或上传。
+  if(SITE_BUSY || SITE_LOADING) return;
+  const hasEditor = !!$("#siteEditor");
+  SITE_LOADING=true;
+  if(hasEditor) setSiteBusy(true);
+  if(!hasEditor) el.innerHTML = `<div class="mut" style="font-size:12.5px">加载中…</div>`;
   let r;
   try { r = await api("/admin-api/site"); }
-  catch(e){ el.innerHTML = `<div class="bad-t">${esc(e.message)}</div>`; return; }
+  catch(e){ if(hasEditor) toast(e.message,"bad"); else el.innerHTML = `<div class="bad-t">${esc(e.message)}</div>`; return; }
+  finally { SITE_LOADING=false; if(hasEditor) setSiteBusy(false); }
   SITE_DATA = r;
+  if(hasEditor){
+    if(!SITE_DIRTY){
+      const c=r.config;
+      const fields={version:c.version,size:c.sizeNote,dlurl:c.downloadUrl,bakurl:c.backupUrl,bd:c.contacts.bd,support:c.contacts.support,wechat:c.contacts.wechat,qq:c.contacts.qq,icp:c.icp};
+      Object.entries(fields).forEach(([key,value])=>{ $("#st_"+key).value=value||""; });
+      $("#st_enabled").checked=c.enabled; $("#st_stats").checked=c.showStats; $("#st_channels").checked=c.showChannels;
+      SITE_ANNS=(c.announcements||[]).map(a=>({...a}));
+      SITE_RELS=(c.releases||[]).map(x=>({...x,items:[...(x.items||[])]}));
+      renderSiteAnns(); renderSiteRels(); updateSiteDraftStatus();
+    }
+    renderSiteImgs(); return;
+  }
   const c = r.config;
   SITE_ANNS = (c.announcements||[]).map(a=>({...a}));
   SITE_RELS = (c.releases||[]).map(x=>({...x, items:[...(x.items||[])]}));
+  SITE_DIRTY=false;
   el.innerHTML = `
+    <div id="siteEditor">
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:14px;align-items:start">
       <div class="card">
         <div class="hd"><h3>站点与下载</h3>
-          <span class="badge ${c.enabled?"ok":"bad"}" id="siteOnBadge">${c.enabled?"已上线":"已关闭"}</span>
-          <span class="sp"></span><a class="sm ghost" href="/" target="_blank" rel="noopener" style="text-decoration:none">打开官网预览 ↗</a></div>
+          <span class="badge ${c.enabled?"ok":"plain"}" id="siteOnBadge">${c.enabled?"正常页面":"维护页面"}</span>
+          <span class="sp"></span><button class="sm ghost" onclick="previewSite()">保存并预览</button></div>
         <div class="bd">
-          <div class="mut" style="font-size:12px;margin-bottom:10px">官网挂在本服务根路径 <span class="mono">GET /</span>（与 /admin、/agent 同域同端口）。改动<b>保存即生效</b>，用户刷新页面即见。</div>
+          <div class="mut" style="font-size:12px;margin-bottom:10px">官网独立部署。保存内容后可预览或导出部署包；<b>将新包部署到官网服务器后，访客才能看到改动。</b></div>
           <div class="fgrid">
-            <div class="fld"><span>站点开关（关=显示「维护中」占位页）</span><div style="padding:5px 0"><label class="sw"><input id="st_enabled" type="checkbox" ${c.enabled?"checked":""}/><i></i></label></div></div>
+            <div class="fld"><span>页面内容（关=导出「维护中」页面）</span><div style="padding:5px 0"><label class="sw"><input id="st_enabled" type="checkbox" ${c.enabled?"checked":""}/><i></i></label></div></div>
             <div class="fld"><span>版本号（下载卡展示）</span><input id="st_version" type="text" value="${esc(c.version)}" placeholder="1.0.0"/></div>
             <div class="fld full"><span>体积/系统说明行</span><input id="st_size" type="text" value="${esc(c.sizeNote)}" placeholder="约 320 MB · Windows 10 / 11 (64-bit)"/></div>
             <div class="fld full"><span>安装包下载直链（下方直传后自动回填；也可手填外链）</span><input id="st_dlurl" type="text" value="${esc(c.downloadUrl)}" placeholder="留空=官网显示「即将开放」"/></div>
             <div class="fld full"><span>备用下载（网盘链接，留空=隐藏该按钮）</span><input id="st_bakurl" type="text" value="${esc(c.backupUrl)}"/></div>
           </div>
           <div style="margin:14px 0 0;padding:12px;border:1px dashed var(--line);border-radius:8px">
-            <div style="font-size:12.5px;margin-bottom:8px"><b>替换最新版安装包</b><span class="mut">　浏览器直传 OSS（预签名，不经服务器中转，几百 MB 也可），传完自动回填直链并保存。</span></div>
+            <div style="font-size:12.5px;margin-bottom:8px"><b>上传官网安装包</b><span class="mut">　直传 OSS 后回填并保存下载链接，部署新包后官网生效。</span></div>
             <div class="toolbar" style="margin:0">
               <input id="st_pkg" type="file" accept=".exe,.msi,.zip,.7z,.dmg" style="font-size:12px"/>
-              <button class="sm pri" id="st_pkg_btn" onclick="uploadInstaller()">上传并替换</button>
+              <button class="sm pri" id="st_pkg_btn" onclick="uploadInstaller()">上传并保存链接</button>
               <span id="st_pkg_msg" class="mut" style="font-size:12px">${r.ossConfigured?"":"⚠ 未配置 OSS——请先到「存储」页配置对象存储"}</span>
             </div>
           </div>
@@ -3942,9 +3990,9 @@ async function loadSite(){
         </div>
       </div>
       <div class="card">
-        <div class="hd"><h3>公告</h3><span class="badge">${SITE_ANNS.length} 条</span><span class="sp"></span><button class="sm" onclick="addSiteAnn()">＋发公告</button></div>
+        <div class="hd"><h3>公告</h3><span class="badge">${SITE_ANNS.length} 条</span><span class="sp"></span><button class="sm" onclick="addSiteAnn()">＋添加公告</button></div>
         <div class="bd">
-          <div class="mut" style="font-size:12px;margin-bottom:10px">官网顶部公告栏显示<b>最新一条启用的</b>公告，点开可看全部；停用=不在官网显示。改完点下方「保存全部」。</div>
+          <div class="mut" style="font-size:12px;margin-bottom:10px">官网顶部公告栏显示<b>最新一条启用的</b>公告，点开可看全部；停用=不在官网显示。</div>
           <div id="siteAnnList"></div>
         </div>
       </div>
@@ -3958,13 +4006,16 @@ async function loadSite(){
       <div class="card" style="grid-column:1/-1">
         <div class="hd"><h3>图片资产</h3><span class="badge ${r.ossConfigured?"ok":"plain"}">${r.ossConfigured?"OSS 已配置":"未配置 OSS（不可替换）"}</span></div>
         <div class="bd">
-          <div class="mut" style="font-size:12px;margin-bottom:10px">替换官网各处图片：<b>原图原样存 OSS</b>（<span class="mono">site/img/</span> 前缀，历史版本保留），替换立即生效；「恢复内置」=回到随包分发的初始图。</div>
+          <div class="mut" style="font-size:12px;margin-bottom:10px">图片原样存入 OSS，历史版本保留；替换或恢复内置图后，需重新导出并部署官网。</div>
           <div id="siteImgGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px"></div>
         </div>
       </div>
     </div>
-    <div class="toolbar" style="margin:14px 0 0"><button class="pri" onclick="saveSite()">保存全部</button><span class="faint" style="font-size:12px">图片替换/恢复即时生效，其余字段点保存后生效</span></div>`;
+    <div class="toolbar" style="margin:14px 0 0"><button onclick="saveSite()">保存内容</button><button onclick="previewSite()">保存并预览</button><button class="pri" onclick="exportSite()">保存并导出部署包</button><span id="siteDraftStatus" class="faint" role="status" style="font-size:12px"></span></div>
+    </div>`;
+  $("#siteEditor").addEventListener("input",e=>{ if(e.target.type!=="file") markSiteDraft(); });
   renderSiteAnns(); renderSiteRels(); renderSiteImgs();
+  updateSiteDraftStatus();
   void loadClientUpdateCard(el);
 }
 function renderSiteAnns(){
@@ -3986,8 +4037,8 @@ function collectSiteAnns(){
     SITE_ANNS[i][k] = k==="enabled" ? inp.checked : inp.value;
   });
 }
-function addSiteAnn(){ collectSiteAnns(); SITE_ANNS.unshift({ id:"an-"+Date.now(), title:"", body:"", date:new Date().toISOString().slice(0,10), enabled:true }); renderSiteAnns(); }
-function delSiteAnn(i){ collectSiteAnns(); SITE_ANNS.splice(i,1); renderSiteAnns(); }
+function addSiteAnn(){ if(SITE_BUSY)return; collectSiteAnns(); SITE_ANNS.unshift({ id:"an-"+Date.now(), title:"", body:"", date:new Date().toISOString().slice(0,10), enabled:true }); renderSiteAnns(); markSiteDraft(); }
+function delSiteAnn(i){ if(SITE_BUSY)return; collectSiteAnns(); SITE_ANNS.splice(i,1); renderSiteAnns(); markSiteDraft(); }
 function renderSiteRels(){
   $("#siteRelList").innerHTML = SITE_RELS.length ? SITE_RELS.map((x,i)=>`
     <div style="padding:10px 0;border-top:1px solid var(--line)">
@@ -4007,8 +4058,8 @@ function collectSiteRels(){
     SITE_RELS[i][k] = k==="items" ? inp.value.split("\n").map(s=>s.trim()).filter(Boolean) : inp.value;
   });
 }
-function addSiteRel(){ collectSiteRels(); SITE_RELS.unshift({ version:"", date:new Date().toISOString().slice(0,10), title:"", items:[] }); renderSiteRels(); }
-function delSiteRel(i){ collectSiteRels(); SITE_RELS.splice(i,1); renderSiteRels(); }
+function addSiteRel(){ if(SITE_BUSY)return; collectSiteRels(); SITE_RELS.unshift({ version:"", date:new Date().toISOString().slice(0,10), title:"", items:[] }); renderSiteRels(); markSiteDraft(); }
+function delSiteRel(i){ if(SITE_BUSY)return; collectSiteRels(); SITE_RELS.splice(i,1); renderSiteRels(); markSiteDraft(); }
 function renderSiteImgs(){
   const c = SITE_DATA.config;
   $("#siteImgGrid").innerHTML = SITE_DATA.imageSlots.map(s=>{
@@ -4026,33 +4077,40 @@ function renderSiteImgs(){
       </div>
     </div>`;
   }).join("");
+  if(SITE_BUSY) setSiteBusy(true);
 }
 async function uploadSiteImg(slot, inp){
+  if(SITE_BUSY || SITE_LOADING) return;
   const f = inp.files && inp.files[0];
   inp.value = "";
   if (!f) return;
   if (f.size > 15*1024*1024) { toast("图片超过 15MB","bad"); return; }
   const fd = new FormData(); fd.append("file", f);
-  try {
+  await runSiteAction(async()=>{
     const r = await siteUpload("/admin-api/site/image?slot="+encodeURIComponent(slot), fd);
-    SITE_DATA.config = r.config; renderSiteImgs(); toast("已替换并生效（原图已存 OSS）");
-  } catch(e){ toast(e.message,"bad"); }
+    SITE_DATA.config.images = r.config.images;
+    renderSiteImgs(); toast("图片已保存；重新导出并部署后官网生效");
+  });
 }
 async function resetSiteImg(slot){
-  try {
+  await runSiteAction(async()=>{
     const r = await api("/admin-api/site/image?slot="+encodeURIComponent(slot), { method:"DELETE" });
-    SITE_DATA.config = r.config; renderSiteImgs(); toast("已恢复内置图（OSS 上的原图保留）");
-  } catch(e){ toast(e.message,"bad"); }
+    SITE_DATA.config.images = r.config.images;
+    renderSiteImgs(); toast("已恢复内置图；重新导出并部署后官网生效");
+  });
 }
 async function uploadInstaller(){
-  const inp = $("#st_pkg"), msg = $("#st_pkg_msg"), btn = $("#st_pkg_btn");
+  if(SITE_BUSY || SITE_LOADING) return;
+  const inp = $("#st_pkg"), msg = $("#st_pkg_msg");
   const f = inp.files && inp.files[0];
   if (!f) { toast("请先选择安装包文件","bad"); return; }
-  btn.disabled = true;
-  try {
-    msg.textContent = "签发直传地址…";
-    const p = await api("/admin-api/site/installer/presign", { method:"POST", body: JSON.stringify({ filename: f.name }) });
-    await new Promise((resolve, reject)=>{
+  const originalDownload = $("#st_dlurl").value;
+  await runSiteAction(async()=>{
+    let uploaded=false;
+    try {
+      msg.textContent = "签发直传地址…";
+      const p = await api("/admin-api/site/installer/presign", { method:"POST", body: JSON.stringify({ filename: f.name }) });
+      await new Promise((resolve, reject)=>{
       const xhr = new XMLHttpRequest();
       xhr.open("PUT", p.putUrl);
       xhr.setRequestHeader("Content-Type", p.contentType);
@@ -4060,17 +4118,28 @@ async function uploadInstaller(){
       xhr.onload = ()=> (xhr.status>=200 && xhr.status<300) ? resolve() : reject(new Error("OSS 返回 HTTP "+xhr.status));
       xhr.onerror = ()=> reject(new Error("网络错误（直传中断，可重试）"));
       xhr.send(f);
-    });
-    $("#st_dlurl").value = p.publicUrl;
-    await saveSite(true);
-    msg.textContent = "✔ 已上传并替换下载直链";
-    toast("安装包已替换，官网下载按钮已指向新包");
-  } catch(e){ msg.textContent = "失败："+e.message; toast(e.message,"bad"); }
-  finally { btn.disabled = false; }
+      });
+      uploaded=true;
+      if($("#st_dlurl").value!==originalDownload){
+        msg.textContent="✔ 已上传；保留你在上传期间修改的下载链接。";
+        const copy=document.createElement("button");
+        copy.className="sm ghost"; copy.textContent="复制已上传文件链接";
+        copy.onclick=()=>copyText(p.publicUrl);
+        msg.appendChild(copy);
+        toast("安装包已上传，当前下载链接草稿已保留");
+        return;
+      }
+      $("#st_dlurl").value = p.publicUrl;
+      markSiteDraft();
+      await persistSiteContent();
+      msg.textContent = "✔ 安装包与下载链接已保存，待部署官网";
+      toast("下载链接已保存；重新导出并部署后官网生效");
+    }catch(e){ msg.textContent=(uploaded?"安装包已上传，链接保存失败：":"上传失败：")+e.message; throw e; }
+  });
 }
-async function saveSite(silent){
+function collectSiteContent(){
   collectSiteAnns(); collectSiteRels();
-  const body = {
+  return {
     enabled: $("#st_enabled").checked,
     version: $("#st_version").value.trim(),
     sizeNote: $("#st_size").value.trim(),
@@ -4083,13 +4152,61 @@ async function saveSite(silent){
     announcements: SITE_ANNS,
     releases: SITE_RELS,
   };
-  try {
-    const r = await api("/admin-api/site", { method:"PUT", body: JSON.stringify(body) });
-    SITE_DATA.config = r.config;
-    const b = $("#siteOnBadge");
-    if (b){ b.className = "badge "+(r.config.enabled?"ok":"bad"); b.textContent = r.config.enabled?"已上线":"已关闭"; }
-    if (!silent) toast("已保存——官网刷新即见");
-  } catch(e){ toast(e.message,"bad"); if (silent) throw e; }
+}
+async function persistSiteContent(){
+  // 冻结本次保存；请求期间的新输入继续留在表单里，不被响应覆盖。
+  const submitted=JSON.stringify(collectSiteContent());
+  const r=await api("/admin-api/site",{method:"PUT",body:submitted});
+  SITE_DATA.config=r.config;
+  SITE_DIRTY=JSON.stringify(collectSiteContent())!==submitted;
+  updateSiteDraftStatus();
+}
+async function saveSite(){
+  await runSiteAction(async()=>{
+    await persistSiteContent();
+    toast(SITE_DIRTY?"本次内容已保存；仍有新修改待保存":"内容已保存；部署新包后官网生效");
+  });
+}
+async function previewSite(){
+  await runSiteAction(async()=>{
+    await persistSiteContent();
+    const r=await api("/admin-api/site/preview");
+    if(typeof r.html!=="string") throw new Error("预览内容无效，请重试");
+    $("#sitePreview")?.close();
+    const preview=document.createElement("dialog");
+    preview.id="sitePreview";
+    preview.setAttribute("aria-labelledby","sitePreviewTitle");
+    preview.style.cssText="width:96vw;max-width:1500px;height:92vh;max-height:94vh;overflow:hidden";
+    preview.innerHTML='<div class="mh"><h2 id="sitePreviewTitle">官网预览 · 本次保存内容</h2><span class="sp"></span><button class="sm ghost" type="button">关闭</button></div>';
+    const frame=document.createElement("iframe");
+    frame.title="官网内容预览";
+    frame.setAttribute("sandbox","allow-scripts allow-popups allow-popups-to-escape-sandbox");
+    frame.style.cssText="display:block;width:100%;height:calc(100% - 58px);border:0;background:white";
+    frame.srcdoc=r.html;
+    preview.appendChild(frame);
+    preview.querySelector("button").onclick=()=>preview.close();
+    let cleaned=false;
+    const cleanup=()=>{ if(cleaned)return; cleaned=true; frame.remove(); preview.remove(); };
+    preview.addEventListener("close",cleanup,{once:true});
+    try { document.body.appendChild(preview); preview.showModal(); }
+    catch(e){ cleanup(); throw e; }
+  });
+}
+async function exportSite(){
+  await runSiteAction(async()=>{
+    await persistSiteContent();
+    const r=await fetch("/admin-api/site/export",{headers:{Authorization:"Bearer "+TOKEN}});
+    if(r.status===401){ logout(); throw new Error("令牌无效"); }
+    if(!r.ok){ const e=await r.json().catch(()=>({})); throw new Error(e?.error?.message||("导出失败：HTTP "+r.status)); }
+    if(!r.headers.get("Content-Type")?.toLowerCase().includes("application/zip")) throw new Error("部署包格式无效，请重试");
+    const url=URL.createObjectURL(await r.blob());
+    const link=document.createElement("a");
+    link.href=url; link.download="qiji-website.zip";
+    document.body.appendChild(link);
+    try { link.click(); }
+    finally { link.remove(); setTimeout(()=>URL.revokeObjectURL(url),60000); }
+    toast(SITE_DIRTY?"本次保存的部署包已导出；新修改尚未包含":"部署包已导出；上传到官网服务器后生效");
+  });
 }
 
 /* 消息发布：源站可发送全部用户、源站用户或指定渠道商用户。 */

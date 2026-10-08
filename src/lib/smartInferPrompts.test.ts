@@ -87,6 +87,12 @@ describe("parseInferCards", () => {
 		expect(cards.map((c) => c.duration)).toEqual([3, 7.5, undefined]);
 	});
 
+	it.each([-3, "-3.5秒", 0, "0秒", "9".repeat(400)])("duration %s 非正数或非有限值不得变成合法秒数", (duration) => {
+		const text = JSON.stringify([{ card_number: 1, duration, original_script: "原文" }]);
+		expect(parseInferCards(text)[0].duration).toBeUndefined();
+		expect(parseInferCardsStream(text)[0].duration).toBeUndefined();
+	});
+
 	it("duration 容错抽取：JSON 非法（裸换行）时裸数字 duration 也能抽出；流式尾卡先出 duration 后出原文", () => {
 		const dirty =
 			'[{"card_number":"第1卡","duration": 2.2,"original_script":"楚长生走入\n大殿","storyboard_prompts":"s","video_prompts":"v"},' +

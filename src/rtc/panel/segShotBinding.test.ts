@@ -182,6 +182,26 @@ describe("deriveShotForCopy（复制片段 → 独立分镜）", () => {
 		expect(shots().map((s) => s.title)).toEqual(["分镜1", "分镜1-1", "分镜1-2", "分镜2"]);
 	});
 
+	it("复制远离父镜的显式补镜仍归其父，取新后缀且不带生成结果", () => {
+		bootCopy([{ id: "supp", index: 3, title: "分镜1-1", isSupplement: true, supplementParentId: "sh1", supplementIndex: 1,
+			prompt: "补镜词", materials: [], videoUris: ["prior-result"] }]);
+		const result = deriveShotForCopy("cp1", { episodeId: "ep1", shotId: "supp" });
+		const copy = shots().find(s => s.id === result?.shotId)!;
+		expect(copy).toMatchObject({ title: "分镜1-2", supplementParentId: "sh1", supplementIndex: 2, prompt: "补镜词" });
+		expect(copy.videoUris).toBeUndefined(); expect(shots().find(s => s.id === "supp")?.title).toBe("分镜1-1");
+		expect(segById("cp1").name).toBe("分镜1-2");
+	});
+
+	it("已删父镜的补镜复制保留孤儿归属及内容，不猜数组前一普通镜", () => {
+		bootCopy([{ id: "orphan", index: 3, title: "分镜8-1", isSupplement: true, supplementParentId: "gone", supplementIndex: 1,
+			prompt: "原补镜词", materials: [{ name: "保留素材", uri: "fixture://image" }] }]);
+		const result = deriveShotForCopy("cp1", { episodeId: "ep1", shotId: "orphan" });
+		const copy = shots().find(s => s.id === result?.shotId)!;
+		expect(copy).toMatchObject({ title: "分镜8-2", supplementParentId: "gone", supplementIndex: 2, prompt: "原补镜词" });
+		expect(copy.materials).toEqual([{ name: "保留素材", uri: "fixture://image" }]);
+		expect(shots().find(s => s.id === "orphan")?.title).toBe("分镜8-1");
+	});
+
 	it("守卫：无出处 / 片段已删 / 片段已有 shotRef / 源分镜已删 → 都不派生，分镜表零变化", () => {
 		bootCopy();
 		expect(deriveShotForCopy("cp1", undefined)).toBeNull();

@@ -47,6 +47,7 @@ import { copyToClipboard, splitEdgesForCopy } from "@/lib/clipboard";
 import { copyNodesImageToSystemClipboard } from "@/canvas/copyImage";
 import type { NodeType } from "@/types";
 import { selectedResults, downloadSelectedResults } from './downloadSelected';
+import { NodeGenerationCost } from "@/components/NodeGenerationCost";
 
 /**
  * 画布右键菜单（第87轮精简）：
@@ -481,6 +482,7 @@ export function ContextMenu() {
                 >
                   <Play className="h-3.5 w-3.5" />
                   {isNodeRunBusy(runStatus, node) ? "运行中…" : "运行节点"}
+                  {nodeId && <NodeGenerationCost nodeId={nodeId} />}
                 </button>}
                 {node?.parentId && (
                   <>

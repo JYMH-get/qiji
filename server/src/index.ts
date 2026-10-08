@@ -14,7 +14,6 @@ import { startUsageReports, stopUsageReports } from './services/usageReports.ts'
 import { registerRoutes } from "./routes.ts";
 import { registerAdminRoutes } from "./routes/admin.ts";
 import { registerAgentRoutes } from "./routes/agent.ts";
-import { registerSiteRoutes } from "./routes/site.ts";
 import { selfHealCredits, pruneCreditOps } from "./store/credits.ts";
 import { migrateTeamWallets } from "./store/teams.ts";
 import { backfillLogOwners } from "./store/logs.ts";
@@ -63,8 +62,7 @@ async function main(): Promise<void> {
 	await app.register(registerRoutes);
 	await app.register(registerAdminRoutes);
 	await app.register(registerAgentRoutes);
-	// 官网主站（第244轮）：源站专属——relay 渠道节点不挂官网
-	if (!isRelay()) await app.register(registerSiteRoutes);
+	// 官网由独立静态站提供；此进程只保留业务接口、控制台和鉴权后的官网编辑/导出。
 
 	try {
 		await app.listen({ port: config.port, host: config.testSnapshot ? "127.0.0.1" : "0.0.0.0" });

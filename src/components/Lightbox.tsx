@@ -10,6 +10,9 @@ import { annotateUri } from "@/canvas/annotate";
 import { depthifyUri } from "@/canvas/depthify";
 import { depthifyVideoUri } from "@/canvas/videoDepthify";
 import { viewAngleUri } from "@/canvas/viewAngleOp";
+import { LightboxGallery, lightboxLabels } from "./LightboxGallery";
+import "./Lightbox.css";
+import { useLightboxDisplayUri } from "@/hooks/useLightboxDisplayUri";
 
 const MIN_Z = 1;
 const MAX_Z = 8;
@@ -17,23 +20,51 @@ const MAX_Z = 8;
 export default function Lightbox() {
     const item = useLightboxStore((s) => s.item);
     const close = useLightboxStore((s) => s.close);
+    const items = useLightboxStore((s) => s.items);
+    const index = useLightboxStore((s) => s.index);
+    const move = useLightboxStore((s) => s.move);
+    const displayUri = useLightboxDisplayUri(item?.uri);
     const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
     const [menu, setMenu] = useState<{ x: number; y: number } | null>(null); // 右击「保存到本地」菜单
     // 滚轮缩放视图态：z=倍率，x/y=平移（像素，作用在媒体元素 transform 上）
     const [view, setView] = useState({ z: 1, x: 0, y: 0 });
     const boxRef = useRef<HTMLDivElement>(null); // 媒体容器（滚轮监听 + 缩放锚点基准）
     const movedRef = useRef(false); // 本次按下是否发生了拖拽平移（防拖完松手误触发单击关闭）
+    const stopPan = useRef<(() => void) | null>(null);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const isOpen = !!item;
+    useEffect(() => {
+        if (!isOpen) return;
+        const previous = document.activeElement as HTMLElement | null;
+        dialogRef.current?.querySelector<HTMLButtonElement>(".lightbox-close")?.focus();
+        return () => { if (previous?.isConnected) previous.focus(); };
+    }, [isOpen]);
+    useEffect(() => {
+        // 到达首/末项后导航按钮变 disabled，浏览器可能把焦点丢回页面。
+        if (isOpen && !dialogRef.current?.contains(document.activeElement)) {
+            dialogRef.current?.querySelector<HTMLButtonElement>('.lightbox-thumb[aria-current="true"],.lightbox-close')?.focus();
+        }
+    }, [isOpen, index, item?.id]);
 
     // 切换条目时清空旧分辨率/菜单/缩放视图；ESC 关闭
     useEffect(() => {
         setDims(null);
         setMenu(null);
         setView({ z: 1, x: 0, y: 0 });
+        movedRef.current = false;
+        stopPan.current?.();
         if (!item) return;
-        const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
-        window.addEventListener("keydown", onKey);
-        return () => window.removeEventListener("keydown", onKey);
-    }, [item, close]);
+        const onKey = (e: KeyboardEvent) => {
+            if (e.isComposing || e.altKey || e.ctrlKey || e.metaKey) return;
+            if (e.target instanceof Element && e.target.closest('input,textarea,select,[contenteditable="true"]')) return;
+            if (!["Escape", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
+            e.preventDefault(); e.stopImmediatePropagation();
+            if (e.key === "Escape") close();
+            else move(e.key === "ArrowLeft" ? -1 : 1);
+        };
+        window.addEventListener("keydown", onKey, true);
+        return () => { window.removeEventListener("keydown", onKey, true); stopPan.current?.(); };
+    }, [item?.id, item?.uri, item?.media, close, move]);
 
     // 滚轮缩放：native 非 passive 监听（React onWheel 在根节点是 passive，preventDefault 无效）；
     // 以光标为锚点——光标压着的内容点缩放前后保持在原屏幕位置；缩回 1x 自动回正。
@@ -82,7 +113,10 @@ export default function Lightbox() {
         const onUp = () => {
             window.removeEventListener("mousemove", onMove);
             window.removeEventListener("mouseup", onUp);
+            stopPan.current = null;
         };
+        stopPan.current?.();
+        stopPan.current = onUp;
         window.addEventListener("mousemove", onMove);
         window.addEventListener("mouseup", onUp);
     };
@@ -106,28 +140,42 @@ export default function Lightbox() {
     };
 
     return (
-        <div onClick={close} style={{ position: "fixed", inset: 0, zIndex: 100200, background: "rgba(0,0,0,0.82)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "zoom-out" }}>
-            <div ref={boxRef} style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "center", width: "100%", padding: "32px 32px 8px", overflow: "hidden" }}>
+        <div ref={dialogRef} className="qiji-lightbox" role="dialog" aria-modal="true" aria-label="素材预览" onClick={close}
+            onKeyDown={e => {
+                e.stopPropagation();
+                if (e.key !== "Tab") return;
+                const controls = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled),audio[controls],video[controls],[tabindex="0"]'));
+                const first = controls[0], last = controls[controls.length - 1];
+                if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
+                else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+            }}>
+            <button type="button" className="lightbox-close" aria-label="关闭预览" onClick={close}>×</button>
+            {items.length > 1 && <>
+                <button type="button" className="lightbox-nav prev" aria-label="上一个素材" disabled={index === 0} onClick={e => { e.stopPropagation(); move(-1); }}>‹</button>
+                <button type="button" className="lightbox-nav next" aria-label="下一个素材" disabled={index === items.length - 1} onClick={e => { e.stopPropagation(); move(1); }}>›</button>
+            </>}
+            <div ref={boxRef} className="lightbox-stage">
                 {media === "video" ? (
-                    <video src={item.uri} controls autoPlay onClick={(e) => e.stopPropagation()} onContextMenu={onMediaContextMenu}
+                    <video key={item.id || item.uri} src={displayUri} controls autoPlay onClick={(e) => e.stopPropagation()} onContextMenu={onMediaContextMenu}
                         onMouseDown={startPan} onDoubleClick={(e) => { e.stopPropagation(); if (zoomed) resetView(); }}
                         title="滚轮缩放 / 右击保存到本地"
                         onLoadedMetadata={(e) => setDims({ w: e.currentTarget.videoWidth, h: e.currentTarget.videoHeight })}
-                        style={{ maxWidth: "92vw", maxHeight: "84vh", borderRadius: 8, ...mediaTransform, cursor: zoomed ? "grab" : undefined }} />
+                        style={{ ...mediaTransform, cursor: zoomed ? "grab" : undefined }} />
                 ) : media === "audio" ? (
-                    <audio src={item.uri} controls autoPlay onClick={(e) => e.stopPropagation()} onContextMenu={onMediaContextMenu} title="右击保存到本地" style={{ width: "min(80vw, 480px)" }} />
+                    <audio key={item.id || item.uri} src={displayUri} controls autoPlay onClick={(e) => e.stopPropagation()} onContextMenu={onMediaContextMenu} title="右击保存到本地" style={{ width: "min(80vw, 480px)" }} />
                 ) : (
                     // 1x 时单击图片退出预览；放大后单击不关（拖拽平移中），双击复位到 1x；右击保存到本地
-                    <img src={item.uri} alt={item.name || "放大"} draggable={false}
+                    <img key={item.id || item.uri} src={displayUri} alt={item.name || "放大"} draggable={false}
                         onClick={(e) => { e.stopPropagation(); if (!zoomed && !movedRef.current) close(); }}
                         onMouseDown={startPan} onDoubleClick={(e) => { e.stopPropagation(); if (zoomed) resetView(); }}
                         onContextMenu={onMediaContextMenu} title={zoomed ? "滚轮缩放 / 拖拽平移 / 双击复位" : "滚轮缩放 / 单击退出预览 / 右击保存到本地"}
                         onLoad={(e) => setDims({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
-                        style={{ maxWidth: "92vw", maxHeight: "84vh", borderRadius: 8, objectFit: "contain", ...mediaTransform, cursor: zoomed ? "grab" : "zoom-out" }} />
+                        style={{ ...mediaTransform, cursor: zoomed ? "grab" : "zoom-out" }} />
                 )}
             </div>
             {/* 底部信息栏：资产名 + 分辨率 + 缩放倍率 */}
-            <div onClick={(e) => e.stopPropagation()} style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 14, padding: "10px 18px 22px", color: "rgba(255,255,255,0.9)", fontSize: 13, cursor: "default", maxWidth: "92vw" }}>
+            <div onClick={(e) => e.stopPropagation()} className="lightbox-info">
+                {item.id && <span className="lightbox-position">{lightboxLabels(items)[index]} · {index + 1}/{items.length}</span>}
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "60vw" }}>{item.name || "未命名"}</span>
                 {dims && (
                     <span style={{ fontFamily: "monospace", color: "rgba(255,255,255,0.7)", background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 5, padding: "2px 8px" }}>
@@ -172,6 +220,7 @@ export default function Lightbox() {
                     </span>
                 )}
             </div>
+            <LightboxGallery />
 
             {/* 右击「保存到本地」菜单（点外/再右击/ESC 关闭，点项不关灯箱）*/}
             {menu && (

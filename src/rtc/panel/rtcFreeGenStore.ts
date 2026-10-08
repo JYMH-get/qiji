@@ -25,6 +25,7 @@ export interface FreeGenRef {
 	assetId?: string;
 	name?: string;
 	media: "image" | "video" | "audio";
+	rtcFrameRole?: "first" | "last";
 }
 
 export interface FreeGenDraft {
@@ -60,10 +61,10 @@ export function sanitizeDraft(raw: unknown, nowMs: number): FreeGenDraft | null 
 						media,
 						...(typeof x.assetId === "string" && x.assetId ? { assetId: x.assetId } : {}),
 						...(typeof x.name === "string" && x.name ? { name: x.name } : {}),
+						...(media === "image" && (x.rtcFrameRole === "first" || x.rtcFrameRole === "last") ? { rtcFrameRole: x.rtcFrameRole } : {}),
 					} as FreeGenRef;
 				})
 				.filter((r): r is FreeGenRef => !!r)
-				.slice(0, 30)
 		: [];
 	const updatedAt = typeof o.updatedAt === "number" && Number.isFinite(o.updatedAt) ? o.updatedAt : nowMs;
 	if (!prompt && refs.length === 0 && !modelKey) return null; // 空草稿不留

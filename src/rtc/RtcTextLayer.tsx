@@ -8,8 +8,8 @@
  *     排版同哲学，见 RtcSequencePlayer 头注释「绝不依赖 JS 实测」）；
  *   - 描边用四向 text-shadow 近似（-webkit-text-stroke 会啃细字面；预览观感够用，
  *     导出剪映走真描边 materials.texts.strokes）；
- *   - `pointerEvents: none`——字幕层绝不吃播放器/选中框的事件；z 序由挂载方给
- *     （在全部视频图层之上、占位提示卡之下）。
+ *   - 字幕不接收指针事件；原文参考区域独立接收滚动，长文可完整阅读。
+ *     z 序由挂载方给（在全部视频图层之上）。
  */
 import { useMemo } from "react";
 import type { RtcDoc } from "@/types/rtc";
@@ -18,39 +18,41 @@ import { activeScriptLaneTexts, scriptLaneItems } from "@/lib/rtcScriptLane";
 import { useRtcStore } from "@/store/rtcStore";
 import { useProjectStore, resolveEpisodeKey } from "@/store/projectStore";
 
-export function RtcTextLayer({ doc, tUs }: { doc: RtcDoc; tUs: number }) {
+export function RtcTextLayer({ doc, tUs, showScriptReference = true }: { doc: RtcDoc; tUs: number; showScriptReference?: boolean }) {
 	const active = activeTextSegments(doc, tUs);
-	/* 原文参考条（用户定稿：原文显示在预览窗，O/工具条开关控制的就是它的显隐）：
+	/* 原文参考条（用户定稿：原文显示在预览窗，快捷键/工具条开关控制的就是它的显隐）：
 	 * 内容**实时派生自主轨分镜**（rtcScriptLane，非轨道数据）——分镜原文改了立即变、
 	 * 主轨片段挪动/分割即时跟随；顶部半透明底小字样式与成片字幕明确区分，恒不导出。 */
 	const scriptVisible = useRtcStore((s) => s.scriptTrackVisible);
 	const epKey = useProjectStore((s) => resolveEpisodeKey(s.rtcEpisodeId, s.episodes));
 	const episode = useProjectStore((s) => s.episodes.find((e) => e.id === epKey));
 	const lane = useMemo(() => scriptLaneItems(doc, episode), [doc, episode]);
-	const scripts = scriptVisible ? activeScriptLaneTexts(lane, tUs) : [];
+	// 工作台已有原文对照，临时隐藏浮层，不改用户的快捷键/工具条开关偏好。
+	const scripts = scriptVisible && showScriptReference ? activeScriptLaneTexts(lane, tUs) : [];
 	if (active.length === 0 && scripts.length === 0) return null;
 	return (
 		<div style={{ position: "absolute", inset: 0, zIndex: 45, pointerEvents: "none", containerType: "size", overflow: "hidden" }}>
 			{scripts.length > 0 && (
-				<div style={{ position: "absolute", left: "50%", top: "4%", transform: "translateX(-50%)", maxWidth: "88%", display: "flex", flexDirection: "column", gap: 4, alignItems: "center" }}>
+				<div
+					key={scripts.map((item) => item.key).join("|")}
+					role="region"
+					aria-label="原文参考"
+					tabIndex={0}
+					onPointerDown={(e) => e.stopPropagation()}
+					onWheel={(e) => e.stopPropagation()}
+					onKeyDown={(e) => {
+						if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(e.key)) e.stopPropagation();
+					}}
+					style={{ position: "absolute", left: "6%", right: "6%", top: "3%", maxHeight: "36%", overflowY: "auto", overscrollBehavior: "contain", pointerEvents: "auto", padding: "0.4em 0.75em", borderRadius: 6, background: "rgba(10,12,18,0.62)", border: "1px solid rgba(255,255,255,0.10)", color: "rgba(255,255,255,0.88)", fontSize: "clamp(10px, 2.4cqh, 14px)", lineHeight: 1.45 }}
+				>
 					{scripts.map((item) => (
 						<div
 							key={item.key}
 							style={{
-								padding: "0.35em 0.8em",
-								borderRadius: 6,
-								background: "rgba(10,12,18,0.62)",
-								border: "1px solid rgba(255,255,255,0.10)",
-								color: "rgba(255,255,255,0.88)",
-								fontSize: "3cqh",
-								lineHeight: 1.45,
+								padding: "0.15em 0",
 								textAlign: "left",
 								whiteSpace: "pre-wrap",
-								wordBreak: "break-word",
-								display: "-webkit-box",
-								WebkitBoxOrient: "vertical",
-								WebkitLineClamp: 3, // 长原文截 3 行（完整内容在时间轴片段/右栏看）
-								overflow: "hidden",
+								overflowWrap: "anywhere",
 							}}
 						>
 							{item.text}

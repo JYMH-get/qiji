@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router";
 import { useProjectStore, type AssetCat } from "@/store/projectStore";
 import { startGeneration, retryGeneration, recallPendingGeneration } from "@/services/generationQueue";
@@ -7,7 +8,9 @@ import { useCatalogStore } from "@/store/catalogStore";
 import type { Purpose } from "@/contract";
 import type { UiSnapshot } from "@/services/projectFile";
 import { useScrollSnapshot } from "@/hooks/useScrollSnapshot";
-import { openLightbox } from "@/store/lightboxStore";
+import { useScopedLightboxGallery } from "@/hooks/useScopedLightboxGallery";
+import { createGalleryIdentity, moveGalleryItem } from "@/lib/materialGallery";
+import { remapBodyTags } from "@/lib/shotMaterials";
 import { PromptExpandButton } from "@/components/PromptExpandButton";
 import { managedClient } from "@/services/managedClient";
 import { saveRemoteAsset, saveUploadedLocal } from "@/services/assetPersist";
@@ -17,6 +20,7 @@ import { openSharedPick } from "@/store/sharedPickStore";
 import { confirmDialog } from "@/lib/confirmDialog";
 import { listPresetOptions } from "@/lib/presetSchemes";
 import { AssetDisplayImage } from "@/components/AssetDisplayImage";
+import { GenerationCost } from "@/components/GenerationCost";
 
 interface AssetWorkbenchProps {
     cat: AssetCat;                 // 角色/场景/生物/物品/群像 对应的 store 数组字段
@@ -24,6 +28,12 @@ interface AssetWorkbenchProps {
     imagePurpose: Purpose;         // 出图 purpose，如 asset.character.image
     textField: "features" | "description"; // 角色/群像=features，其余=description
     showVoice?: boolean;           // 是否显示音色选择（角色/群像）
+    /** RTC 等宿主指定的资产/造型；只展示提示词生成与图片历史两列，不读写独立资产页的界面快照。 */
+    embeddedTarget?: { assetId: string; formKey: string };
+    /** 嵌入编辑区位置：省略时原位两栏，null 时暂隐藏，DOM 容器就绪后移入该容器；预览与状态仍由同一会话管理。 */
+    embeddedEditorPortal?: HTMLElement | null;
+    /** 宿主共用的生图参数；传入后隐藏编辑区独立出图要求，费用预估与提交都使用该参数。 */
+    embeddedImageParams?: Record<string, unknown>;
 }
 
 type Form = {
@@ -56,7 +66,7 @@ function isTauri(): boolean {
 const panel: React.CSSProperties = { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8 };
 const accent = "#8b5cf6";
 
-const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }: AssetWorkbenchProps) => {
+const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice, embeddedTarget, embeddedEditorPortal, embeddedImageParams }: AssetWorkbenchProps) => {
     const navigate = useNavigate();
     const projectInstanceId = useProjectStore.getState().projectInstanceId;
     const isCurrentProject = () => {
@@ -73,14 +83,16 @@ const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }
     const [manageFormsMode, setManageFormsMode] = useState(false); // 管理模式：造型/分体每项显示删除（基础形象除外）
 
     // 界面快照：本资产页（按 cat 分键）上次的选中/搜索/列表滚动；挂载时取一次作为初值
-    const snap0 = useProjectStore.getState().uiSnapshot?.assetPages?.[cat];
-    const [selectedId, setSelectedId] = useState<string | null>(snap0?.selectedId ?? null);
-    const [selectedFormKey, setSelectedFormKey] = useState<string>(snap0?.selectedFormKey ?? "base");
+    const snap0 = embeddedTarget ? undefined : useProjectStore.getState().uiSnapshot?.assetPages?.[cat];
+    const [localSelectedId, setSelectedId] = useState<string | null>(snap0?.selectedId ?? null);
+    const [localSelectedFormKey, setSelectedFormKey] = useState<string>(snap0?.selectedFormKey ?? "base");
+    const selectedId = embeddedTarget ? embeddedTarget.assetId : localSelectedId;
+    const selectedFormKey = embeddedTarget ? embeddedTarget.formKey : localSelectedFormKey;
     const [searchQuery, setSearchQuery] = useState(snap0?.searchQuery ?? "");
     // 资产列表滚动位置快照
     const listScroll = useScrollSnapshot(
         snap0?.listScrollTop,
-        (top) => { if (isCurrentProject()) useProjectStore.getState().setUiSnapshot({ assetPages: { [cat]: { listScrollTop: top } } as UiSnapshot["assetPages"] }); },
+        (top) => { if (!embeddedTarget && isCurrentProject()) useProjectStore.getState().setUiSnapshot({ assetPages: { [cat]: { listScrollTop: top } } as UiSnapshot["assetPages"] }); },
         [assets.length],
     );
     const [quality, setQuality] = useState("high");
@@ -104,7 +116,8 @@ const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }
     const nativeImage = nativeImageSchema(imageFields);
     const [nativeDrafts, setNativeDrafts] = useState<Record<string, Record<string, string>>>({});
     const nativeParams = buildImageParams(nativeDrafts[imgModelKey ?? ''] ?? {}, undefined, imageFields);
-    const generationImageParams = () => nativeImage ? nativeParams : buildImageParams({ aspect, resolution, quality });
+    const externalImageParams = embeddedTarget ? embeddedImageParams : undefined;
+    const generationImageParams = () => externalImageParams ?? (nativeImage ? nativeParams : buildImageParams({ aspect, resolution, quality }));
     // 区5 图片：自然分辨率信息 + 框内缩放/平移
     const [imgDims, setImgDims] = useState<{ w: number; h: number } | null>(null);
     const [imgScale, setImgScale] = useState(1);
@@ -220,21 +233,21 @@ const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }
     };
 
     useEffect(() => {
-        if (assets.length > 0 && !assets.find((a) => a.id === selectedId)) {
+        if (!embeddedTarget && assets.length > 0 && !assets.find((a) => a.id === selectedId)) {
             setSelectedId(assets[0].id);
             setSelectedFormKey("base");
         }
-    }, [assets, selectedId]);
+    }, [assets, selectedId, embeddedTarget]);
 
     // 选中资产 / 造型 / 搜索词变更 → 写入界面快照（跳过首帧初值回写）
     const firstUiRef = useRef(true);
     useEffect(() => {
         if (firstUiRef.current) { firstUiRef.current = false; return; }
-        if (!isCurrentProject()) return;
+        if (embeddedTarget || !isCurrentProject()) return;
         useProjectStore.getState().setUiSnapshot({
             assetPages: { [cat]: { selectedId: selectedId ?? undefined, selectedFormKey, searchQuery } } as UiSnapshot["assetPages"],
         });
-    }, [cat, selectedId, selectedFormKey, searchQuery]);
+    }, [cat, selectedId, selectedFormKey, searchQuery, embeddedTarget]);
 
     const activeAsset = assets.find((a) => a.id === selectedId) || null;
 
@@ -253,7 +266,8 @@ const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }
         return [base, ...variants];
     }, [activeAsset, textField]);
 
-    const activeForm = forms.find((f) => f.key === selectedFormKey) || forms[0] || null;
+    // 宿主的目标失效时不回落到基础形象，避免在另一造型提交生成或写入历史。
+    const activeForm = forms.find((f) => f.key === selectedFormKey) || (embeddedTarget ? null : forms[0]) || null;
 
     // 切换显示图片/查看项时复位框内缩放/平移
     useEffect(() => { setImgScale(1); setImgOffset({ x: 0, y: 0 }); }, [activeForm?.image, viewSel]);
@@ -291,6 +305,30 @@ const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }
         if (form.variantId) updateAssetVariant(cat, activeAsset.id, form.variantId, { prompt });
         else updateAsset(cat, activeAsset.id, { prompt });
     };
+
+    const refKey = refMemKey();
+    const refTargetAlive = () => !!selectedId && !!activeForm && hasTarget(selectedId, activeForm.variantId);
+    const currentRefs = (): RefImg[] => refKey ? refDrafts.current.get(refKey) ?? useProjectStore.getState().assetRefImages?.[refKey] ?? [] : [];
+    const openRefGallery = useScopedLightboxGallery(`${projectInstanceId}/${refKey}`, {
+        getItems: () => refTargetAlive() ? currentRefs().flatMap((ref, index) => ref.error ? [] : [{
+            id: ref.id, uri: ref.uri, name: ref.name, media: "image" as const, label: String(index + 1),
+        }]) : null,
+        subscribe: listener => useProjectStore.subscribe(listener),
+        canReorder: () => refTargetAlive() && !currentRefs().some(ref => ref.uploading || ref.error)
+            && !useProjectStore.getState().pendingGens.some(p => p.cat === cat && p.assetId === selectedId && p.variantId === activeForm?.variantId && p.status === "running"),
+        reorder: (from, to) => {
+            if (!refTargetAlive() || !activeForm || currentRefs().some(ref => ref.uploading || ref.error)) return;
+            const before = currentRefs(), next = moveGalleryItem(before, from, to, ref => ref.id);
+            if (!next) return;
+            const state = useProjectStore.getState();
+            const asset = (state[cat] as any[]).find(a => a.id === selectedId);
+            const form = activeForm.variantId ? asset?.variants?.find((v: any) => v.id === activeForm.variantId) : asset;
+            if (!form) return;
+            const mapping = Object.fromEntries(before.map((ref, index) => [`@Image${index + 1}`, `@Image${next.findIndex(r => r.id === ref.id) + 1}`]));
+            mutateRefs(() => next, refKey);
+            writePrompt(activeForm, remapBodyTags(form.prompt || "", mapping));
+        },
+    });
 
     // 在途任务（断连保护）：按 资产+造型 过滤；运行中=占位、失败=标红可重试
     const pendingFor = (assetId: string, variantId: string | null) =>
@@ -575,15 +613,55 @@ const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }
             ? { prompt: genMetaMap[shownImageUri].prompt, refs: genMetaMap[shownImageUri].refs }
             : null);
 
+    const openAssets = useScopedLightboxGallery(`${projectInstanceId}/${cat}/assets/${searchQuery}`, {
+        getItems: () => isCurrentProject() ? filtered.flatMap((asset, index) => asset.image ? [{
+            id: asset.id, uri: asset.image, name: asset.name, label: String(index + 1),
+        }] : []) : null,
+        subscribe: listener => useProjectStore.subscribe(listener),
+    });
+    const openForms = useScopedLightboxGallery(`${projectInstanceId}/${cat}/${selectedId}/forms`, {
+        getItems: () => selectedId && hasTarget(selectedId) ? forms.flatMap((form, index) => form.image ? [{
+            id: form.key, uri: form.image, name: `${form.title}（${form.label}）`, label: String(index + 1),
+        }] : []) : null,
+        subscribe: listener => useProjectStore.subscribe(listener),
+    });
+    const historyItems = () => {
+        const seen = new Map<string, number>();
+        return (activeForm?.images ?? []).filter(Boolean).map((uri, index) => {
+            const occurrence = (seen.get(uri) ?? 0) + 1; seen.set(uri, occurrence);
+            return { id: `${uri}/${occurrence}`, uri, name: activeForm?.title, label: String(index + 1) };
+        });
+    };
+    const refsReadyFor = (assetId: string, formKey: string) => {
+        const refs: RefImg[] = refDrafts.current.get(`${cat}:${assetId}:${formKey}`) ?? useProjectStore.getState().assetRefImages?.[`${cat}:${assetId}:${formKey}`] ?? [];
+        return !refs.some(r => r.uploading || r.error);
+    };
+    const baseGenerationCount = assets.filter(a => a.prompt?.trim() && !isRunning(a.id, null) && (!a.image || isFailed(a.id, null)) && refsReadyFor(a.id, "base")).length;
+    const formGenerationCount = activeAsset ? forms.filter(f => f.prompt.trim() && !isRunning(activeAsset.id, f.variantId) && (!f.image || isFailed(activeAsset.id, f.variantId)) && refsReadyFor(activeAsset.id, f.key)).length : 0;
+    const openHistory = useScopedLightboxGallery(`${projectInstanceId}/${refKey}/history`, {
+        getItems: () => refTargetAlive() ? historyItems() : null,
+        subscribe: listener => useProjectStore.subscribe(listener),
+    });
+    const detailId = useMemo(() => createGalleryIdentity<object>(), [projectInstanceId, refKey]);
+    const openDetailRefs = useScopedLightboxGallery(`${projectInstanceId}/${refKey}/detail/${shownPending?.id ?? shownImageUri}`, {
+        getItems: () => detailOpen && refTargetAlive() && detail ? detail.refs.map((ref, index) => ({
+            id: detailId(ref), uri: ref.uri, name: ref.name, label: String(index + 1),
+        })) : null,
+        subscribe: listener => useProjectStore.subscribe(listener),
+    });
+    const editorInPortal = !!embeddedTarget && embeddedEditorPortal !== undefined;
+    const placeEditor = (editor: React.ReactNode) => !editorInPortal ? editor
+        : embeddedEditorPortal ? createPortal(editor, embeddedEditorPortal) : null;
+
     return (
-        <div style={{ flex: 1, minWidth: 0, display: "flex", gap: 10, padding: "10px 10px 10px 0", height: "100%", boxSizing: "border-box" }}>
+        <div aria-label={embeddedTarget ? "资产生成工作台" : undefined} style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", gap: 10, padding: embeddedTarget ? 10 : "10px 10px 10px 0", height: "100%", boxSizing: "border-box", overflow: embeddedTarget ? "hidden" : undefined }}>
 
             {/* 区域2：资产列表（不变） */}
-            <div style={{ width: 230, display: "flex", flexDirection: "column", gap: 10, ...panel, padding: 10 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            {!embeddedTarget && <div style={{ width: 230, display: "flex", flexDirection: "column", gap: 10, ...panel, padding: 10 }}>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 8 }}>
                     <span style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>{unit}列表</span>
-                    <div style={{ display: "flex", gap: 10, fontSize: 11 }}>
-                        <span onClick={generateAllBase} title="仅生成未生成与失败的基础形象" style={{ color: "rgba(255,255,255,0.6)", cursor: "pointer" }}>一键生成</span>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: 11 }}>
+                        <span onClick={generateAllBase} title="仅生成未生成与失败的基础形象" style={{ color: "rgba(255,255,255,0.6)", cursor: "pointer" }}>一键生成<GenerationCost modelKey={imgModelKey} params={generationImageParams()} count={baseGenerationCount} /></span>
                         <span onClick={() => setManageMode((m) => !m)} title="管理：删除资产" style={{ color: manageMode ? accent : "rgba(255,255,255,0.6)", cursor: "pointer" }}>{manageMode ? "完成" : "管理"}</span>
                         <span onClick={newAsset} style={{ color: accent, cursor: "pointer" }}>+ 新建</span>
                     </div>
@@ -604,7 +682,7 @@ const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }
                             <div key={a.id} onClick={() => { setSelectedId(a.id); setSelectedFormKey("base"); }}
                                 onContextMenu={(e) => { e.preventDefault(); setSelectedId(a.id); setCtxSub(null); setCtxMenu({ x: e.clientX, y: e.clientY, asset: a }); }}
                                 style={{ ...panel, display: "flex", gap: 8, padding: 8, cursor: "pointer", background: isActive ? "rgba(139,92,246,0.12)" : "rgba(255,255,255,0.03)", borderColor: isActive ? accent : "rgba(255,255,255,0.08)" }}>
-                                <div onDoubleClick={(e) => { e.stopPropagation(); if (a.image) openLightbox({ uri: a.image, name: a.name, media: "image" }); }}
+                                <div onDoubleClick={(e) => { e.stopPropagation(); if (a.image) openAssets(a.id); }}
                                     title={a.image ? "双击查看大图 / 右键更多操作" : "右键更多操作"}
                                     style={{ position: "relative", width: 40, height: 40, borderRadius: 6, flexShrink: 0, overflow: "hidden", background: "rgba(255,255,255,0.06)" }}>
                                     {a.image && <AssetDisplayImage uri={a.image} alt="" draggable={false} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />}
@@ -644,14 +722,14 @@ const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }
                         );
                     })}
                 </div>
-            </div>
+            </div>}
 
             {/* 区域3：当前资产的分体/造型列表（基础形象为第一个） */}
-            <div style={{ width: 200, display: "flex", flexDirection: "column", gap: 10, ...panel, padding: 10 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            {!embeddedTarget && <div style={{ width: 200, display: "flex", flexDirection: "column", gap: 10, ...panel, padding: 10 }}>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 8 }}>
                     <span style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>造型 / 分体</span>
-                    <div style={{ display: "flex", gap: 8, fontSize: 11 }}>
-                        <span onClick={() => activeAsset && generateAllForms()} title="仅生成未生成与失败的造型" style={{ color: "rgba(255,255,255,0.6)", cursor: "pointer" }}>一键生成</span>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 11 }}>
+                        <span onClick={() => activeAsset && generateAllForms()} title="仅生成未生成与失败的造型" style={{ color: "rgba(255,255,255,0.6)", cursor: "pointer" }}>一键生成<GenerationCost modelKey={imgModelKey} params={generationImageParams()} count={formGenerationCount} /></span>
                         <span onClick={() => setManageFormsMode((m) => !m)} title="管理：删除分体（基础形象不可删）" style={{ color: manageFormsMode ? accent : "rgba(255,255,255,0.6)", cursor: "pointer" }}>{manageFormsMode ? "完成" : "管理"}</span>
                         <span onClick={() => { addVariant(); setManageFormsMode(false); }} style={{ color: accent, cursor: "pointer" }}>+ 新建</span>
                     </div>
@@ -668,7 +746,7 @@ const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }
                                 onContextMenu={(e) => { e.preventDefault(); setSelectedFormKey(f.key); setFormCtx({ x: e.clientX, y: e.clientY, variantId: f.variantId, label: f.label, title: f.title, image: f.image, shareName: f.variantId ? `${activeAsset?.name || f.title}·${f.label}` : f.title }); }}
                                 title="右键管理（重命名 / 共享 / 删除）"
                                 style={{ ...panel, padding: 8, cursor: "pointer", background: isActive ? "rgba(139,92,246,0.12)" : "rgba(255,255,255,0.03)", borderColor: isActive ? accent : "rgba(255,255,255,0.08)" }}>
-                                <div onDoubleClick={(e) => { e.stopPropagation(); if (f.image) openLightbox({ uri: f.image, name: `${f.title}（${f.label}）`, media: "image" }); }}
+                                <div onDoubleClick={(e) => { e.stopPropagation(); if (f.image) openForms(f.key); }}
                                     title={f.image ? "双击查看大图" : undefined}
                                     style={{ position: "relative", width: "100%", aspectRatio: "1/1", borderRadius: 6, overflow: "hidden", background: "rgba(255,255,255,0.06)", display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.3)", fontSize: 11 }}>
                                     {f.image && <AssetDisplayImage uri={f.image} alt="" draggable={false} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />}
@@ -708,10 +786,10 @@ const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }
                         );
                     })}
                 </div>
-            </div>
+            </div>}
 
             {/* 区域4：提示词与生成控制 */}
-            <div style={{ width: 320, display: "flex", flexDirection: "column", gap: 12, ...panel, padding: 12, overflowY: "auto" }}>
+            {placeEditor(<div aria-label="资产生成设置" style={{ width: editorInPortal ? "100%" : 320, height: editorInPortal ? "100%" : undefined, boxSizing: "border-box", flexShrink: embeddedTarget ? 0 : undefined, minHeight: 0, display: "flex", flexDirection: "column", gap: 12, ...panel, padding: 12, overflowY: "auto" }}>
                 {!activeForm ? (
                     <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 12, margin: "auto" }}>请选择造型</div>
                 ) : (
@@ -719,15 +797,15 @@ const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }
                         <div style={{ color: "#fff", fontSize: 14, fontWeight: 600 }}>{activeForm.title}　<span style={{ fontSize: 11, color: "rgba(255,255,255,0.5)" }}>{activeForm.label}</span></div>
 
                         {/* 1. 设计理念 / 说明（仅展示，不进入请求） */}
-                        {activeForm.desc && (
+                        {!embeddedTarget && activeForm.desc && (
                             <div style={{ ...panel, padding: 8 }}>
-                                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginBottom: 4 }}>设计理念 / 说明（仅展示，不参与生成）</div>
+                                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginBottom: 4 }}>设计说明</div>
                                 <div style={{ fontSize: 11, color: "rgba(255,255,255,0.7)", lineHeight: 1.5 }}>{activeForm.desc}</div>
                             </div>
                         )}
 
                         {/* 2. 出图提示词（占满剩余空间） */}
-                        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                        <div style={{ flex: 1, minHeight: editorInPortal ? 188 : 0, display: "flex", flexDirection: "column" }}>
                             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
                                 <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)" }}>出图提示词</div>
                                 <PromptExpandButton title="编辑出图提示词" getValue={() => activeForm.prompt} onSave={(v) => writePrompt(activeForm, v)} placeholder="出图提示词…" size={12} getPresets={() => listPresetOptions()} />
@@ -738,16 +816,16 @@ const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }
                                     const imgs = mediaFilesFromClipboard(e).filter((f) => f.type.startsWith("image/"));
                                     if (imgs.length) { e.preventDefault(); imgs.forEach((f) => addLocalRef(f)); }
                                 }}
-                                style={{ flex: 1, minHeight: 140, width: "100%", ...panel, color: "#fff", fontSize: 11, lineHeight: 1.5, padding: 8, outline: "none", resize: "none", boxSizing: "border-box" }} />
+                                style={{ flex: 1, minHeight: editorInPortal ? 160 : 140, width: "100%", ...panel, color: "#fff", fontSize: 11, lineHeight: 1.5, padding: 8, outline: "none", resize: "none", boxSizing: "border-box" }} />
                         </div>
 
                         {/* 2b. 垫图素材区（图生图，可选；支持从资产助手拖入） */}
                         <div style={{ position: "relative" }} onDragOver={(e) => e.preventDefault()} onDrop={onRefDrop}>
-                            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>垫图素材　<span style={{ color: "rgba(255,255,255,0.35)" }}>（可选，图生图参考；可从资产助手拖入）</span></div>
+                            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>垫图素材</div>
                             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                                 {refImages.map((r) => (
                                     <div key={r.id} title={r.error ? `${r.name || "垫图"}：上传失败` : (r.name || "垫图")}
-                                        onDoubleClick={() => !r.error && openLightbox({ uri: r.uri, name: r.name, media: "image" })}
+                                        onDoubleClick={() => !r.error && openRefGallery(r.id)}
                                         style={{ position: "relative", width: 48, height: 48, borderRadius: 6, overflow: "hidden", border: r.error ? "1px solid #f87171" : "1px solid rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.04)", cursor: r.error ? "default" : "zoom-in" }}>
                                         <AssetDisplayImage uri={r.uri} alt="" draggable={false} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                                         {r.uploading && <span style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.5)" }}><span style={{ width: 14, height: 14, border: "2px solid rgba(167,139,250,0.35)", borderTopColor: "#a78bfa", borderRadius: "50%", animation: "Qiji-spin 0.8s linear infinite" }} /></span>}
@@ -786,7 +864,7 @@ const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }
                         {/* 3a. 绑定音色（独占一行）：上传音频绑定到角色；资产匹配时自动加入素材区 + 写入声音参考图例 */}
                         {showVoice && activeAsset && (
                             <div>
-                                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>绑定音色　<span style={{ color: "rgba(255,255,255,0.35)" }}>（音频绑定到该角色；视频匹配资产时自动加入素材区并写入「@角色的声音参考@音频」）</span></div>
+                                <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>绑定音色</div>
                                 {activeAsset.voiceUri ? (
                                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                         <audio src={activeAsset.voiceUri} controls style={{ flex: 1, minWidth: 0, height: 32 }} />
@@ -810,7 +888,7 @@ const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }
                         )}
 
                         {/* 3b. 出图要求（与提示词一起进入生成请求） */}
-                        <div>
+                        {externalImageParams === undefined && <div>
                             <div style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", marginBottom: 4 }}>出图要求</div>
                             <ModelPicker cap="image" label="出图模型" style={{ marginBottom: 8 }} />
                             {nativeImage ? <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -844,23 +922,23 @@ const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }
                                     </select>
                                 </label>
                             </div>}
-                        </div>
+                        </div>}
 
                         <div style={{ display: "flex", gap: 10 }}>
                             <button onClick={() => activeAsset && generateForm(activeAsset.id, activeForm)} title="可重复提交，每次生成会在右侧历史区新增一个占位"
                                 style={{ flex: 1, padding: "9px 0", background: accent, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>
-                                生成形象
+                                生成形象<GenerationCost modelKey={imgModelKey} params={generationImageParams()} />
                             </button>
                         </div>
                     </>
                 )}
-            </div>
+            </div>)}
 
             {/* 区域5：图片展示区（主图 + 历史，可选主图 / 失败记录） */}
-            <div style={{ flex: 1, minWidth: 0, position: "relative", display: "flex", flexDirection: "column", gap: 12, ...panel, padding: 12 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <div style={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative", display: embeddedTarget ? "grid" : "flex", gridTemplateColumns: embeddedTarget ? "minmax(0, 1fr) 88px" : undefined, gridTemplateRows: embeddedTarget ? "auto minmax(0, 1fr)" : undefined, flexDirection: "column", gap: 12, ...panel, padding: 12 }}>
+                <div style={{ gridColumn: embeddedTarget ? "1 / -1" : undefined, display: "flex", flexWrap: embeddedTarget ? "wrap" : undefined, alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, color: "#fff" }}>图片展示{activeForm ? `　·　${activeForm.title}（${activeForm.label}）` : ""}</div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ display: "flex", flexWrap: embeddedTarget ? "wrap" : undefined, alignItems: "center", gap: 8 }}>
                         {shownImageUri && imgDims && (
                             <span style={{ fontSize: 11, color: "rgba(255,255,255,0.6)", fontFamily: "monospace", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 5, padding: "2px 8px" }}>
                                 {imgDims.w}×{imgDims.h}
@@ -881,7 +959,7 @@ const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }
                     </div>
                 </div>
                 {!activeForm ? (
-                    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.4)", fontSize: 12 }}>请选择左侧造型</div>
+                    <div style={{ gridColumn: embeddedTarget ? "1 / -1" : undefined, flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.4)", fontSize: 12 }}>请选择左侧造型</div>
                 ) : (
                     <>
                         <div
@@ -891,7 +969,7 @@ const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }
                             onMouseUp={() => { dragRef.current = null; }}
                             onMouseLeave={() => { dragRef.current = null; }}
                             onDoubleClick={() => { setImgScale(1); setImgOffset({ x: 0, y: 0 }); }}
-                            style={{ flex: 1, minHeight: 0, borderRadius: 8, background: "rgba(255,255,255,0.04)", display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.35)", fontSize: 13, overflow: "hidden" }}>
+                            style={{ flex: 1, minWidth: 0, minHeight: 0, borderRadius: 8, background: "rgba(255,255,255,0.04)", display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.35)", fontSize: 13, overflow: "hidden" }}>
                             {/* 展示区按 viewSel 显示：成功图 / 选中的在途（生成中·失败原因）；一次只一个，互不叠加 */}
                             {shownImageUri ? (
                                 <AssetDisplayImage uri={shownImageUri} alt={activeForm.title} recovery="bar" title="滚轮缩放·拖动平移·双击复位" draggable={false}
@@ -924,22 +1002,22 @@ const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }
                                                 style={{ padding: "6px 18px", background: accent, color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>重连原任务</button>
                                         )}
                                         <button onClick={() => retryGeneration(shownPending.id)}
-                                            style={{ padding: "6px 18px", background: shownPending.recoverable ? "transparent" : accent, color: shownPending.recoverable ? "rgba(255,255,255,0.85)" : "#fff", border: shownPending.recoverable ? "1px solid rgba(255,255,255,0.3)" : "none", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>{shownPending.recoverable ? "重新生成" : "重试"}</button>
+                                            style={{ padding: "6px 18px", background: shownPending.recoverable ? "transparent" : accent, color: shownPending.recoverable ? "rgba(255,255,255,0.85)" : "#fff", border: shownPending.recoverable ? "1px solid rgba(255,255,255,0.3)" : "none", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>{shownPending.recoverable ? "重新生成" : "重试"}<GenerationCost modelKey={shownPending.modelKey} params={shownPending.params} /></button>
                                         <button onClick={() => { const rid = shownPending.id; setViewSel(null); removePendingGen(rid); }}
                                             style={{ padding: "6px 18px", background: "transparent", color: "rgba(255,255,255,0.6)", border: "1px solid rgba(255,255,255,0.2)", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>删除</button>
                                     </div>
                                 </div>
-                            ) : "暂无图片，点击「生成形象」"}
+                            ) : "暂无图片"}
                         </div>
-                        <div>
-                            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginBottom: 6 }}>历史记录（点击设为主图；生成中/失败的任务也在此展示，点选可在上方查看）</div>
-                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <div aria-label="生成历史" style={embeddedTarget ? { minWidth: 0, minHeight: 0, overflowY: "auto", borderLeft: "1px solid rgba(255,255,255,0.08)", paddingLeft: 8 } : undefined}>
+                            <div title="历史记录（点击设为主图；生成中/失败的任务也在此展示，点选可在预览区查看）" style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginBottom: 6, textAlign: embeddedTarget ? "center" : undefined }}>{embeddedTarget ? `生成历史（${activeForm.images.filter(Boolean).length + activePendings.length}）` : "生成历史"}</div>
+                            <div style={{ display: "flex", gap: 8, flexDirection: embeddedTarget ? "column" : undefined, alignItems: embeddedTarget ? "center" : undefined, flexWrap: embeddedTarget ? "nowrap" : "wrap" }}>
                                 {activeForm.images.filter(Boolean).map((uri, i) => {
                                     const isMain = uri === activeForm.image;
                                     const isViewed = viewSel?.kind === "image" && viewSel.uri === uri;
                                     return (
                                         <div key={i} onClick={() => { if (activeAsset) { setAssetMainImage(cat, activeAsset.id, activeForm.variantId, uri); setViewSel({ kind: "image", uri }); } }}
-                                            onDoubleClick={() => openLightbox({ uri, name: `${activeForm.title}（${activeForm.label}）`, media: "image" })}
+                                            onDoubleClick={() => openHistory(historyItems()[i].id)}
                                             title={isMain ? "当前主图（双击查看大图）" : "单击设为主图 / 双击查看大图"}
                                             style={{ width: 64, height: 64, borderRadius: 6, cursor: "pointer", overflow: "hidden", background: "rgba(255,255,255,0.04)", border: (isMain || isViewed) ? `2px solid ${accent}` : "2px solid transparent", boxShadow: isMain ? "0 0 0 1px rgba(139,92,246,0.4)" : "none" }}>
                                             <AssetDisplayImage uri={uri} alt="" draggable={false} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
@@ -991,7 +1069,7 @@ const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }
                                 ) : (
                                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                                         {detail.refs.map((r, i) => (
-                                            <div key={i} title={r.name || r.id || "垫图"} onDoubleClick={() => openLightbox({ uri: r.uri, name: r.name, media: "image" })}
+                                            <div key={i} title={r.name || r.id || "垫图"} onDoubleClick={() => openDetailRefs(detailId(r))}
                                                 style={{ width: 56, display: "flex", flexDirection: "column", gap: 2, cursor: "zoom-in" }}>
                                                 <div style={{ width: 56, height: 56, borderRadius: 6, overflow: "hidden", border: "1px solid rgba(255,255,255,0.15)", background: "rgba(255,255,255,0.04)" }}>
                                                     <AssetDisplayImage uri={r.uri} alt="" draggable={false} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
@@ -1111,7 +1189,9 @@ const AssetWorkbenchSession = ({ cat, unit, imagePurpose, textField, showVoice }
 
 const AssetWorkbench = (props: AssetWorkbenchProps) => {
     const instance = useProjectStore(s => s.projectInstanceId);
-    return <AssetWorkbenchSession key={`${instance}:${props.cat}`} {...props} />;
+    const target = props.embeddedTarget;
+    const sessionKey = target ? JSON.stringify([instance, props.cat, target.assetId, target.formKey]) : `${instance}:${props.cat}`;
+    return <AssetWorkbenchSession key={sessionKey} {...props} />;
 };
 
 export default AssetWorkbench;

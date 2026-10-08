@@ -71,7 +71,7 @@ function refKey(episodeId: string, shotId: string): string {
  *  算进来会让视频占位以为分镜已在轨上而整批跳过（对未清洗 doc 的防御，保留）。 */
 export function collectShotRefKeys(doc: RtcDoc): Set<string> {
 	const keys = new Set<string>();
-	for (const t of doc.tracks) {
+	for (const t of [...doc.tracks, ...Object.values(doc.subDocs ?? {}).flatMap((sub) => sub.tracks)]) {
 		if (t.role === "script") continue;
 		for (const s of t.segments) {
 			if (s.shotRef) keys.add(refKey(s.shotRef.episodeId, s.shotRef.shotId));
@@ -141,6 +141,7 @@ export function appendEpisodePlaceholders(
 			});
 		}
 		cursor += durUs;
+		existing.add(refKey(episode.id, shot.id));
 	}
 
 	if (fresh.length === 0) return { doc, added: 0, skipped }; // 原引用 → commit no-op
@@ -150,4 +151,21 @@ export function appendEpisodePlaceholders(
 		tracks: trackIdx >= 0 ? doc.tracks.map((t, i) => (i === trackIdx ? nextTrack : t)) : [...doc.tracks, nextTrack],
 	};
 	return { doc: next, added: fresh.length, skipped };
+}
+
+/**
+ * 流式推理只处理本任务首次观察到的镜头。已存在、已删除或已撤销的占位不因后续全文重放复活。
+ * 几何只在首次入轨确定；后续推理时长更新不覆盖用户正在剪辑的时间轴。
+ */
+export function appendInferredEpisodePlaceholders(
+	doc: RtcDoc,
+	episode: VideoEpisode,
+	handledShotIds: string[],
+	opts?: AppendPlaceholderOpts,
+): AppendPlaceholdersResult & { handledShotIds: string[] } {
+	const handled = new Set(handledShotIds);
+	const fresh = episode.shots.filter((shot) => !handled.has(shot.id));
+	if (!fresh.length) return { doc, added: 0, skipped: 0, handledShotIds };
+	const result = appendEpisodePlaceholders(doc, { ...episode, shots: fresh }, opts);
+	return { ...result, handledShotIds: [...handled, ...fresh.map((shot) => shot.id)] };
 }

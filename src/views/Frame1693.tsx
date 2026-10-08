@@ -7,7 +7,8 @@ import { confirmDialog } from "@/lib/confirmDialog";
 import { useCatalogStore } from "@/store/catalogStore";
 import { runPurpose } from "@/services/purposeRunner";
 import { trackTask } from "@/services/taskCenter";
-import ModelPicker, { effectiveModelKey } from "@/components/ModelPicker";
+import ModelPicker, { effectiveModelKey, useEffectiveModelKey } from "@/components/ModelPicker";
+import { GenerationCost } from "@/components/GenerationCost";
 import { mergeExtraction, mergeApply, type ExtractBuckets } from "@/lib/assetMerge";
 import { attachSplitPresets } from "@/lib/splitPresetAttach";
 import { QUICK_SPLIT_ID, QUICK_BLANKLINE_ID, QUICK_N1_ID, QUICK_NN_ID, QUICK_SPLIT_CHOICES, QUICK_SPLIT_IDS } from "@/lib/splitChoices";
@@ -325,6 +326,7 @@ function splitEpisodesByMarkers(scriptText: string): Array<{ title: string; scri
 }
 
 const Frame1693 = () => {
+    const textModelKey = useEffectiveModelKey("text");
     const characters = useProjectStore((s) => s.characters);
     const scenes = useProjectStore((s) => s.scenes);
     const items = useProjectStore((s) => s.items);
@@ -880,6 +882,7 @@ const Frame1693 = () => {
                                                     title="把剧本切分为多集（快速拆分不调用大模型）；与资产拆分独立，点哪个跑哪个"
                                                 >
                                                     {episodeSplitting ? "拆分中…" : "剧集拆分"}
+                                                    {!episodeSplitting && <GenerationCost modelKey={textModelKey} cost={QUICK_SPLIT_IDS.has(episodeTemplateId) ? 0 : undefined} />}
                                                 </div>
 
                                                 {/* 行2 列1：风格选择 */}
@@ -928,6 +931,7 @@ const Frame1693 = () => {
                                                     title={!selectedTemplateId ? "请先选择资产拆分模板（需连接管理端并加载模板）" : ""}
                                                 >
                                                     {isAnalyzing ? `处理中 (${analysisProgress}%)` : (selectedTemplateId ? "资产拆分" : "请先选择模板")}
+                                                    {!isAnalyzing && selectedTemplateId && <GenerationCost modelKey={textModelKey} />}
                                                 </div>
                                             </div>
                                         </div>
@@ -975,7 +979,7 @@ const Frame1693 = () => {
                                                     style={{ ...headerBtnStyle(isAnalyzing), position: "absolute", top: 14, right: 14, zIndex: 2 }}
                                                     title="重新运行资产拆分（整体替换当前资产）"
                                                 >
-                                                    <RefreshCw size={15} /> 重新分析
+                                                    <RefreshCw size={15} /> 重新分析<GenerationCost modelKey={textModelKey} />
                                                 </div>
                                                 {/* Visual progress bar highlight */}
                                                 <div style={{
@@ -1043,7 +1047,7 @@ const Frame1693 = () => {
                                                             style={headerBtnStyle(isAnalyzing || !isAnalyzed)}
                                                             title="把已提取的资产作为查重清单喂回模型，只补全剩余资产（不重复、不覆盖已有），可反复点击直到无新增"
                                                         >
-                                                            <ListPlus size={15} /> 继续提取
+                                                            <ListPlus size={15} /> 继续提取<GenerationCost modelKey={textModelKey} />
                                                         </div>
                                                     </div>
                                                     <p

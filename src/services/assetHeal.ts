@@ -18,12 +18,12 @@ export { _resetAliveCache };
 
 export interface HealDeps {
 	blobByUri: (uri: string) => { id?: string } | undefined;
-	recover: (id: string) => Promise<RecoverResult>;
+	recover: (id: string, shouldContinue?: () => boolean) => Promise<RecoverResult>;
 }
 
 const defaultDeps: HealDeps = {
 	blobByUri: (uri) => useProjectStore.getState().blobByUri(uri),
-	recover: (id) => recoverAsset(id, { cache: "session" }),
+	recover: (id, shouldContinue) => recoverAsset(id, { cache: "session", shouldContinue }),
 };
 
 /**
@@ -32,18 +32,18 @@ const defaultDeps: HealDeps = {
  *  - 死链且本机有副本 → 重传恢复后返回新链；
  *  - 其余情形（派生 id / 台账无记录 / 无副本可救）→ 原样返回，交由上游明确报错。
  */
-export async function healPublicUrlIfDead(uri: string, deps: HealDeps = defaultDeps): Promise<string> {
-	if (!uri) return uri;
+export async function healPublicUrlIfDead(uri: string, deps: HealDeps = defaultDeps, shouldContinue: () => boolean = () => true): Promise<string> {
+	if (!uri || !shouldContinue()) return "";
 	const id = deps.blobByUri(uri)?.id;
 	if (!id || !LEDGER_ID_RE.test(id)) return uri;
-	const r = await deps.recover(id);
-	return recoveredUrlOf(r) ?? uri;
+	const r = await deps.recover(id, shouldContinue);
+	return shouldContinue() ? recoveredUrlOf(r) ?? uri : "";
 }
 
 /** 供测试注入底层依赖（恢复例程的 deps 直通 assetRecover） */
 export function healDepsFrom(recoverDeps: RecoverDeps): HealDeps {
 	return {
 		blobByUri: (uri) => useProjectStore.getState().blobByUri(uri),
-		recover: (id) => recoverAsset(id, { cache: "session", deps: recoverDeps }),
+		recover: (id, shouldContinue) => recoverAsset(id, { cache: "session", deps: recoverDeps, shouldContinue }),
 	};
 }

@@ -13,14 +13,14 @@
  *   导出会导出时间轴上的所有；播放只看得见最上面的视频/图片（图层概念）。
  *
  * ⚠ 落笔规则（与 rtcStore 的两条写入通道对应）：
- *   - **占位 → media**：只改 kind/media/assetId/uri/source 窗口，`targetStartUs` 与
- *     `targetDurationUs` **分毫不动**（时长与素材不符也保留，裁剪交给用户——第235轮定稿），
- *     并清空整组占位态字段（status/progress/taskRef/error）；走 `commit`（进撤销栈）。
+ *   - **占位 → media**：此层提供媒体补丁并清空占位态字段；新生成视频在 rtcGenSink 内
+ *     按真实时长调整 target（缩短留空隙、增长推开后续），派生处理保留原裁剪窗口。
+ *     媒体与时长调整共用一次 `commit`（进撤销栈）。
  *   - **进度帧 / 在途状态镜像**：走 `patchSilent`（不进撤销栈，见 rtcStore.patchSilent 注释）。
  */
 import type { Capability, Purpose } from "@/contract";
-import { clampDuration, buildImageParams } from "@/lib/genParams";
-import { clampDurationTo, clampToOptions, type VideoReqOptions } from "@/lib/videoMethods";
+import { buildImageParams } from "@/lib/genParams";
+import type { VideoReqOptions } from "@/lib/videoMethods";
 import type { RtcSegment } from "@/types/rtc";
 
 /** 占位要生成的产物类型（= RtcSegment.genKind） */
@@ -119,7 +119,7 @@ export function failedPatch(error: string): SegPatch {
 
 /**
  * 占位 → 结果（就地）：只改 kind/media/assetId/uri/source 窗口 + 清空整组占位态字段。
- * ⚠ **targetStartUs / targetDurationUs 不在补丁里**——时长与素材不符也保留，裁剪交给用户。
+ * target 字段不在补丁里；新生成视频的跨轨调时由 rtcGenSink + rtcGenerationResize 统一完成。
  */
 export function mediaPatch(
 	media: NonNullable<RtcSegment["media"]>,
@@ -212,10 +212,8 @@ export interface FreeGenSettings {
 }
 
 /**
- * 自由占位·视频参数（与 shotGenActions.genShotVideo 同尺：先按视频设置取值，再按当前模型
- * catalog 档位收敛——服务端控档一把尺）。
- * ⚠ 时长默认取**占位片段自身的时长**（占位多长就生成多长，最接近用户在时间轴上的意图），
- *   再经 clampDuration（4–15）与模型开放档 clampDurationTo 收敛。
+ * 自由占位的视频时长取片段自身长度；显式比例和分辨率保持原值。
+ * 目录选项只补缺失值，不能把用户输入静默改成旧客户端范围或其他档位。
  */
 export function buildFreeVideoParams(
 	targetDurationUs: number,
@@ -223,9 +221,9 @@ export function buildFreeVideoParams(
 	req: VideoReqOptions,
 ): Record<string, unknown> {
 	return {
-		duration: clampDurationTo(clampDuration(segSeconds(targetDurationUs)), req.durations),
-		resolution: clampToOptions(ms?.resolution ?? "720p", req.resolutions),
-		aspect_ratio: clampToOptions(ms?.aspect ?? "16:9", req.aspects),
+		duration: segSeconds(targetDurationUs),
+		resolution: ms?.resolution ?? req.resolutions[0] ?? "720p",
+		aspect_ratio: ms?.aspect ?? req.aspects[0] ?? "16:9",
 	};
 }
 
@@ -250,6 +248,7 @@ export interface FreeRefUrl {
 	url: string;
 	name?: string;
 	media: "image" | "video" | "audio";
+	rtcFrameRole?: "first" | "last";
 }
 
 /**

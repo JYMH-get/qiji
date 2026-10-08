@@ -9,6 +9,7 @@ export const AV_HISTORY_MS = AV_SAMPLE_MS * AV_SAMPLES_PER_POINT * AV_HISTORY_PO
 export interface AvailabilityRatePoint {
  since:number; until:number; successRate:number|null; validSamples:number; hasRequests:boolean;
  insufficientSamples?:boolean; completedRequests?:number; method?:'interval';
+ excluded?:number; rulesApplied?:boolean;
 }
 interface PendingRate {
  since:number; until:number; samples:number; sum:number; validSamples:number; hasRequests:boolean;

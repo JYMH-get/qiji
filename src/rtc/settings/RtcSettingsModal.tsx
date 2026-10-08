@@ -2,7 +2,7 @@
  * RtcSettingsModal —— 实时剪辑「设置」二级界面（对标剪映：快捷键弹窗 + 全局设置），
  * 替代旧的播放器 BarMenu「本模式设置」上拉面板与工具条静态快捷键速查表。
  *
- * 三页签：
+ * 三页签（视频生成设置使用工具栏独立上拉菜单）：
  *   - 快捷键：按「时间线 / 播放器 / 基础」三分组列出全部动作（数据源=rtcKeymap 生效表，
  *     键位与说明单一来源）；点击键位胶囊进入**录制态**（监听下一次按键组合写入覆盖层；
  *     Esc 取消）；组合已绑在别的动作上=自动改绑并红字提示；每行可恢复默认；底部「恢复默认值」；
@@ -499,6 +499,6 @@ function ModalBody() {
 
 /** 常驻挂载壳：open=false 时零渲染（快捷键停用等副作用全在 ModalBody 内，关了自然恢复） */
 export function RtcSettingsModal() {
-	const open = useRtcSettingsModal((s) => s.open);
+	const open = useRtcSettingsModal((s) => s.open && s.tab !== "generation");
 	return open ? <ModalBody /> : null;
 }

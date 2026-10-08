@@ -208,19 +208,27 @@ export function importAssetToShot(epId: string, shotId: string, cand: ProjectAss
  *       ② 加入前按 assetId/uri 查重——相同资产不重复加入本镜。
  */
 export async function addLocalShotMaterials(epId: string, shotId: string, files: File[]): Promise<void> {
+	const owner = useProjectStore.getState().projectInstanceId;
+	const current = () => {
+		const state = useProjectStore.getState();
+		return state.projectInstanceId === owner && !state.isProjectLoading && !!liveShot(epId, shotId);
+	};
 	const key = uploadKeys.shot(epId, shotId);
 	for (const file of files) {
+		if (!current()) return;
 		const media = mediaFromMime(file.type || "");
 		let up: { assetId: string; displayUri: string };
 		useUploadStore.getState().begin(key); // 素材条显示占位符+转圈
 		try {
-			up = await uploadMediaToCanvasAsset(file, "TP"); // 内含 sha256 去重
+			up = await uploadMediaToCanvasAsset(file, "TP", { shouldContinue: current }); // 内含 sha256 去重
 		} catch (e) {
+			if (!current()) return;
 			console.warn("[shotMaterialOps] 素材上传失败：", e);
 			continue;
 		} finally {
 			useUploadStore.getState().end(key);
 		}
+		if (!current()) return;
 		const cur = liveShot(epId, shotId);
 		if (!cur) return;
 		// 去重：同一资产（同 assetId 或同 uri）已在本镜 → 跳过

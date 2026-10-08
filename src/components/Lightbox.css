@@ -1,0 +1,23 @@
+.qiji-lightbox { position: fixed; inset: 0; z-index: 100200; background: rgba(0,0,0,.88); display: flex; flex-direction: column; align-items: center; cursor: zoom-out; }
+.lightbox-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; width: 100%; padding: 24px 72px 8px; overflow: hidden; }
+.lightbox-stage > img,.lightbox-stage > video { max-width: 100%; max-height: 100%; border-radius: 8px; object-fit: contain; }
+.lightbox-nav,.lightbox-close { position: absolute; z-index: 2; border: 1px solid #ffffff38; color: #fff; background: #161b26b8; cursor: pointer; display: grid; place-items: center; border-radius: 50%; }
+.lightbox-nav { top: 43%; width: 46px; height: 56px; border-radius: 12px; font-size: 34px; }
+.lightbox-nav.prev { left: 14px; }.lightbox-nav.next { right: 14px; }
+.lightbox-close { right: 16px; top: 12px; width: 32px; height: 32px; font-size: 18px; }
+.lightbox-nav:disabled { opacity: .25; cursor: default; }
+.lightbox-nav:not(:disabled):hover,.lightbox-close:hover { background: #544079; }
+.lightbox-info { flex-shrink: 0; display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px; padding: 10px 18px; color: #ffffffe6; font-size: 13px; cursor: default; max-width: 92vw; }
+.lightbox-position { color: #c4b5fd; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.lightbox-gallery { flex-shrink: 0; max-width: 92vw; padding: 0 0 14px; cursor: default; }
+.lightbox-filmstrip { display: flex; align-items: center; gap: 8px; overflow-x: auto; max-width: 100%; padding: 4px; }
+.lightbox-thumb { position: relative; flex-shrink: 0; width: 78px; height: 66px; border: 2px solid #ffffff26; border-radius: 7px; padding: 0; overflow: hidden; background: #1a1d28; cursor: pointer; }
+.lightbox-thumb[draggable=true] { cursor: grab; }
+.lightbox-thumb[aria-current=true] { border-color: #a78bfa; box-shadow: 0 0 0 1px #a78bfa; }
+.lightbox-thumb.is-drop-target { border-color: #67e8f9; }
+.lightbox-thumb > img,.lightbox-thumb > video { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.lightbox-thumb-label { position: absolute; bottom: 0; left: 0; right: 0; background: #000b; color: #fff; font-size: 11px; line-height: 20px; pointer-events: none; }
+.lightbox-audio-thumb { display: grid; place-items: center; height: 100%; font-size: 28px; color: #a78bfa; }
+.lightbox-gallery-error { color: #fca5a5; display: block; padding: 4px; text-align: center; font-size: 12px; }
+.qiji-lightbox button:focus-visible { outline: 2px solid #c4b5fd; outline-offset: 2px; }
+@media(max-width:600px) { .lightbox-stage { padding-left: 48px; padding-right: 48px; }.lightbox-nav { width: 32px; left: 6px; }.lightbox-nav.next { right: 6px; left: auto; }.lightbox-info { gap: 6px; padding: 6px; } }
